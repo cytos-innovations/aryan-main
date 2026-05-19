@@ -1,0 +1,255 @@
+import { useMemo, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
+
+import { Can } from "@/lib/auth";
+import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+const QK = ["identity-types"];
+const EMPTY = { code: "", name: "" };
+
+export default function LodgeIdentity() {
+  const queryClient = useQueryClient();
+  const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
+  const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [form, setForm] = useState(EMPTY);
+
+  const query = useQuery({
+    queryKey: [...QK, qs],
+    queryFn: () => invoke("get_identity_types", { qs }),
+    placeholderData: (prev) => prev,
+  });
+
+  const inv = () => queryClient.invalidateQueries({ queryKey: QK });
+
+  const createMut = useMutation({
+    mutationFn: (d) => invoke("create_identity_type", {
+      code: d.code ? parseInt(d.code) : null,
+      name: d.name,
+    }),
+    onSuccess: () => { toast.success("Identity type created"); inv(); closeDialog(); },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: (d) => invoke("update_identity_type", { id: d.id, name: d.name }),
+    onSuccess: () => { toast.success("Identity type updated"); inv(); closeDialog(); },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: ({ id, is_active }) =>
+      invoke("toggle_identity_type_active", { id, isActive: !is_active }),
+    onSuccess: () => inv(),
+    onError: (e) => toast.error(String(e)),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id) => invoke("delete_identity_type", { id }),
+    onSuccess: () => { toast.success("Identity type deleted"); inv(); setDeleteTarget(null); },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  function openCreate() { setForm(EMPTY); setDialog({ open: true, mode: "create", data: null }); }
+  function openEdit(row) {
+    setForm({ code: String(row.code ?? ""), name: row.name });
+    setDialog({ open: true, mode: "edit", data: row });
+  }
+  function closeDialog() { setDialog((d) => ({ ...d, open: false })); }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!form.name.trim()) { toast.error("Identity type name is required"); return; }
+    if (dialog.mode === "create") createMut.mutate(form);
+    else updateMut.mutate({ id: dialog.data.id, ...form });
+  }
+
+  const columns = useMemo(() => [
+    {
+      accessorKey: "id",
+      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
+      size: 60,
+      meta: { label: "#" },
+    },
+    {
+      accessorKey: "code",
+      header: "Code",
+      size: 90,
+      meta: { label: "Code" },
+    },
+    {
+      accessorKey: "name",
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Identity Type" />,
+      meta: { label: "Identity Type" },
+    },
+    {
+      accessorKey: "is_active",
+      header: "Active",
+      size: 80,
+      cell: ({ row }) => (
+        <Switch
+          size="sm"
+          checked={row.original.is_active}
+          onCheckedChange={() => toggleMut.mutate(row.original)}
+          disabled={toggleMut.isPending}
+        />
+      ),
+      meta: { label: "Active" },
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      size: 90,
+      cell: ({ row }) => (
+        <div className="flex items-center gap-0.5">
+          <Can perm="lodge-identity:update">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" onClick={() => openEdit(row.original)}>
+                  <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Edit</TooltipContent>
+            </Tooltip>
+          </Can>
+          <Can perm="lodge-identity:delete">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => setDeleteTarget(row.original)}
+                >
+                  <HugeiconsIcon icon={Delete01Icon} strokeWidth={2} className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Delete</TooltipContent>
+            </Tooltip>
+          </Can>
+        </div>
+      ),
+    },
+  ], [toggleMut.isPending]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isPending = createMut.isPending || updateMut.isPending;
+
+  return (
+    <TooltipProvider>
+      <div className="p-6">
+        <Card>
+          <CardHeader><CardTitle>Identity Master</CardTitle></CardHeader>
+          <CardContent>
+            <DataTable
+              columns={columns}
+              data={query.data?.data ?? []}
+              total={query.data?.total ?? 0}
+              state={qs}
+              onStateChange={setQs}
+              loading={query.isLoading}
+              searchPlaceholder="Search by identity type…"
+              emptyText="No identity types found."
+              toolbar={
+                <Can perm="lodge-identity:add">
+                  <Button size="sm" onClick={openCreate}>
+                    <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="mr-1 size-4" />
+                    New Identity Type
+                  </Button>
+                </Can>
+              }
+            />
+          </CardContent>
+        </Card>
+      </div>
+
+      <Dialog open={dialog.open} onOpenChange={(o) => !o && closeDialog()}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {dialog.mode === "create" ? "New Identity Type" : "Edit Identity Type"}
+            </DialogTitle>
+            <DialogDescription>
+              {dialog.mode === "create"
+                ? "Add a new identity document type (e.g. Aadhaar, PAN)."
+                : "Update this identity type."}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel>
+                  Code{" "}
+                  <span className="text-muted-foreground font-normal">(optional — auto-generated if blank)</span>
+                </FieldLabel>
+                <Input
+                  type="number"
+                  value={form.code}
+                  onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                  placeholder="Leave blank to auto-generate"
+                  disabled={dialog.mode === "edit"}
+                />
+              </Field>
+              <Field>
+                <FieldLabel>
+                  Identity Type <span className="text-destructive">*</span>
+                </FieldLabel>
+                <Input
+                  value={form.name}
+                  maxLength={50}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Aadhaar, PAN, Passport"
+                  required
+                />
+              </Field>
+            </FieldGroup>
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={closeDialog}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isPending}>
+                {isPending ? "Saving…" : dialog.mode === "create" ? "Create" : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Identity Type</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete <strong>{deleteTarget?.name}</strong>? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteMut.mutate(deleteTarget.id)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </TooltipProvider>
+  );
+}
