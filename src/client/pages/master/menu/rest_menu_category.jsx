@@ -1,88 +1,245 @@
-import { useMemo, useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
+import {
+  Add01Icon,
+  PencilEdit01Icon,
+  Delete01Icon,
+  PlusSignIcon,
+  MinusSignIcon,
+} from "@hugeicons/core-free-icons";
 
 import { Can } from "@/lib/auth";
-import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
+import {
+  DataTable,
+  DataTableColumnHeader,
+  DEFAULT_QUERY_STATE,
+} from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+// ─────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────
 
 const QK = ["menu-categories"];
-const CATEGORY_TYPES = [
-  { value: "F", label: "Food" },
-  { value: "B", label: "Beverage" },
-  { value: "L", label: "Liquor" },
-  { value: "O", label: "Other" },
-];
-const EMPTY = {
+
+const EMPTY_FORM = {
+  code: "",
   name: "",
-  category_type: "__none__",
-  allow_discount: false,
-  max_discount_percent: "0",
-  auto_discount_percent: "0",
-  tally_code: "",
-  unit_id: "",
+  tallyInput: "",
+  tallyId: null,
+  tallyName: "",
+  allowDiscount: "0",
+  maxDiscountPercent: "0",
+  autoDiscountPercent: "0",
+  unitId: null,
 };
 
+const EMPTY_TAX_ROW = {
+  taxCodeInput: "",
+  taxId: null,
+  taxName: "",
+  taxPercentage: "",
+};
+
+// ─────────────────────────────────────────────────────────────
+// Main component
+// ─────────────────────────────────────────────────────────────
+
 export default function MenuCategory() {
-  const queryClient = useQueryClient();
-  const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
+  const qc = useQueryClient();
+  const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [form, setForm] = useState(EMPTY);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [taxRows, setTaxRows] = useState([{ ...EMPTY_TAX_ROW }]);
+  const taxCodeRefs = useRef([]);
+  const taxPctRefs = useRef([]);
 
-  const query = useQuery({
+  function setF(k, v) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  // ── Queries ───────────────────────────────────────────────
+
+  const { data, isLoading } = useQuery({
     queryKey: [...QK, qs],
     queryFn: () => invoke("get_menu_categories", { qs }),
-    placeholderData: (prev) => prev,
   });
 
-  const inv = () => queryClient.invalidateQueries({ queryKey: QK });
+  const { data: units = [] } = useQuery({
+    queryKey: ["units-for-menu-category"],
+    queryFn: () => invoke("get_all_units_for_menu_category"),
+  });
+
+  function inv() {
+    qc.invalidateQueries({ queryKey: QK });
+  }
+
+  // ── Tally code lookup ─────────────────────────────────────
+
+  async function handleTallyLookup() {
+    if (!form.tallyInput) {
+      setF("tallyId", null);
+      setF("tallyName", "");
+      return;
+    }
+    try {
+      const result = await invoke("lookup_tally_for_menu_category", {
+        code: Number(form.tallyInput),
+      });
+      if (result) {
+        setForm((f) => ({ ...f, tallyId: result.id, tallyName: result.name }));
+      } else {
+        toast.error("Tally code not found");
+        setForm((f) => ({ ...f, tallyId: null, tallyName: "" }));
+      }
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }
+
+  // ── Tax row helpers ───────────────────────────────────────
+
+  const updateTaxRow = useCallback((index, field, value) => {
+    setTaxRows((rows) => {
+      const updated = [...rows];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  }, []);
+
+  async function handleTaxCodeLookup(index) {
+    const row = taxRows[index];
+    if (!row.taxCodeInput) {
+      updateTaxRow(index, "taxId", null);
+      updateTaxRow(index, "taxName", "");
+      return;
+    }
+    try {
+      const result = await invoke("lookup_tax_for_menu_category", {
+        code: Number(row.taxCodeInput),
+      });
+      if (result) {
+        setTaxRows((rows) => {
+          const updated = [...rows];
+          updated[index] = {
+            ...updated[index],
+            taxId: result.id,
+            taxName: result.name,
+          };
+          return updated;
+        });
+        setTimeout(() => taxPctRefs.current[index]?.focus(), 50);
+      } else {
+        toast.error("Tax code not found");
+        setTaxRows((rows) => {
+          const updated = [...rows];
+          updated[index] = { ...updated[index], taxId: null, taxName: "" };
+          return updated;
+        });
+      }
+    } catch (e) {
+      toast.error(String(e));
+    }
+  }
+
+  function addTaxRow() {
+    setTaxRows((rows) => [...rows, { ...EMPTY_TAX_ROW }]);
+  }
+
+  function removeTaxRow(index) {
+    setTaxRows((rows) =>
+      rows.length === 1
+        ? [{ ...EMPTY_TAX_ROW }]
+        : rows.filter((_, i) => i !== index)
+    );
+  }
+
+  // ── Mutations ─────────────────────────────────────────────
+
+  function buildTaxDetails() {
+    return taxRows
+      .filter((r) => r.taxId && r.taxPercentage !== "")
+      .map((r) => ({ taxId: r.taxId, taxPercentage: Number(r.taxPercentage) }));
+  }
+
+  function buildBase(f) {
+    return {
+      name: f.name,
+      allowDiscount: f.allowDiscount === "1",
+      maxDiscountPercent:
+        f.maxDiscountPercent !== "" ? Number(f.maxDiscountPercent) : 0,
+      autoDiscountPercent:
+        f.autoDiscountPercent !== "" ? Number(f.autoDiscountPercent) : 0,
+      tallyCode: f.tallyId || null,
+      unitId: f.unitId ? Number(f.unitId) : null,
+      taxDetails: buildTaxDetails(),
+    };
+  }
 
   const createMut = useMutation({
-    mutationFn: (d) => invoke("create_menu_category", {
-      name: d.name,
-      categoryType: d.category_type !== "__none__" ? d.category_type : null,
-      allowDiscount: d.allow_discount,
-      maxDiscountPercent: parseFloat(d.max_discount_percent) || 0,
-      autoDiscountPercent: parseFloat(d.auto_discount_percent) || 0,
-      tallyCode: d.tally_code ? parseInt(d.tally_code) : null,
-      unitId: d.unit_id ? parseInt(d.unit_id) : null,
-    }),
-    onSuccess: () => { toast.success("Category created"); inv(); closeDialog(); },
+    mutationFn: (f) =>
+      invoke("create_menu_category", {
+        ...buildBase(f),
+        code: f.code ? Number(f.code) : null,
+      }),
+    onSuccess: () => {
+      toast.success("Menu category created");
+      inv();
+      closeDialog();
+    },
     onError: (e) => toast.error(String(e)),
   });
 
   const updateMut = useMutation({
-    mutationFn: (d) => invoke("update_menu_category", {
-      id: d.id,
-      name: d.name,
-      categoryType: d.category_type !== "__none__" ? d.category_type : null,
-      allowDiscount: d.allow_discount,
-      maxDiscountPercent: parseFloat(d.max_discount_percent) || 0,
-      autoDiscountPercent: parseFloat(d.auto_discount_percent) || 0,
-      tallyCode: d.tally_code ? parseInt(d.tally_code) : null,
-      unitId: d.unit_id ? parseInt(d.unit_id) : null,
-    }),
-    onSuccess: () => { toast.success("Category updated"); inv(); closeDialog(); },
+    mutationFn: (f) =>
+      invoke("update_menu_category", {
+        id: f.id,
+        code: Number(f.code),
+        ...buildBase(f),
+      }),
+    onSuccess: () => {
+      toast.success("Menu category updated");
+      inv();
+      closeDialog();
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -95,250 +252,592 @@ export default function MenuCategory() {
 
   const deleteMut = useMutation({
     mutationFn: (id) => invoke("delete_menu_category", { id }),
-    onSuccess: () => { toast.success("Category deleted"); inv(); setDeleteTarget(null); },
-    onError: (e) => toast.error(String(e)),
+    onSuccess: () => {
+      toast.success("Menu category deleted");
+      inv();
+      setDeleteTarget(null);
+    },
+    onError: (e) => {
+      toast.error(String(e));
+      setDeleteTarget(null);
+    },
   });
 
-  function openCreate() { setForm(EMPTY); setDialog({ open: true, mode: "create", data: null }); }
-  function openEdit(row) {
+  // ── Dialog helpers ────────────────────────────────────────
+
+  function openCreate() {
+    setForm(EMPTY_FORM);
+    setTaxRows([{ ...EMPTY_TAX_ROW }]);
+    setDialog({ open: true, mode: "create", data: null });
+  }
+
+  async function openEdit(row) {
     setForm({
-      name: row.name,
-      category_type: row.category_type ?? "__none__",
-      allow_discount: row.allow_discount,
-      max_discount_percent: String(row.max_discount_percent ?? 0),
-      auto_discount_percent: String(row.auto_discount_percent ?? 0),
-      tally_code: row.tally_code ? String(row.tally_code) : "",
-      unit_id: row.unit_id ? String(row.unit_id) : "",
+      code: String(row.code ?? ""),
+      name: row.name ?? "",
+      tallyInput: row.tally_master_code ? String(row.tally_master_code) : "",
+      tallyId: row.tally_code || null,
+      tallyName: row.tally_name ?? "",
+      allowDiscount: row.allow_discount ? "1" : "0",
+      maxDiscountPercent:
+        row.max_discount_percent != null ? String(row.max_discount_percent) : "0",
+      autoDiscountPercent:
+        row.auto_discount_percent != null ? String(row.auto_discount_percent) : "0",
+      unitId: row.unit_id ? String(row.unit_id) : null,
     });
+    try {
+      const detail = await invoke("get_menu_category_detail", { id: row.id });
+      const loaded =
+        detail.taxes.length > 0
+          ? detail.taxes.map((t) => ({
+              taxCodeInput: String(t.tax_code),
+              taxId: t.tax_id,
+              taxName: t.tax_name,
+              taxPercentage: String(t.tax_percentage),
+            }))
+          : [{ ...EMPTY_TAX_ROW }];
+      setTaxRows(loaded);
+    } catch (e) {
+      toast.error(`Failed to load tax details: ${String(e)}`);
+      setTaxRows([{ ...EMPTY_TAX_ROW }]);
+    }
     setDialog({ open: true, mode: "edit", data: row });
   }
-  function closeDialog() { setDialog((d) => ({ ...d, open: false })); }
+
+  function closeDialog() {
+    setDialog((d) => ({ ...d, open: false }));
+  }
 
   function handleSubmit(e) {
     e.preventDefault();
-    if (!form.name.trim()) { toast.error("Name is required"); return; }
-    if (dialog.mode === "create") createMut.mutate(form);
-    else updateMut.mutate({ id: dialog.data.id, ...form });
+    if (!form.name.trim()) {
+      toast.error("Category name is required");
+      return;
+    }
+    if (isEditMode && !form.code) {
+      toast.error("Category code is required");
+      return;
+    }
+    const maxPct = Number(form.maxDiscountPercent);
+    if (isNaN(maxPct) || maxPct < 0 || maxPct > 100) {
+      toast.error("Max discount must be between 0 and 100");
+      return;
+    }
+    const autoPct = Number(form.autoDiscountPercent);
+    if (isNaN(autoPct) || autoPct < 0) {
+      toast.error("Auto discount cannot be negative");
+      return;
+    }
+    const payload = { ...form, id: dialog.data?.id };
+    if (dialog.mode === "create") createMut.mutate(payload);
+    else updateMut.mutate(payload);
   }
 
-  const columns = useMemo(() => [
-    {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
+  const isPending = createMut.isPending || updateMut.isPending;
+  const isEditMode = dialog.mode === "edit";
+  const discountEnabled = form.allowDiscount === "1";
+
+  // ── List columns ──────────────────────────────────────────
+
+  const columns = [
     {
       accessorKey: "code",
-      header: "Code",
-      size: 90,
-      meta: { label: "Code" },
-    },
-    {
-      accessorKey: "category_type",
-      header: "Type",
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title="Code" />
+      ),
+      cell: ({ row }) => (
+        <span className="font-mono text-xs text-muted-foreground">
+          {row.original.code}
+        </span>
+      ),
       size: 80,
-      cell: ({ row }) => {
-        const t = CATEGORY_TYPES.find((x) => x.value === row.original.category_type);
-        return t ? t.label : <span className="text-muted-foreground text-xs">—</span>;
-      },
-      meta: { label: "Type" },
     },
     {
       accessorKey: "name",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Category Name" />,
-      meta: { label: "Category Name" },
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title="Category Name" />
+      ),
+      cell: ({ row }) => (
+        <span className="font-medium">{row.original.name}</span>
+      ),
+    },
+    {
+      accessorKey: "unit_name",
+      header: "Unit",
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {row.original.unit_name || (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </span>
+      ),
+      size: 90,
+    },
+    {
+      accessorKey: "tally_name",
+      header: "Tally",
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {row.original.tally_name || (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </span>
+      ),
+      size: 120,
     },
     {
       accessorKey: "allow_discount",
       header: "Discount",
-      size: 80,
       cell: ({ row }) => (
-        <span className={row.original.allow_discount ? "text-green-600 text-xs font-medium" : "text-muted-foreground text-xs"}>
+        <span
+          className={
+            row.original.allow_discount
+              ? "text-green-600 text-xs font-medium"
+              : "text-muted-foreground text-xs"
+          }
+        >
           {row.original.allow_discount ? "Yes" : "No"}
         </span>
       ),
-      meta: { label: "Discount" },
+      size: 80,
     },
     {
       accessorKey: "max_discount_percent",
       header: "Max %",
+      cell: ({ row }) =>
+        row.original.max_discount_percent > 0 ? (
+          <span className="font-mono text-sm">
+            {Number(row.original.max_discount_percent).toFixed(2)}%
+          </span>
+        ) : (
+          <span className="text-muted-foreground text-xs">—</span>
+        ),
       size: 80,
-      cell: ({ row }) => row.original.max_discount_percent > 0
-        ? `${row.original.max_discount_percent.toFixed(2)}%`
-        : <span className="text-muted-foreground text-xs">—</span>,
-      meta: { label: "Max %" },
     },
     {
       accessorKey: "auto_discount_percent",
       header: "Auto %",
+      cell: ({ row }) =>
+        row.original.auto_discount_percent > 0 ? (
+          <span className="font-mono text-sm">
+            {Number(row.original.auto_discount_percent).toFixed(2)}%
+          </span>
+        ) : (
+          <span className="text-muted-foreground text-xs">—</span>
+        ),
       size: 80,
-      cell: ({ row }) => row.original.auto_discount_percent > 0
-        ? `${row.original.auto_discount_percent.toFixed(2)}%`
-        : <span className="text-muted-foreground text-xs">—</span>,
-      meta: { label: "Auto %" },
     },
     {
       accessorKey: "is_active",
       header: "Active",
-      size: 80,
       cell: ({ row }) => (
-        <Switch size="sm" checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending} />
+        <Can perm="menu-category:update">
+          <Switch
+            checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending}
+          />
+        </Can>
       ),
-      meta: { label: "Active" },
+      size: 70,
     },
     {
-      id: "actions", header: "Actions", size: 90,
+      id: "actions",
+      header: "Actions",
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
-          <Can perm="menu-category:update">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" onClick={() => openEdit(row.original)}>
-                  <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Edit</TooltipContent>
-            </Tooltip>
-          </Can>
-          <Can perm="menu-category:delete">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() => setDeleteTarget(row.original)}>
-                  <HugeiconsIcon icon={Delete01Icon} strokeWidth={2} className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Delete</TooltipContent>
-            </Tooltip>
-          </Can>
+        <div className="flex gap-1">
+          <TooltipProvider>
+            <Can perm="menu-category:update">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    onClick={() => openEdit(row.original)}
+                  >
+                    <HugeiconsIcon
+                      icon={PencilEdit01Icon}
+                      size={14}
+                      strokeWidth={2}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit</TooltipContent>
+              </Tooltip>
+            </Can>
+            <Can perm="menu-category:delete">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-destructive hover:text-destructive"
+                    onClick={() => setDeleteTarget(row.original)}
+                  >
+                    <HugeiconsIcon
+                      icon={Delete01Icon}
+                      size={14}
+                      strokeWidth={2}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete</TooltipContent>
+              </Tooltip>
+            </Can>
+          </TooltipProvider>
         </div>
       ),
+      size: 80,
     },
-  ], [toggleMut.isPending]); // eslint-disable-line react-hooks/exhaustive-deps
+  ];
 
-  const isPending = createMut.isPending || updateMut.isPending;
+  // ── Render ────────────────────────────────────────────────
 
   return (
-    <TooltipProvider>
-      <div className="p-6">
-        <Card>
-          <CardHeader><CardTitle>Menu Categories</CardTitle></CardHeader>
-          <CardContent>
-            <DataTable
-              columns={columns} data={query.data?.data ?? []} total={query.data?.total ?? 0}
-              state={qs} onStateChange={setQs} loading={query.isLoading}
-              searchPlaceholder="Search by category name…" emptyText="No categories found."
-              toolbar={
-                <Can perm="menu-category:add">
-                  <Button size="sm" onClick={openCreate}>
-                    <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="mr-1 size-4" />
-                    New Category
-                  </Button>
-                </Can>
-              }
-            />
-          </CardContent>
-        </Card>
-      </div>
+    <div className="p-6 space-y-4">
+      {/* ── List table ──────────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle>Menu Category Master</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DataTable
+            columns={columns}
+            data={data?.data ?? []}
+            total={data?.total ?? 0}
+            loading={isLoading}
+            state={qs}
+            onStateChange={setQs}
+            searchPlaceholder="Search by category name…"
+            emptyText="No categories found."
+            toolbar={
+              <Can perm="menu-category:add">
+                <Button size="sm" onClick={openCreate}>
+                  <HugeiconsIcon
+                    icon={Add01Icon}
+                    size={14}
+                    strokeWidth={2}
+                    className="mr-1"
+                  />
+                  Add Category
+                </Button>
+              </Can>
+            }
+          />
+        </CardContent>
+      </Card>
 
+      {/* ── Create / Edit dialog ─────────────────────────────── */}
       <Dialog open={dialog.open} onOpenChange={(o) => !o && closeDialog()}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{dialog.mode === "create" ? "New Category" : "Edit Category"}</DialogTitle>
-            <DialogDescription>
-              {dialog.mode === "create" ? "Create a new menu category." : "Update this category."}
-            </DialogDescription>
+            <DialogTitle>
+              {isEditMode ? "Edit Menu Category" : "Add Menu Category"}
+            </DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
-            <FieldGroup>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* ── Row 1: Code | Category Name ─────────────────── */}
+            <div className="grid grid-cols-2 gap-3">
               <Field>
-                <FieldLabel>Category Name <span className="text-destructive">*</span></FieldLabel>
+                <FieldLabel>
+                  Code
+                  {isEditMode && (
+                    <span className="text-destructive ml-0.5">*</span>
+                  )}
+                </FieldLabel>
                 <Input
-                  value={form.name} maxLength={30}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="Category name (max 30 chars)" required />
+                  type="number"
+                  value={form.code}
+                  onChange={(e) => setF("code", e.target.value)}
+                  placeholder={isEditMode ? "Enter code" : "Auto-generated"}
+                  min={1}
+                  autoFocus
+                />
               </Field>
               <Field>
-                <FieldLabel>Category Type <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                <Select value={form.category_type}
-                  onValueChange={(v) => setForm((f) => ({ ...f, category_type: v }))}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder="Select type…" /></SelectTrigger>
+                <FieldLabel>
+                  Category Name{" "}
+                  <span className="text-destructive">*</span>
+                </FieldLabel>
+                <Input
+                  value={form.name}
+                  onChange={(e) => setF("name", e.target.value)}
+                  placeholder="e.g. Food"
+                  maxLength={30}
+                />
+              </Field>
+            </div>
+
+            {/* ── Row 2: Unit | Tally Code ─────────────────────── */}
+            <div className="grid grid-cols-2 gap-3">
+              <Field>
+                <FieldLabel>Unit</FieldLabel>
+                <Select
+                  value={form.unitId ? String(form.unitId) : ""}
+                  onValueChange={(v) => setF("unitId", v || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select unit" />
+                  </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__">None</SelectItem>
-                    {CATEGORY_TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    {units.map((u) => (
+                      <SelectItem key={u.id} value={String(u.id)}>
+                        {u.name}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </Field>
               <Field>
-                <div className="flex items-center gap-3">
-                  <Checkbox
-                    id="allow_discount"
-                    checked={form.allow_discount}
-                    onCheckedChange={(v) => setForm((f) => ({ ...f, allow_discount: !!v }))} />
-                  <FieldLabel htmlFor="allow_discount" className="cursor-pointer">Allow Discount</FieldLabel>
+                <FieldLabel>Tally Code</FieldLabel>
+                <div className="space-y-1">
+                  <Input
+                    type="number"
+                    value={form.tallyInput}
+                    onChange={(e) => {
+                      setF("tallyInput", e.target.value);
+                      setF("tallyId", null);
+                      setF("tallyName", "");
+                    }}
+                    onBlur={handleTallyLookup}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleTallyLookup();
+                      }
+                    }}
+                    placeholder="Enter tally code"
+                  />
+                  {form.tallyName && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      {form.tallyName}
+                    </p>
+                  )}
                 </div>
               </Field>
-              {form.allow_discount && (
-                <div className="grid grid-cols-2 gap-3">
-                  <Field>
-                    <FieldLabel>Max Discount %</FieldLabel>
-                    <Input type="number" min="0" max="100" step="0.01"
-                      value={form.max_discount_percent}
-                      onChange={(e) => setForm((f) => ({ ...f, max_discount_percent: e.target.value }))} />
-                  </Field>
-                  <Field>
-                    <FieldLabel>Auto Discount %</FieldLabel>
-                    <Input type="number" min="0" max="100" step="0.01"
-                      value={form.auto_discount_percent}
-                      onChange={(e) => setForm((f) => ({ ...f, auto_discount_percent: e.target.value }))} />
-                  </Field>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel>Tally Code <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                  <Input type="number" value={form.tally_code}
-                    onChange={(e) => setForm((f) => ({ ...f, tally_code: e.target.value }))}
-                    placeholder="Tally ID" />
-                </Field>
-                <Field>
-                  <FieldLabel>Unit ID <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                  <Input type="number" value={form.unit_id}
-                    onChange={(e) => setForm((f) => ({ ...f, unit_id: e.target.value }))}
-                    placeholder="Unit ID" />
-                </Field>
+            </div>
+
+            {/* ── Row 3: Allow Discount | Max % | Auto % ──────── */}
+            <div className="grid grid-cols-3 gap-3">
+              <Field>
+                <FieldLabel>Allow Discount</FieldLabel>
+                <Select
+                  value={form.allowDiscount}
+                  onValueChange={(v) => setF("allowDiscount", v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">No</SelectItem>
+                    <SelectItem value="1">Yes</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel>Max Discount %</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  value={form.maxDiscountPercent}
+                  onChange={(e) => setF("maxDiscountPercent", e.target.value)}
+                  disabled={!discountEnabled}
+                  placeholder="0.00"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Auto Discount %</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={form.autoDiscountPercent}
+                  onChange={(e) => setF("autoDiscountPercent", e.target.value)}
+                  disabled={!discountEnabled}
+                  placeholder="0.00"
+                />
+              </Field>
+            </div>
+
+            {/* ── Tax Chart Grid ───────────────────────────────── */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <FieldLabel className="mb-0">Tax Chart</FieldLabel>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={addTaxRow}
+                >
+                  <HugeiconsIcon
+                    icon={PlusSignIcon}
+                    size={12}
+                    strokeWidth={2}
+                    className="mr-1"
+                  />
+                  Add Row
+                </Button>
               </div>
-            </FieldGroup>
-            <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" onClick={closeDialog}>Cancel</Button>
+              <div className="border rounded-md overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-10">
+                        Sr
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-28">
+                        Tax Code
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground">
+                        Tax Name
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-32">
+                        Tax %
+                      </th>
+                      <th className="px-2 py-2 w-8" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {taxRows.map((row, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-3 py-1.5 text-muted-foreground text-xs">
+                          {i + 1}
+                        </td>
+
+                        {/* Tax Code input */}
+                        <td className="px-2 py-1.5">
+                          <Input
+                            ref={(el) => {
+                              taxCodeRefs.current[i] = el;
+                            }}
+                            type="number"
+                            className="h-7 text-xs"
+                            value={row.taxCodeInput}
+                            onChange={(e) =>
+                              updateTaxRow(i, "taxCodeInput", e.target.value)
+                            }
+                            onBlur={() => handleTaxCodeLookup(i)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleTaxCodeLookup(i);
+                              }
+                            }}
+                            placeholder="Code"
+                          />
+                        </td>
+
+                        {/* Tax Name (auto-filled) */}
+                        <td className="px-3 py-1.5">
+                          {row.taxName ? (
+                            <span className="text-xs">{row.taxName}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">
+                              —
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Tax % input */}
+                        <td className="px-2 py-1.5">
+                          <Input
+                            ref={(el) => {
+                              taxPctRefs.current[i] = el;
+                            }}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="h-7 text-xs"
+                            value={row.taxPercentage}
+                            onChange={(e) =>
+                              updateTaxRow(i, "taxPercentage", e.target.value)
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                // Auto-add next row when Enter on last row
+                                setTaxRows((rows) => {
+                                  if (i === rows.length - 1)
+                                    return [...rows, { ...EMPTY_TAX_ROW }];
+                                  return rows;
+                                });
+                                setTimeout(
+                                  () => taxCodeRefs.current[i + 1]?.focus(),
+                                  50
+                                );
+                              }
+                            }}
+                            placeholder="0.00"
+                          />
+                        </td>
+
+                        {/* Remove row */}
+                        <td className="px-1 py-1.5">
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                            onClick={() => removeTaxRow(i)}
+                          >
+                            <HugeiconsIcon
+                              icon={MinusSignIcon}
+                              size={12}
+                              strokeWidth={2}
+                            />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeDialog}>
+                Cancel
+              </Button>
               <Button type="submit" disabled={isPending}>
-                {isPending ? "Saving…" : dialog.mode === "create" ? "Create" : "Save Changes"}
+                {isPending
+                  ? "Saving…"
+                  : isEditMode
+                  ? "Save Changes"
+                  : "Create Category"}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+      {/* ── Delete confirmation ──────────────────────────────── */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Category</AlertDialogTitle>
+            <AlertDialogTitle>Delete Menu Category</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete <strong>{deleteTarget?.name}</strong>? This cannot be undone.
+              Delete <strong>{deleteTarget?.name}</strong>? This will also
+              remove all linked tax details and cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => deleteMut.mutate(deleteTarget.id)}>Delete</AlertDialogAction>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteMut.mutate(deleteTarget.id)}
+            >
+              Delete
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </TooltipProvider>
+    </div>
   );
 }

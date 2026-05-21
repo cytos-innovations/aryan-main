@@ -115,26 +115,38 @@ pub async fn create_food_type(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     name: String,
+    code: Option<i64>,
 ) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".to_string());
     }
 
+    let map_err = |e: sqlx::Error| {
+        let msg = e.to_string();
+        if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
+            "Food type name already exists".to_string()
+        } else {
+            format!("Failed to create food type: {e}")
+        }
+    };
+
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    sqlx::query("INSERT INTO food_type (name) VALUES ($1)")
-        .bind(&name)
-        .execute(&pool)
-        .await
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
-                "Food type name already exists".to_string()
-            } else {
-                format!("Failed to create food type: {e}")
-            }
-        })?;
+    if let Some(c) = code.filter(|&c| c > 0) {
+        sqlx::query("INSERT INTO food_type (code, name) VALUES ($1, $2)")
+            .bind(c)
+            .bind(&name)
+            .execute(&pool)
+            .await
+            .map_err(map_err)?;
+    } else {
+        sqlx::query("INSERT INTO food_type (name) VALUES ($1)")
+            .bind(&name)
+            .execute(&pool)
+            .await
+            .map_err(map_err)?;
+    }
 
     Ok(())
 }

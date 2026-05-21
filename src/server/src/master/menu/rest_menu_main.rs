@@ -157,6 +157,7 @@ pub async fn create_menu_card(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     name: String,
+    code: Option<i64>,
     menu_group_id: i32,
     food_type_id: i32,
     item_barcode: Option<String>,
@@ -189,41 +190,73 @@ pub async fn create_menu_card(
         if t.is_empty() { None } else { Some(t) }
     });
 
-    let pool = acquire_pool(&state.pool, &app).await?;
-
-    sqlx::query(
-        "INSERT INTO menu_card \
-         (name, menu_group_id, food_type_id, item_barcode, menu_alias, \
-          kitchen_section_id, liquor_group_id, \
-          rate_1, rate_2, rate_3, rate_4, rate_5, \
-          consume_quantity, excise_rate, comments) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
-    )
-    .bind(&name)
-    .bind(menu_group_id)
-    .bind(food_type_id)
-    .bind(barcode)
-    .bind(alias)
-    .bind(kitchen_section_id)
-    .bind(liquor_group_id)
-    .bind(rate_1)
-    .bind(rate_2)
-    .bind(rate_3)
-    .bind(rate_4)
-    .bind(rate_5)
-    .bind(consume_quantity)
-    .bind(excise_rate)
-    .bind(cmts)
-    .execute(&pool)
-    .await
-    .map_err(|e| {
+    let map_err = |e: sqlx::Error| {
         let msg = e.to_string();
         if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
             "Barcode already exists".to_string()
         } else {
             format!("Failed to create menu card: {e}")
         }
-    })?;
+    };
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    if let Some(c) = code.filter(|&c| c > 0) {
+        sqlx::query(
+            "INSERT INTO menu_card \
+             (code, name, menu_group_id, food_type_id, item_barcode, menu_alias, \
+              kitchen_section_id, liquor_group_id, \
+              rate_1, rate_2, rate_3, rate_4, rate_5, \
+              consume_quantity, excise_rate, comments) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        )
+        .bind(c)
+        .bind(&name)
+        .bind(menu_group_id)
+        .bind(food_type_id)
+        .bind(barcode)
+        .bind(alias)
+        .bind(kitchen_section_id)
+        .bind(liquor_group_id)
+        .bind(rate_1)
+        .bind(rate_2)
+        .bind(rate_3)
+        .bind(rate_4)
+        .bind(rate_5)
+        .bind(consume_quantity)
+        .bind(excise_rate)
+        .bind(cmts)
+        .execute(&pool)
+        .await
+        .map_err(map_err)?;
+    } else {
+        sqlx::query(
+            "INSERT INTO menu_card \
+             (name, menu_group_id, food_type_id, item_barcode, menu_alias, \
+              kitchen_section_id, liquor_group_id, \
+              rate_1, rate_2, rate_3, rate_4, rate_5, \
+              consume_quantity, excise_rate, comments) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        )
+        .bind(&name)
+        .bind(menu_group_id)
+        .bind(food_type_id)
+        .bind(barcode)
+        .bind(alias)
+        .bind(kitchen_section_id)
+        .bind(liquor_group_id)
+        .bind(rate_1)
+        .bind(rate_2)
+        .bind(rate_3)
+        .bind(rate_4)
+        .bind(rate_5)
+        .bind(consume_quantity)
+        .bind(excise_rate)
+        .bind(cmts)
+        .execute(&pool)
+        .await
+        .map_err(map_err)?;
+    }
 
     Ok(())
 }

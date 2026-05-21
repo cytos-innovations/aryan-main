@@ -90,14 +90,12 @@ CREATE TABLE menu_category (
 
 CREATE TABLE menu_group (
     id INTEGER PRIMARY KEY,
-    code BIGSERIAL UNIQUE,
-    name VARCHAR(50) NOT NULL UNIQUE,
-    is_payable BOOLEAN DEFAULT TRUE,
-    tally_id BIGINT REFERENCES tally_master(id),
-    item_rate NUMERIC(12,2) DEFAULT 0,
-    category_id INTEGER REFERENCES menu_category(id),
-    applicable_service_tax BOOLEAN DEFAULT FALSE,
-    restaurant_sale_mode CHAR(1),
+    code BIGSERIAL UNIQUE,                           -- Unique group identifier
+    name VARCHAR(50) NOT NULL UNIQUE,                 -- Group name (e.g., 'BEERS')
+    category_id INTEGER REFERENCES menu_category(id),     -- FK to tbMenuCategory.Category_Code
+    MultipleRecipe  CHAR(1)                       -- Allow multiple recipes (Y/N)
+    As_Per_Size     CHAR(1)                       -- Size-based pricing (Y/N)
+    MenuGrpImage    IMAGE                         -- Binary image data for group
 
     -- Standard Audit & Status Columns
     is_active BOOLEAN DEFAULT TRUE,
@@ -253,6 +251,27 @@ CREATE TABLE kot_message (
     updated_by INTEGER REFERENCES users(id)
 );
 
+-- for resturant transactions
+CREATE TABLE CalInsentive(
+    id INTEGER PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+	MenuCard_ID INT REFERENCES MenuCard(id),
+	Sunday_Inc decimal(10, 4),
+	Monday_Inc decimal(10, 4),
+	Tuesday_Inc decimal(10, 4),
+	Wednesday_Inc decimal(10, 4),
+	Thursday_Inc decimal(10, 4),
+	Friday_Inc decimal(10, 4),
+	Saturday_Inc decimal(10, 4),
+
+    -- Standard Audit & Status Columns
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+    
 
 --- lodge application 
 

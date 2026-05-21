@@ -1,5 +1,6 @@
 mod utility;
 mod master;
+mod transaction;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -20,6 +21,10 @@ use utility::user_access::{
 use master::menu::rest_menu_category::{
     create_menu_category, delete_menu_category, get_all_menu_categories, get_menu_categories,
     toggle_menu_category_active, update_menu_category,
+    get_menu_category_detail,
+    get_all_units_for_menu_category,
+    lookup_tally_for_menu_category,
+    lookup_tax_for_menu_category,
 };
 use master::menu::rest_menu_type::{
     create_food_type, delete_food_type, get_all_food_types, get_food_types,
@@ -31,6 +36,10 @@ use master::menu::rest_menu_group::{
 };
 use master::menu::rest_menu_main::{
     create_menu_card, delete_menu_card, get_menu_cards, toggle_menu_card_active, update_menu_card,
+};
+use master::menu::rest_kitchen_section::{
+    get_kitchen_section_list, create_kitchen_section, update_kitchen_section,
+    toggle_kitchen_section_active, delete_kitchen_section,
 };
 use master::table::rest_table_group::{
     create_table_group, delete_table_group, get_all_table_groups, get_kitchen_sections,
@@ -129,6 +138,12 @@ use master::employee::acc_designation::{
 use master::employee::acc_employee_info::{
     get_employees, create_employee, update_employee,
     toggle_employee_active, delete_employee,
+};
+
+use transaction::rest_cal_insentive::{
+    get_cal_incentives, get_menu_cards_simple,
+    create_cal_incentive, update_cal_incentive,
+    toggle_cal_incentive_active, delete_cal_incentive,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -486,20 +501,18 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_by     INTEGER
         )"#,
         r#"CREATE TABLE IF NOT EXISTS menu_group (
-            id                   SERIAL PRIMARY KEY,
-            code                 BIGSERIAL UNIQUE,
-            name                 VARCHAR(50)   NOT NULL UNIQUE,
-            is_payable           BOOLEAN       NOT NULL DEFAULT TRUE,
-            tally_id             BIGINT,
-            item_rate            NUMERIC(12,2) NOT NULL DEFAULT 0,
-            category_id          INTEGER       NOT NULL REFERENCES menu_category(id),
-            applicable_service_tax BOOLEAN     NOT NULL DEFAULT FALSE,
-            restaurant_sale_mode CHAR(1),
-            is_active            BOOLEAN       NOT NULL DEFAULT TRUE,
-            created_at           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            created_by           INTEGER,
-            updated_at           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_by           INTEGER
+            id              SERIAL PRIMARY KEY,
+            code            BIGSERIAL UNIQUE,
+            name            VARCHAR(50)  NOT NULL UNIQUE,
+            category_id     INTEGER      REFERENCES menu_category(id),
+            multiple_recipe CHAR(1),
+            as_per_size     CHAR(1),
+            menu_grp_image  TEXT,
+            is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER
         )"#,
         r#"CREATE TABLE IF NOT EXISTS menu_card (
             id                 SERIAL PRIMARY KEY,
@@ -524,6 +537,23 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             created_by         INTEGER,
             updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by         INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS cal_incentive (
+            id              SERIAL PRIMARY KEY,
+            code            BIGSERIAL UNIQUE,
+            menu_card_id    INTEGER NOT NULL REFERENCES menu_card(id) ON DELETE CASCADE,
+            sunday_inc      NUMERIC(10,4) NOT NULL DEFAULT 0,
+            monday_inc      NUMERIC(10,4) NOT NULL DEFAULT 0,
+            tuesday_inc     NUMERIC(10,4) NOT NULL DEFAULT 0,
+            wednesday_inc   NUMERIC(10,4) NOT NULL DEFAULT 0,
+            thursday_inc    NUMERIC(10,4) NOT NULL DEFAULT 0,
+            friday_inc      NUMERIC(10,4) NOT NULL DEFAULT 0,
+            saturday_inc    NUMERIC(10,4) NOT NULL DEFAULT 0,
+            is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER
         )"#,
         // ── Table / Messages tables ──────────────────────────────────
         r#"CREATE TABLE IF NOT EXISTS kitchen_section (
@@ -1030,6 +1060,16 @@ async fn seed_module_permissions(pool: &PgPool) -> Result<(), String> {
         ("kot-message:add",      "add",    "Add new KOT message"),
         ("kot-message:update",   "update", "Edit existing KOT message"),
         ("kot-message:delete",   "delete", "Delete KOT message from the system"),
+        ("kitchen-section:view",   "view",   "View list of all kitchen sections"),
+        ("kitchen-section:add",    "add",    "Add new kitchen section"),
+        ("kitchen-section:update", "update", "Edit existing kitchen section"),
+        ("kitchen-section:delete", "delete", "Delete kitchen section from the system"),
+        // Restaurant transactions
+        ("cal-incentive:view",   "view",   "View cal incentive entries"),
+        ("cal-incentive:add",    "add",    "Add new cal incentive entry"),
+        ("cal-incentive:update", "update", "Edit existing cal incentive entry"),
+        ("cal-incentive:delete", "delete", "Delete cal incentive entry"),
+        ("cal-incentive:print",  "print",  "Print cal incentive report"),
     ];
 
     let lodge: &[(&str, &str, &str)] = &[
@@ -1232,6 +1272,10 @@ pub fn run() {
             // Menu categories
             get_menu_categories,
             get_all_menu_categories,
+            get_menu_category_detail,
+            get_all_units_for_menu_category,
+            lookup_tally_for_menu_category,
+            lookup_tax_for_menu_category,
             create_menu_category,
             update_menu_category,
             toggle_menu_category_active,
@@ -1258,6 +1302,12 @@ pub fn run() {
             delete_menu_card,
             // Kitchen sections (shared lookup)
             get_kitchen_sections,
+            // Kitchen sections (master screen)
+            get_kitchen_section_list,
+            create_kitchen_section,
+            update_kitchen_section,
+            toggle_kitchen_section_active,
+            delete_kitchen_section,
             // Table groups
             get_table_groups,
             get_all_table_groups,
@@ -1422,6 +1472,13 @@ pub fn run() {
             update_employee,
             toggle_employee_active,
             delete_employee,
+            // Restaurant transactions — cal incentive
+            get_cal_incentives,
+            get_menu_cards_simple,
+            create_cal_incentive,
+            update_cal_incentive,
+            toggle_cal_incentive_active,
+            delete_cal_incentive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

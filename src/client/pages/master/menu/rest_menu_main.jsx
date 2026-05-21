@@ -13,12 +13,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -26,14 +22,15 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const QK = ["menu-cards"];
+
 const EMPTY = {
+  code: "",
   name: "",
-  menu_group_id: "",   // required
-  food_type_id: "",    // required
+  menu_group_id: "",
+  food_type_id: "",
   item_barcode: "",
   menu_alias: "",
-  kitchen_section_id: "",
-  liquor_group_id: "",
+  kitchen_section_id: "__none__",
   rate_1: "0",
   rate_2: "0",
   rate_3: "0",
@@ -46,7 +43,7 @@ const EMPTY = {
 
 export default function MenuCardPage() {
   const queryClient = useQueryClient();
-  const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
+  const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [groupFilter, setGroupFilter] = useState("__all__");
   const [typeFilter, setTypeFilter] = useState("__all__");
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -55,11 +52,12 @@ export default function MenuCardPage() {
 
   const query = useQuery({
     queryKey: [...QK, qs, groupFilter, typeFilter],
-    queryFn: () => invoke("get_menu_cards", {
-      qs,
-      menuGroupId: groupFilter !== "__all__" ? Number(groupFilter) : null,
-      foodTypeId: typeFilter !== "__all__" ? Number(typeFilter) : null,
-    }),
+    queryFn: () =>
+      invoke("get_menu_cards", {
+        qs,
+        menuGroupId: groupFilter !== "__all__" ? Number(groupFilter) : null,
+        foodTypeId: typeFilter !== "__all__" ? Number(typeFilter) : null,
+      }),
     placeholderData: (prev) => prev,
   });
 
@@ -73,36 +71,56 @@ export default function MenuCardPage() {
     queryFn: () => invoke("get_all_food_types"),
   });
 
-  const inv = () => queryClient.invalidateQueries({ queryKey: QK });
+  const kitchenSectionsQuery = useQuery({
+    queryKey: ["all-kitchen-sections"],
+    queryFn: () => invoke("get_kitchen_sections"),
+  });
 
-  function buildPayload(d) {
+  const inv = () => queryClient.invalidateQueries({ queryKey: QK });
+  const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const allGroups = groupsQuery.data ?? [];
+  const allFoodTypes = foodTypesQuery.data ?? [];
+  const allKitchenSections = kitchenSectionsQuery.data ?? [];
+
+  // Derive the category name of the currently selected group
+  const selectedGroupCategory = useMemo(() => {
+    if (!form.menu_group_id) return null;
+    return allGroups.find((g) => String(g.id) === form.menu_group_id)?.category_name ?? null;
+  }, [form.menu_group_id, allGroups]);
+
+  function buildPayload(f) {
     return {
-      name: d.name,
-      menuGroupId: Number(d.menu_group_id),
-      foodTypeId: Number(d.food_type_id),
-      itemBarcode: d.item_barcode || null,
-      menuAlias: d.menu_alias || null,
-      kitchenSectionId: d.kitchen_section_id ? Number(d.kitchen_section_id) : null,
-      liquorGroupId: d.liquor_group_id ? Number(d.liquor_group_id) : null,
-      rate1: parseFloat(d.rate_1) || 0,
-      rate2: parseFloat(d.rate_2) || 0,
-      rate3: parseFloat(d.rate_3) || 0,
-      rate4: parseFloat(d.rate_4) || 0,
-      rate5: parseFloat(d.rate_5) || 0,
-      consumeQuantity: parseFloat(d.consume_quantity) || 0,
-      exciseRate: parseFloat(d.excise_rate) || 0,
-      comments: d.comments || null,
+      name: f.name,
+      menuGroupId: Number(f.menu_group_id),
+      foodTypeId: Number(f.food_type_id),
+      itemBarcode: f.item_barcode || null,
+      menuAlias: f.menu_alias || null,
+      kitchenSectionId: f.kitchen_section_id && f.kitchen_section_id !== "__none__" ? Number(f.kitchen_section_id) : null,
+      liquorGroupId: null,
+      rate1: parseFloat(f.rate_1) || 0,
+      rate2: parseFloat(f.rate_2) || 0,
+      rate3: parseFloat(f.rate_3) || 0,
+      rate4: parseFloat(f.rate_4) || 0,
+      rate5: parseFloat(f.rate_5) || 0,
+      consumeQuantity: parseFloat(f.consume_quantity) || 0,
+      exciseRate: parseFloat(f.excise_rate) || 0,
+      comments: f.comments || null,
     };
   }
 
   const createMut = useMutation({
-    mutationFn: (d) => invoke("create_menu_card", buildPayload(d)),
+    mutationFn: (f) =>
+      invoke("create_menu_card", {
+        code: f.code ? Number(f.code) : null,
+        ...buildPayload(f),
+      }),
     onSuccess: () => { toast.success("Menu card created"); inv(); closeDialog(); },
     onError: (e) => toast.error(String(e)),
   });
 
   const updateMut = useMutation({
-    mutationFn: (d) => invoke("update_menu_card", { id: d.id, ...buildPayload(d) }),
+    mutationFn: (f) => invoke("update_menu_card", { id: f.id, ...buildPayload(f) }),
     onSuccess: () => { toast.success("Menu card updated"); inv(); closeDialog(); },
     onError: (e) => toast.error(String(e)),
   });
@@ -123,13 +141,14 @@ export default function MenuCardPage() {
   function openCreate() { setForm(EMPTY); setDialog({ open: true, mode: "create", data: null }); }
   function openEdit(row) {
     setForm({
+      id: row.id,
+      code: String(row.code),
       name: row.name,
       menu_group_id: String(row.menu_group_id),
       food_type_id: String(row.food_type_id),
       item_barcode: row.item_barcode ?? "",
       menu_alias: row.menu_alias ?? "",
-      kitchen_section_id: row.kitchen_section_id ? String(row.kitchen_section_id) : "",
-      liquor_group_id: row.liquor_group_id ? String(row.liquor_group_id) : "",
+      kitchen_section_id: row.kitchen_section_id ? String(row.kitchen_section_id) : "__none__",
       rate_1: String(row.rate_1 ?? 0),
       rate_2: String(row.rate_2 ?? 0),
       rate_3: String(row.rate_3 ?? 0),
@@ -145,26 +164,21 @@ export default function MenuCardPage() {
 
   function handleSubmit(e) {
     e.preventDefault();
-    if (!form.name.trim()) { toast.error("Name is required"); return; }
+    if (!form.name.trim()) { toast.error("Item name is required"); return; }
     if (!form.menu_group_id) { toast.error("Menu Group is required"); return; }
     if (!form.food_type_id) { toast.error("Food Type is required"); return; }
+    if (!(parseFloat(form.rate_1) > 0)) { toast.error("Rate 1 is required and must be greater than 0"); return; }
     if (dialog.mode === "create") createMut.mutate(form);
     else updateMut.mutate({ id: dialog.data.id, ...form });
   }
 
-  const allGroups = groupsQuery.data ?? [];
-  const allFoodTypes = foodTypesQuery.data ?? [];
+  const isPending = createMut.isPending || updateMut.isPending;
 
   const columns = useMemo(() => [
     {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
-    {
       accessorKey: "code",
-      header: "Code",
-      size: 90,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Code" />,
+      size: 80,
       meta: { label: "Code" },
     },
     {
@@ -175,25 +189,22 @@ export default function MenuCardPage() {
     {
       accessorKey: "menu_alias",
       header: "Alias",
-      cell: ({ row }) => row.original.menu_alias
-        ? row.original.menu_alias
-        : <span className="text-muted-foreground text-xs">—</span>,
+      cell: ({ row }) =>
+        row.original.menu_alias ?? <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Alias" },
     },
     {
       accessorKey: "food_type_name",
       header: "Food Type",
-      cell: ({ row }) => row.original.food_type_name
-        ? row.original.food_type_name
-        : <span className="text-muted-foreground text-xs">—</span>,
+      cell: ({ row }) =>
+        row.original.food_type_name ?? <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Food Type" },
     },
     {
       accessorKey: "menu_group_name",
       header: "Group",
-      cell: ({ row }) => row.original.menu_group_name
-        ? row.original.menu_group_name
-        : <span className="text-muted-foreground text-xs">—</span>,
+      cell: ({ row }) =>
+        row.original.menu_group_name ?? <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Group" },
     },
     {
@@ -273,8 +284,6 @@ export default function MenuCardPage() {
     },
   ], [toggleMut.isPending]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isPending = createMut.isPending || updateMut.isPending;
-
   return (
     <TooltipProvider>
       <div className="p-6">
@@ -335,11 +344,9 @@ export default function MenuCardPage() {
                             </Select>
                           </div>
                           {activeCount > 0 && (
-                            <Button
-                              variant="ghost" size="sm"
+                            <Button variant="ghost" size="sm"
                               className="h-7 w-full text-xs text-muted-foreground"
-                              onClick={() => { setGroupFilter("__all__"); setTypeFilter("__all__"); }}
-                            >
+                              onClick={() => { setGroupFilter("__all__"); setTypeFilter("__all__"); }}>
                               Clear filters
                             </Button>
                           )}
@@ -363,25 +370,55 @@ export default function MenuCardPage() {
       <Dialog open={dialog.open} onOpenChange={(o) => !o && closeDialog()}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{dialog.mode === "create" ? "New Menu Card Item" : "Edit Menu Card Item"}</DialogTitle>
+            <DialogTitle>
+              {dialog.mode === "create" ? "New Menu Card Item" : "Edit Menu Card Item"}
+            </DialogTitle>
             <DialogDescription>
-              {dialog.mode === "create" ? "Add a new item to the menu card." : "Update this menu item."}
+              {dialog.mode === "create"
+                ? "Add a new item. Leave Code blank to auto-generate. Rate 1 is required."
+                : "Update this menu item."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              {/* Required fields */}
-              <Field>
-                <FieldLabel>Item Name <span className="text-destructive">*</span></FieldLabel>
-                <Input value={form.name} maxLength={250}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="Item name" required />
-              </Field>
+              {/* Row 1 — Code | Item Name */}
+              <div className="grid grid-cols-3 gap-3">
+                <Field>
+                  <FieldLabel>Code</FieldLabel>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={form.code}
+                    onChange={(e) => setF("code", e.target.value)}
+                    placeholder={dialog.mode === "create" ? "Auto" : ""}
+                    readOnly={dialog.mode === "edit"}
+                    className={dialog.mode === "edit" ? "bg-muted" : ""}
+                  />
+                </Field>
+                <Field className="col-span-2">
+                  <FieldLabel>
+                    Item Name <span className="text-destructive">*</span>
+                  </FieldLabel>
+                  <Input
+                    value={form.name}
+                    maxLength={250}
+                    onChange={(e) => setF("name", e.target.value)}
+                    placeholder="Item name"
+                    required
+                  />
+                </Field>
+              </div>
+
+              {/* Row 2 — Menu Group | Category (auto-derived, read-only) */}
               <div className="grid grid-cols-2 gap-3">
                 <Field>
-                  <FieldLabel>Menu Group <span className="text-destructive">*</span></FieldLabel>
-                  <Select value={form.menu_group_id}
-                    onValueChange={(v) => setForm((f) => ({ ...f, menu_group_id: v }))}>
+                  <FieldLabel>
+                    Menu Group <span className="text-destructive">*</span>
+                  </FieldLabel>
+                  <Select
+                    value={form.menu_group_id}
+                    onValueChange={(v) => setF("menu_group_id", v)}
+                  >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select a group…" />
                     </SelectTrigger>
@@ -393,9 +430,26 @@ export default function MenuCardPage() {
                   </Select>
                 </Field>
                 <Field>
-                  <FieldLabel>Food Type <span className="text-destructive">*</span></FieldLabel>
-                  <Select value={form.food_type_id}
-                    onValueChange={(v) => setForm((f) => ({ ...f, food_type_id: v }))}>
+                  <FieldLabel>Category</FieldLabel>
+                  <Input
+                    value={selectedGroupCategory ?? ""}
+                    readOnly
+                    className="bg-muted"
+                    placeholder="Auto-filled from group"
+                  />
+                </Field>
+              </div>
+
+              {/* Row 3 — Food Type | Kitchen Section */}
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <FieldLabel>
+                    Food Type <span className="text-destructive">*</span>
+                  </FieldLabel>
+                  <Select
+                    value={form.food_type_id}
+                    onValueChange={(v) => setF("food_type_id", v)}
+                  >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select a type…" />
                     </SelectTrigger>
@@ -406,56 +460,120 @@ export default function MenuCardPage() {
                     </SelectContent>
                   </Select>
                 </Field>
+                <Field>
+                  <FieldLabel>
+                    Kitchen Section{" "}
+                    <span className="text-muted-foreground font-normal">(optional)</span>
+                  </FieldLabel>
+                  <Select
+                    value={form.kitchen_section_id}
+                    onValueChange={(v) => setF("kitchen_section_id", v)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select section…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— None —</SelectItem>
+                      {allKitchenSections.map((k) => (
+                        <SelectItem key={k.id} value={String(k.id)}>{k.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
               </div>
-              {/* Optional identifiers */}
+
+              {/* Row 4 — Alias | Barcode */}
               <div className="grid grid-cols-2 gap-3">
                 <Field>
-                  <FieldLabel>Menu Alias <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                  <Input value={form.menu_alias} maxLength={250}
-                    onChange={(e) => setForm((f) => ({ ...f, menu_alias: e.target.value }))}
-                    placeholder="Display alias" />
+                  <FieldLabel>
+                    Menu Alias{" "}
+                    <span className="text-muted-foreground font-normal">(optional)</span>
+                  </FieldLabel>
+                  <Input
+                    value={form.menu_alias}
+                    maxLength={250}
+                    onChange={(e) => setF("menu_alias", e.target.value)}
+                    placeholder="Display alias"
+                  />
                 </Field>
                 <Field>
-                  <FieldLabel>Barcode <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                  <Input value={form.item_barcode} maxLength={100}
-                    onChange={(e) => setForm((f) => ({ ...f, item_barcode: e.target.value }))}
-                    placeholder="Item barcode" />
+                  <FieldLabel>
+                    Barcode{" "}
+                    <span className="text-muted-foreground font-normal">(optional)</span>
+                  </FieldLabel>
+                  <Input
+                    value={form.item_barcode}
+                    maxLength={100}
+                    onChange={(e) => setF("item_barcode", e.target.value)}
+                    placeholder="Item barcode"
+                  />
                 </Field>
               </div>
-              {/* Rates */}
+
+              {/* Row 5 — Rates (Rate 1 required) */}
               <div className="grid grid-cols-5 gap-2">
-                {["rate_1", "rate_2", "rate_3", "rate_4", "rate_5"].map((key, i) => (
+                {[
+                  { key: "rate_1", label: "Rate 1 *", required: true },
+                  { key: "rate_2", label: "Rate 2", required: false },
+                  { key: "rate_3", label: "Rate 3", required: false },
+                  { key: "rate_4", label: "Rate 4", required: false },
+                  { key: "rate_5", label: "Rate 5", required: false },
+                ].map(({ key, label, required }) => (
                   <Field key={key}>
-                    <FieldLabel>Rate {i + 1}</FieldLabel>
-                    <Input type="number" min="0" step="0.01"
+                    <FieldLabel>
+                      {required
+                        ? <>{label.replace(" *", "")} <span className="text-destructive">*</span></>
+                        : label}
+                    </FieldLabel>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
                       value={form[key]}
-                      onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} />
+                      onChange={(e) => setF(key, e.target.value)}
+                    />
                   </Field>
                 ))}
               </div>
-              {/* Other numeric */}
+
+              {/* Row 6 — Consume (Cost Rate) | Excise Rate */}
               <div className="grid grid-cols-2 gap-3">
                 <Field>
-                  <FieldLabel>Consume Qty</FieldLabel>
-                  <Input type="number" min="0" step="0.01"
+                  <FieldLabel>Consume (Cost Rate)</FieldLabel>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
                     value={form.consume_quantity}
-                    onChange={(e) => setForm((f) => ({ ...f, consume_quantity: e.target.value }))} />
+                    onChange={(e) => setF("consume_quantity", e.target.value)}
+                  />
                 </Field>
                 <Field>
                   <FieldLabel>Excise Rate</FieldLabel>
-                  <Input type="number" min="0" step="0.01"
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
                     value={form.excise_rate}
-                    onChange={(e) => setForm((f) => ({ ...f, excise_rate: e.target.value }))} />
+                    onChange={(e) => setF("excise_rate", e.target.value)}
+                  />
                 </Field>
               </div>
-              {/* Comments */}
+
+              {/* Row 7 — Comments */}
               <Field>
-                <FieldLabel>Comments <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                <Input value={form.comments}
-                  onChange={(e) => setForm((f) => ({ ...f, comments: e.target.value }))}
-                  placeholder="Optional comments" />
+                <FieldLabel>
+                  Comments{" "}
+                  <span className="text-muted-foreground font-normal">(optional)</span>
+                </FieldLabel>
+                <Input
+                  value={form.comments}
+                  onChange={(e) => setF("comments", e.target.value)}
+                  placeholder="Optional comments"
+                />
               </Field>
             </FieldGroup>
+
             <DialogFooter className="mt-6">
               <Button type="button" variant="outline" onClick={closeDialog}>Cancel</Button>
               <Button type="submit" disabled={isPending}>

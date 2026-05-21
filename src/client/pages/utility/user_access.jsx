@@ -25,25 +25,35 @@ const TABS = [
   { id: "application", label: "Application" },
 ];
 
-const MASTER_MODULES = new Set([
-  "menu-category", "food-type", "menu-group", "menu-card",
-  "table-group", "restaurant-table", "bill-message", "kot-message",
-  "lodge-customer", "lodge-discount", "lodge-identity", "lodge-market-segment", "lodge-plan",
-  "acc-tax-master",
-]);
-
-// Groups shown in the Master tab — order + grouping mirrors the sidebar registry
-const MASTER_MODULE_GROUPS = [
-  { label: "Menu Management", modules: ["menu-category", "food-type", "menu-group", "menu-card"] },
-  { label: "Table Management", modules: ["table-group", "restaurant-table"] },
-  { label: "Messages", modules: ["bill-message", "kot-message"] },
+// Four sections in the Transaction tab
+const TRANSACTION_MODULE_GROUPS = [
   {
-    label: "Lodge Master",
+    label: "Restaurant",
+    modules: ["cal-incentive"],
+  },
+];
+
+// Four sections in the Master tab
+const MASTER_MODULE_GROUPS = [
+  {
+    label: "Restaurant",
+    modules: [
+      "menu-category", "food-type", "menu-group", "menu-card", "kitchen-section",
+      "table-group", "restaurant-table",
+      "bill-message", "kot-message",
+    ],
+  },
+  {
+    label: "Lodge",
     modules: ["lodge-customer", "lodge-discount", "lodge-identity", "lodge-market-segment", "lodge-plan"],
   },
   {
-    label: "Account Master",
+    label: "Account",
     modules: ["acc-tax-master"],
+  },
+  {
+    label: "Material",
+    modules: [],
   },
 ];
 
@@ -57,12 +67,13 @@ const MODULE_DISPLAY_NAMES = {
   "acc-tax-master":         "Tax Master",
 };
 
+const TRANSACTION_MODULES = new Set(["cal-incentive"]);
+
 function getTabForPerm(permName) {
   const [module] = permName.split(":");
   if (module === "dashboard" || module === "users" || module === "user-access") return "utility";
-  if (MASTER_MODULES.has(module) || module.startsWith("menu")) return "master";
-  if (/order|payment|transaction|sale|purchase/.test(module)) return "transaction";
-  if (/report|analytic/.test(module)) return "reports";
+  if (TRANSACTION_MODULES.has(module) || /^(order|payment|transaction|sale)/.test(module)) return "transaction";
+  if (/^(report|analytic)/.test(module)) return "reports";
   return "master";
 }
 
@@ -180,10 +191,10 @@ function PermTable({ perms, selected, onToggle, onToggleColumn, moduleGroups }) 
             return groups.map((grp) => (
               <React.Fragment key={grp.label ?? "_ungrouped"}>
                 {grp.label && (
-                  <tr key={`grp-${grp.label}`} className="border-b bg-muted/60">
+                  <tr className="border-b bg-muted/40">
                     <td
                       colSpan={2 + actions.length}
-                      className="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide"
+                      className="px-3 py-1.5 text-xs text-muted-foreground uppercase tracking-wide"
                     >
                       {grp.label}
                     </td>
@@ -509,7 +520,11 @@ export default function UserAccess() {
                     selected={selected}
                     onToggle={togglePermission}
                     onToggleColumn={toggleColumn}
-                    moduleGroups={activeTab === "master" ? MASTER_MODULE_GROUPS : null}
+                    moduleGroups={
+                      activeTab === "master" ? MASTER_MODULE_GROUPS :
+                      activeTab === "transaction" ? TRANSACTION_MODULE_GROUPS :
+                      null
+                    }
                   />
                 </div>
               )}

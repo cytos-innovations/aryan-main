@@ -22,11 +22,11 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const QK = ["food-types"];
-const EMPTY = { name: "" };
+const EMPTY = { code: "", name: "" };
 
 export default function FoodType() {
   const queryClient = useQueryClient();
-  const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
+  const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
@@ -40,7 +40,11 @@ export default function FoodType() {
   const inv = () => queryClient.invalidateQueries({ queryKey: QK });
 
   const createMut = useMutation({
-    mutationFn: (d) => invoke("create_food_type", { name: d.name }),
+    mutationFn: (d) =>
+      invoke("create_food_type", {
+        name: d.name,
+        code: d.code ? Number(d.code) : null,
+      }),
     onSuccess: () => { toast.success("Food type created"); inv(); closeDialog(); },
     onError: (e) => toast.error(String(e)),
   });
@@ -66,7 +70,7 @@ export default function FoodType() {
 
   function openCreate() { setForm(EMPTY); setDialog({ open: true, mode: "create", data: null }); }
   function openEdit(row) {
-    setForm({ name: row.name });
+    setForm({ id: row.id, code: String(row.code), name: row.name });
     setDialog({ open: true, mode: "edit", data: row });
   }
   function closeDialog() { setDialog((d) => ({ ...d, open: false })); }
@@ -80,13 +84,8 @@ export default function FoodType() {
 
   const columns = useMemo(() => [
     {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
-    {
       accessorKey: "code",
-      header: "Code",
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Code" />,
       size: 90,
       meta: { label: "Code" },
     },
@@ -167,17 +166,33 @@ export default function FoodType() {
           <DialogHeader>
             <DialogTitle>{dialog.mode === "create" ? "New Food Type" : "Edit Food Type"}</DialogTitle>
             <DialogDescription>
-              {dialog.mode === "create" ? "Create a new food type." : "Update this food type."}
+              {dialog.mode === "create"
+                ? "Create a new food type. Leave Code blank to auto-generate."
+                : "Update this food type."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              <Field>
-                <FieldLabel>Food Type Name <span className="text-destructive">*</span></FieldLabel>
-                <Input value={form.name} maxLength={50}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="e.g. Vegetarian" required />
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <FieldLabel>Code</FieldLabel>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={form.code}
+                    onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                    placeholder={dialog.mode === "create" ? "Auto" : ""}
+                    readOnly={dialog.mode === "edit"}
+                    className={dialog.mode === "edit" ? "bg-muted" : ""}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel>Food Type Name <span className="text-destructive">*</span></FieldLabel>
+                  <Input value={form.name} maxLength={50}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. Vegetarian" required />
+                </Field>
+              </div>
             </FieldGroup>
             <DialogFooter className="mt-6">
               <Button type="button" variant="outline" onClick={closeDialog}>Cancel</Button>

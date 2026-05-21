@@ -52,8 +52,10 @@ import AccAccountGroups from "@/pages/master/account_groups/acc_account_groups";
 import AccGeneralLedger from "@/pages/master/acc_general_Ledger";
 import AccDayBook from "@/pages/master/acc_day_book";
 import AccPartyBank from "@/pages/master/acc_party_bank";
+import KitchenSection from "@/pages/master/menu/rest_kitchen_section";
 import MaterialItemGroup from "@/pages/master/kitchen_stock/material_item_group";
 import MaterialItemName from "@/pages/master/kitchen_stock/material_item_name";
+import CalIncentive from "@/pages/transaction/rest_cal_insentive";
 
 // ── Registry ─────────────────────────────────────────────────
 // Each leaf: { path, label, application, section, perm, icon, element }
@@ -165,6 +167,15 @@ export const registry = [
             perm: "menu-card:view",
             icon: PackageIcon,
             element: <MenuCard />,
+          },
+          {
+            path: "/master/menu/kitchen-sections",
+            label: "Kitchen Sections",
+            application: "restaurant",
+            section: "master",
+            perm: "kitchen-section:view",
+            icon: GridTableIcon,
+            element: <KitchenSection />,
           },
         ],
       },
@@ -362,6 +373,20 @@ export const registry = [
             element: <AccEmployeeInfo />,
           },
         ],
+      },
+    ],
+  },
+  {
+    label: "Transactions",
+    items: [
+      {
+        path: "/transaction/restaurant/cal-incentive",
+        label: "Cal Incentive",
+        application: "restaurant",
+        section: "transaction",
+        perm: "cal-incentive:view",
+        icon: PercentIcon,
+        element: <CalIncentive />,
       },
     ],
   },
