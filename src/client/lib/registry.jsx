@@ -23,6 +23,7 @@ import {
   CreditCardIcon,
   Invoice03Icon,
   BookOpen01Icon,
+  ReceiptIndianRupeeIcon,
 } from "@hugeicons/core-free-icons";
 
 import Dashboard from "@/pages/dashboard";
@@ -56,6 +57,7 @@ import KitchenSection from "@/pages/master/menu/rest_kitchen_section";
 import MaterialItemGroup from "@/pages/master/kitchen_stock/material_item_group";
 import MaterialItemName from "@/pages/master/kitchen_stock/material_item_name";
 import CalIncentive from "@/pages/transaction/rest_cal_insentive";
+import BillingPage from "@/pages/bill";
 
 // ── Registry ─────────────────────────────────────────────────
 // Each leaf: { path, label, application, section, perm, icon, element }
@@ -76,6 +78,15 @@ export const registry = [
         perm: "dashboard:view",
         icon: DashboardSquare01Icon,
         element: <Dashboard />,
+      },
+      {
+        path: "/billing",
+        label: "Billing",
+        application: "restaurant",
+        section: "transaction",
+        perm: "billing:view",
+        icon: ReceiptIndianRupeeIcon,
+        element: <BillingPage />,
       },
     ],
   },

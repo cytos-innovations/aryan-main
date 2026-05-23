@@ -43,6 +43,7 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -54,9 +55,10 @@ import {
   LogoutIcon,
   Store01Icon,
   PaintBrushIcon,
+  Add01Icon,
 } from "@hugeicons/core-free-icons";
 
-import { useAuth } from "@/lib/auth";
+import { useAuth, Can } from "@/lib/auth";
 import { flatRoutes, homePath, registry } from "@/lib/registry";
 import { useTheme, THEMES } from "@/lib/theme";
 
@@ -361,10 +363,21 @@ function AppSidebar(props) {
   );
 }
 
+// Collapses sidebar automatically when entering billing.
+function SidebarAutoCollapse({ isBilling }) {
+  const { setOpen } = useSidebar();
+  useEffect(() => {
+    if (isBilling) setOpen(false);
+  }, [isBilling]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
 export default function AppShell() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { refreshPermissions } = useAuth();
   const current = flatRoutes.find((r) => r.path === pathname);
+  const isBilling = pathname.startsWith("/billing");
 
   // Refresh permissions from DB on every mount so stale localStorage
   // sessions pick up any changes made in User Access without re-login.
@@ -374,7 +387,8 @@ export default function AppShell() {
 
   return (
     <TooltipProvider>
-      <SidebarProvider>
+      <SidebarProvider defaultOpen={!isBilling} className="h-svh overflow-hidden">
+        <SidebarAutoCollapse isBilling={isBilling} />
         <AppSidebar />
         <SidebarInset>
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
@@ -387,7 +401,17 @@ export default function AppShell() {
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              <Can perm="billing:new-order">
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 px-3 text-xs"
+                  onClick={() => navigate("/billing")}
+                >
+                  <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
+                  New Order
+                </Button>
+              </Can>
               <ThemeToggle />
             </div>
           </header>

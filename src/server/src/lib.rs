@@ -1,6 +1,7 @@
 mod utility;
 mod master;
 mod transaction;
+mod bill;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -144,6 +145,32 @@ use transaction::rest_cal_insentive::{
     get_cal_incentives, get_menu_cards_simple,
     create_cal_incentive, update_cal_incentive,
     toggle_cal_incentive_active, delete_cal_incentive,
+};
+
+use bill::{
+    // Lookup
+    get_tables_for_billing,
+    get_menu_for_billing,
+    get_active_sessions,
+    get_floor_view,
+    // Session lifecycle
+    open_order_session,
+    get_order_session,
+    get_session_detail,
+    update_session_info,
+    cancel_order_session,
+    // Order items
+    get_order_items,
+    add_order_item,
+    update_order_item_qty,
+    cancel_order_item,
+    // KOT
+    generate_kot,
+    get_kot_list,
+    // Bill & payment
+    get_bill_summary,
+    generate_bill,
+    settle_bill,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -404,6 +431,15 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             .map_err(|e| format!("Migration failed (drop emp_no): {e}"))?;
     }
 
+    // ── Migrate restaurant_table: add billing status columns ──────
+    for col_sql in [
+        "ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS current_status VARCHAR(30) NOT NULL DEFAULT 'AVAILABLE'",
+        "ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS current_order_session_id INTEGER",
+        "ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS occupied_since TIMESTAMP",
+    ] {
+        sqlx::query(col_sql).execute(pool).await.ok();
+    }
+
     let stmts = [
         // Core auth tables
         r#"CREATE TABLE IF NOT EXISTS users (
@@ -589,21 +625,24 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_by          INTEGER
         )"#,
         r#"CREATE TABLE IF NOT EXISTS restaurant_table (
-            id               SERIAL PRIMARY KEY,
-            code             BIGSERIAL UNIQUE,
-            table_name       VARCHAR(50)  NOT NULL,
-            is_home_delivery CHAR(1)      NOT NULL DEFAULT 'N',
-            table_lock_status VARCHAR(50),
-            outlet_name      VARCHAR(50),
-            is_tax_applicable CHAR(1)     NOT NULL DEFAULT 'N',
-            applicable_rate  INTEGER      NOT NULL DEFAULT 1
-                              CHECK(applicable_rate IN (1, 2, 3, 4, 5)),
-            table_group_id   INTEGER      REFERENCES table_group(id),
-            is_active        BOOLEAN      NOT NULL DEFAULT TRUE,
-            created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            created_by       INTEGER,
-            updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_by       INTEGER
+            id                       SERIAL PRIMARY KEY,
+            code                     BIGSERIAL UNIQUE,
+            table_name               VARCHAR(50)  NOT NULL,
+            is_home_delivery         CHAR(1)      NOT NULL DEFAULT 'N',
+            table_lock_status        VARCHAR(50),
+            outlet_name              VARCHAR(50),
+            is_tax_applicable        CHAR(1)      NOT NULL DEFAULT 'N',
+            applicable_rate          INTEGER      NOT NULL DEFAULT 1
+                                     CHECK(applicable_rate IN (1, 2, 3, 4, 5)),
+            table_group_id           INTEGER      REFERENCES table_group(id),
+            current_status           VARCHAR(30)  NOT NULL DEFAULT 'AVAILABLE',
+            current_order_session_id INTEGER,
+            occupied_since           TIMESTAMP,
+            is_active                BOOLEAN      NOT NULL DEFAULT TRUE,
+            created_at               TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by               INTEGER,
+            updated_at               TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by               INTEGER
         )"#,
         r#"CREATE TABLE IF NOT EXISTS bill_message (
             id           SERIAL PRIMARY KEY,
@@ -959,6 +998,257 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by   INTEGER
         )"#,
+        // ── Billing / transaction tables ──────────────────────────────
+        r#"CREATE TABLE IF NOT EXISTS order_session (
+            id                     SERIAL PRIMARY KEY,
+            code                   BIGSERIAL UNIQUE,
+            order_no               VARCHAR(30) UNIQUE,
+            token_no               VARCHAR(30),
+            table_id               INTEGER REFERENCES restaurant_table(id),
+            table_group_id         INTEGER REFERENCES table_group(id),
+            order_type             VARCHAR(20),
+            customer_id            INTEGER REFERENCES customer_information(id),
+            customer_name          VARCHAR(100),
+            customer_mobile        VARCHAR(20),
+            waiter_id              INTEGER REFERENCES employee_information(id),
+            covers                 INTEGER     NOT NULL DEFAULT 1,
+            session_status         VARCHAR(30) NOT NULL DEFAULT 'OPEN',
+            bill_print_count       INTEGER     NOT NULL DEFAULT 0,
+            opened_at              TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            bill_printed_at        TIMESTAMP,
+            settled_at             TIMESTAMP,
+            total_occupancy_minutes INTEGER    NOT NULL DEFAULT 0,
+            remarks                TEXT,
+            is_active              INTEGER   NOT NULL DEFAULT 1,
+            created_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by             INTEGER,
+            updated_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by             INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS order_item (
+            id                   SERIAL PRIMARY KEY,
+            code                 BIGSERIAL UNIQUE,
+            order_session_id     INTEGER NOT NULL REFERENCES order_session(id) ON DELETE CASCADE,
+            menu_id              INTEGER REFERENCES menu_card(id),
+            item_name            VARCHAR(250) NOT NULL,
+            quantity             NUMERIC(12,3) NOT NULL DEFAULT 1,
+            rate                 NUMERIC(12,2) NOT NULL DEFAULT 0,
+            gross_amount         NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount_percent     NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+            tax_name             VARCHAR(100),
+            tax_percentage       NUMERIC(12,4) NOT NULL DEFAULT 0,
+            tax_amount           NUMERIC(12,2) NOT NULL DEFAULT 0,
+            taxable_amount       NUMERIC(12,2) NOT NULL DEFAULT 0,
+            final_amount         NUMERIC(12,2) NOT NULL DEFAULT 0,
+            food_type_id         INTEGER REFERENCES food_type(id),
+            kitchen_section_id   INTEGER REFERENCES kitchen_section(id),
+            kot_status           VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+            item_status          VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE',
+            kot_id               INTEGER,
+            special_instruction  TEXT,
+            remarks              TEXT,
+            ordered_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            cancelled_at         TIMESTAMP,
+            cancelled_by         INTEGER REFERENCES users(id),
+            is_active            INTEGER   NOT NULL DEFAULT 1,
+            created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by           INTEGER,
+            updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by           INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS order_item_modifier (
+            id             SERIAL PRIMARY KEY,
+            order_item_id  INTEGER NOT NULL REFERENCES order_item(id) ON DELETE CASCADE,
+            modifier_name  VARCHAR(100) NOT NULL,
+            modifier_rate  NUMERIC(12,2) NOT NULL DEFAULT 0,
+            is_active      INTEGER   NOT NULL DEFAULT 1,
+            created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by     INTEGER,
+            updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by     INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS kot_master (
+            id                 SERIAL PRIMARY KEY,
+            code               BIGSERIAL UNIQUE,
+            kot_no             VARCHAR(30) UNIQUE,
+            order_session_id   INTEGER REFERENCES order_session(id),
+            table_id           INTEGER REFERENCES restaurant_table(id),
+            kitchen_section_id INTEGER REFERENCES kitchen_section(id),
+            waiter_id          INTEGER REFERENCES employee_information(id),
+            waiter_name        VARCHAR(100),
+            kot_status         VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+            is_printed         BOOLEAN     NOT NULL DEFAULT FALSE,
+            printed_at         TIMESTAMP,
+            remarks            TEXT,
+            created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by         INTEGER,
+            updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by         INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS kot_item (
+            id             SERIAL PRIMARY KEY,
+            code           BIGSERIAL UNIQUE,
+            kot_id         INTEGER NOT NULL REFERENCES kot_master(id) ON DELETE CASCADE,
+            order_item_id  INTEGER REFERENCES order_item(id),
+            quantity       NUMERIC(12,3) NOT NULL DEFAULT 1,
+            item_status    VARCHAR(20)   NOT NULL DEFAULT 'ACTIVE',
+            is_active      INTEGER   NOT NULL DEFAULT 1,
+            created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by     INTEGER,
+            updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by     INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS bill_master (
+            id                 SERIAL PRIMARY KEY,
+            code               BIGSERIAL UNIQUE,
+            bill_no            VARCHAR(30) UNIQUE,
+            order_session_id   INTEGER REFERENCES order_session(id),
+            table_id           INTEGER REFERENCES restaurant_table(id),
+            customer_id        INTEGER REFERENCES customer_information(id),
+            bill_status        VARCHAR(20)   NOT NULL DEFAULT 'DRAFT',
+            food_amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
+            liquor_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+            gross_amount       NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount_amount    NUMERIC(12,2) NOT NULL DEFAULT 0,
+            taxable_amount     NUMERIC(12,2) NOT NULL DEFAULT 0,
+            tax_amount         NUMERIC(12,2) NOT NULL DEFAULT 0,
+            round_off          NUMERIC(12,2) NOT NULL DEFAULT 0,
+            net_amount         NUMERIC(12,2) NOT NULL DEFAULT 0,
+            paid_amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
+            due_amount         NUMERIC(12,2) NOT NULL DEFAULT 0,
+            write_off_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+            bill_print_count   INTEGER       NOT NULL DEFAULT 0,
+            printed_at         TIMESTAMP,
+            settled_at         TIMESTAMP,
+            remarks            TEXT,
+            is_active          INTEGER   NOT NULL DEFAULT 1,
+            created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by         INTEGER,
+            updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by         INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS bill_item (
+            id                 SERIAL PRIMARY KEY,
+            code               BIGSERIAL UNIQUE,
+            bill_id            INTEGER NOT NULL REFERENCES bill_master(id) ON DELETE CASCADE,
+            order_item_id      INTEGER REFERENCES order_item(id),
+            menu_id            INTEGER REFERENCES menu_card(id),
+            item_name          VARCHAR(250) NOT NULL,
+            quantity           NUMERIC(12,3) NOT NULL DEFAULT 0,
+            rate               NUMERIC(12,2) NOT NULL DEFAULT 0,
+            gross_amount       NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount_amount    NUMERIC(12,2) NOT NULL DEFAULT 0,
+            tax_amount         NUMERIC(12,2) NOT NULL DEFAULT 0,
+            final_amount       NUMERIC(12,2) NOT NULL DEFAULT 0,
+            kitchen_section_id INTEGER REFERENCES kitchen_section(id),
+            is_active          INTEGER   NOT NULL DEFAULT 1,
+            created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by         INTEGER,
+            updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by         INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS bill_tax_detail (
+            id              SERIAL PRIMARY KEY,
+            code            BIGSERIAL UNIQUE,
+            bill_id         INTEGER NOT NULL REFERENCES bill_master(id) ON DELETE CASCADE,
+            tax_id          INTEGER REFERENCES tax_master(id),
+            tax_name        VARCHAR(100),
+            tax_percentage  NUMERIC(12,4) NOT NULL DEFAULT 0,
+            taxable_amount  NUMERIC(12,2) NOT NULL DEFAULT 0,
+            tax_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+            is_active       INTEGER   NOT NULL DEFAULT 1,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS payment_master (
+            id              SERIAL PRIMARY KEY,
+            code            BIGSERIAL UNIQUE,
+            bill_id         INTEGER NOT NULL REFERENCES bill_master(id),
+            payment_type    VARCHAR(20)   NOT NULL,
+            payment_amount  NUMERIC(12,2) NOT NULL DEFAULT 0,
+            reference_no    VARCHAR(100),
+            remarks         TEXT,
+            is_active       INTEGER   NOT NULL DEFAULT 1,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS payment_part_detail (
+            id            SERIAL PRIMARY KEY,
+            code          BIGSERIAL UNIQUE,
+            payment_id    INTEGER NOT NULL REFERENCES payment_master(id) ON DELETE CASCADE,
+            payment_mode  VARCHAR(20)   NOT NULL,
+            amount        NUMERIC(12,2) NOT NULL DEFAULT 0,
+            reference_no  VARCHAR(100),
+            is_active     INTEGER   NOT NULL DEFAULT 1,
+            created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by    INTEGER,
+            updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by    INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS settlement_master (
+            id                  SERIAL PRIMARY KEY,
+            code                BIGSERIAL UNIQUE,
+            bill_id             INTEGER NOT NULL REFERENCES bill_master(id),
+            settlement_type     VARCHAR(20)   NOT NULL,
+            settled_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+            pending_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+            write_off_amount    NUMERIC(12,2) NOT NULL DEFAULT 0,
+            settlement_remarks  TEXT,
+            settled_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_active           INTEGER   NOT NULL DEFAULT 1,
+            created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by          INTEGER,
+            updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by          INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS customer_due_ledger (
+            id              SERIAL PRIMARY KEY,
+            code            BIGSERIAL UNIQUE,
+            customer_id     INTEGER REFERENCES customer_information(id),
+            bill_id         INTEGER REFERENCES bill_master(id),
+            total_amount    NUMERIC(12,2) NOT NULL DEFAULT 0,
+            paid_amount     NUMERIC(12,2) NOT NULL DEFAULT 0,
+            pending_amount  NUMERIC(12,2) NOT NULL DEFAULT 0,
+            due_status      VARCHAR(20)   NOT NULL DEFAULT 'PENDING',
+            due_date        TIMESTAMP,
+            remarks         TEXT,
+            is_active       INTEGER   NOT NULL DEFAULT 1,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS order_status_history (
+            id               SERIAL PRIMARY KEY,
+            code             BIGSERIAL UNIQUE,
+            order_session_id INTEGER REFERENCES order_session(id),
+            status_name      VARCHAR(50) NOT NULL,
+            remarks          TEXT,
+            is_active        INTEGER   NOT NULL DEFAULT 1,
+            created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by       INTEGER,
+            updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by       INTEGER
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS table_session_history (
+            id               SERIAL PRIMARY KEY,
+            code             BIGSERIAL UNIQUE,
+            table_id         INTEGER REFERENCES restaurant_table(id),
+            order_session_id INTEGER REFERENCES order_session(id),
+            opened_at        TIMESTAMP,
+            closed_at        TIMESTAMP,
+            total_minutes    INTEGER NOT NULL DEFAULT 0,
+            is_active        INTEGER   NOT NULL DEFAULT 1,
+            created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by       INTEGER,
+            updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by       INTEGER
+        )"#,
     ];
 
     for stmt in stmts {
@@ -1070,6 +1360,15 @@ async fn seed_module_permissions(pool: &PgPool) -> Result<(), String> {
         ("cal-incentive:update", "update", "Edit existing cal incentive entry"),
         ("cal-incentive:delete", "delete", "Delete cal incentive entry"),
         ("cal-incentive:print",  "print",  "Print cal incentive report"),
+        // Billing module
+        ("billing:view",         "view",   "Access the billing/order entry screen"),
+        ("billing:new-order",    "add",    "Open a new order session"),
+        ("billing:add-item",     "add",    "Add items to an order"),
+        ("billing:cancel-item",  "update", "Cancel an ordered item"),
+        ("billing:generate-kot", "update", "Generate Kitchen Order Ticket"),
+        ("billing:generate-bill","print",  "Generate and print the bill"),
+        ("billing:settle",       "update", "Record payment and settle a bill"),
+        ("billing:cancel-order", "delete", "Cancel an entire order session"),
     ];
 
     let lodge: &[(&str, &str, &str)] = &[
@@ -1479,6 +1778,29 @@ pub fn run() {
             update_cal_incentive,
             toggle_cal_incentive_active,
             delete_cal_incentive,
+            // Billing — lookup data
+            get_tables_for_billing,
+            get_menu_for_billing,
+            get_active_sessions,
+            get_floor_view,
+            // Billing — session lifecycle
+            open_order_session,
+            get_order_session,
+            get_session_detail,
+            update_session_info,
+            cancel_order_session,
+            // Billing — order items
+            get_order_items,
+            add_order_item,
+            update_order_item_qty,
+            cancel_order_item,
+            // Billing — KOT
+            generate_kot,
+            get_kot_list,
+            // Billing — bill & payment
+            get_bill_summary,
+            generate_bill,
+            settle_bill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

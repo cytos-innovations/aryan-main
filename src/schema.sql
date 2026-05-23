@@ -196,6 +196,9 @@ CREATE TABLE restaurant_table (
     applicable_rate INTEGER DEFAULT 1 CHECK(applicable_rate IN (1, 2, 3, 4, 5)),
 
     table_group_id INTEGER REFERENCES table_group(id),
+    current_status VARCHAR(30) DEFAULT 'AVAILABLE',
+    current_order_session_id INTEGER ,
+    occupied_since TIMESTAMP;
 
     -- Standard Audit & Status Columns
     is_active INTEGER DEFAULT 1,
@@ -688,3 +691,346 @@ CREATE TABLE units (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_by INTEGER REFERENCES users(id)
 );
+
+
+-- billing screen tables 
+-- ORDER SESSION MASTER
+-- Tracks active table/order session
+
+
+CREATE TABLE order_session (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,         -- Unique internal code
+    order_no VARCHAR(30) UNIQUE,   -- Visible order number
+    token_no VARCHAR(30),          -- Token number for pickup/delivery
+    table_id INTEGER REFERENCES restaurant_table(id),  -- Linked restaurant table
+    table_group_id INTEGER REFERENCES table_group(id), -- Table group snapshot
+    order_type VARCHAR(20),  -- DINE_IN / DELIVERY / PICKUP
+    customer_id INTEGER REFERENCES customer_information(id), -- Linked customer
+    customer_name VARCHAR(100), -- Customer snapshot
+    customer_mobile VARCHAR(20),
+    waiter_id INTEGER REFERENCES employee_information(id), -- Assigned waiter
+    covers INTEGER DEFAULT 1,     -- Number of guests
+    session_status VARCHAR(30) DEFAULT 'OPEN', -- OPEN / KOT_SENT / BILL_PRINTED / SETTLED
+    bill_print_count INTEGER DEFAULT 0, -- Number of times bill printed
+    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Session timings
+    bill_printed_at TIMESTAMP,
+    settled_at TIMESTAMP,
+    total_occupancy_minutes INTEGER DEFAULT 0,  -- Occupancy calculation
+    remarks TEXT,                               -- General remarks
+
+    -- Standard Audit Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- ORDER ITEMS
+-- Stores all live order items for a session
+
+CREATE TABLE order_item (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    order_session_id INTEGER REFERENCES order_session(id) ON DELETE CASCADE, -- Linked order session
+    menu_id INTEGER REFERENCES MenuCard(id), -- Linked menu item
+    item_name VARCHAR(250), -- Item snapshot
+    quantity NUMERIC(12,3) DEFAULT 1, -- Quantity
+    rate NUMERIC(12,2) DEFAULT 0, -- Item rate snapshot
+    gross_amount NUMERIC(12,2) DEFAULT 0, -- Gross amount before tax/discount
+    discount_percent NUMERIC(12,2) DEFAULT 0, -- Discount snapshot
+    discount_amount NUMERIC(12,2) DEFAULT 0,
+    tax_name VARCHAR(100), -- Tax snapshot
+    tax_percentage NUMERIC(12,4),
+    tax_amount NUMERIC(12,2) DEFAULT 0,
+    taxable_amount NUMERIC(12,2) DEFAULT 0, -- Final taxable amount
+    final_amount NUMERIC(12,2) DEFAULT 0, -- Final line amount
+    food_type_id INTEGER REFERENCES food_type(id), -- Food type reference
+    kitchen_section_id INTEGER REFERENCES kitchen_section(id), -- Kitchen routing
+    kot_status VARCHAR(20) DEFAULT 'PENDING', -- PENDING / SENT / PREPARING / READY / SERVED
+    item_status VARCHAR(20) DEFAULT 'ACTIVE', -- ACTIVE / CANCELLED / VOID
+    kot_id INTEGER, -- Last KOT reference
+    special_instruction TEXT reference kot_massege (id), --Kitchen instruction
+    remarks TEXT, -- General remarks
+
+    ordered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Item ordered time
+    cancelled_at TIMESTAMP,  -- Cancellation tracking
+    cancelled_by INTEGER REFERENCES users(id),
+
+    -- Standard Audit Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- ITEM MODIFIERS
+-- Extra customization for order items
+
+CREATE TABLE order_item_modifier (
+    id SERIAL PRIMARY KEY,
+    order_item_id INTEGER REFERENCES order_item(id) ON DELETE CASCADE, -- Linked order item
+    modifier_name VARCHAR(100), -- Modifier name
+    modifier_rate NUMERIC(12,2) DEFAULT 0, -- Extra modifier charge
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- KOT MASTER
+-- Kitchen Order Ticket Header
+
+CREATE TABLE kot_master (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    kot_no VARCHAR(30) UNIQUE,  -- Visible KOT number
+    order_session_id INTEGER REFERENCES order_session(id), -- Linked order session
+    table_id INTEGER REFERENCES restaurant_table(id), -- Linked order session
+    kitchen_section_id INTEGER REFERENCES kitchen_section(id), -- Kitchen section
+    waiter_id INTEGER REFERENCES employee_information(id), -- Waiter snapshot
+    waiter_name VARCHAR(100),
+    kot_status VARCHAR(20) DEFAULT 'PENDING', -- KOT STATUS
+    is_printed BOOLEAN DEFAULT FALSE, -- Print tracking
+    printed_at TIMESTAMP,
+    remarks TEXT,
+
+    -- Standard Audit Columns
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- KOT ITEMS
+-- Items included in KOT
+
+
+CREATE TABLE kot_item (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    kot_id INTEGER REFERENCES kot_master(id) ON DELETE CASCADE, -- Linked KOT
+    order_item_id INTEGER REFERENCES order_item(id),  -- Linked order item
+    quantity NUMERIC(12,3), -- Item quantity snapshot
+    item_status VARCHAR(20) DEFAULT 'ACTIVE', -- ACTIVE / CANCELLED
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- BILL MASTER
+-- Final customer bill
+
+
+CREATE TABLE bill_master (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    bill_no VARCHAR(30) UNIQUE, -- Visible bill number
+    order_session_id INTEGER REFERENCES order_session(id), -- Linked order session
+    table_id INTEGER REFERENCES restaurant_table(id), -- Table reference
+    customer_id INTEGER REFERENCES customer_information(id),  -- Customer reference
+    bill_status VARCHAR(20) DEFAULT 'DRAFT',  -- DRAFT / PRINTED / PAID / DUE
+    food_amount NUMERIC(12,2) DEFAULT 0,  -- Food total
+    liquor_amount NUMERIC(12,2) DEFAULT 0, -- Liquor total
+    gross_amount NUMERIC(12,2) DEFAULT 0, -- Gross bill amount
+    discount_amount NUMERIC(12,2) DEFAULT 0, -- Discount total
+    taxable_amount NUMERIC(12,2) DEFAULT 0, -- Taxable amount
+    tax_amount NUMERIC(12,2) DEFAULT 0, -- Total tax amount
+    round_off NUMERIC(12,2) DEFAULT 0, -- Rounding adjustment
+    net_amount NUMERIC(12,2) DEFAULT 0, -- Final payable amount
+    paid_amount NUMERIC(12,2) DEFAULT 0, -- Paid amount
+    due_amount NUMERIC(12,2) DEFAULT 0,  -- Remaining due
+    write_off_amount NUMERIC(12,2) DEFAULT 0,  -- Write off amount
+    printed_at TIMESTAMP,  -- Print timestamp
+    settled_at TIMESTAMP, -- Settlement timestamp
+    remarks TEXT,
+
+    -- Standard Audit Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- BILL ITEMS
+-- Permanent bill item snapshot
+
+
+CREATE TABLE bill_item (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    bill_id INTEGER REFERENCES bill_master(id) ON DELETE CASCADE, -- Linked bill
+    order_item_id INTEGER REFERENCES order_item(id), -- Original order item
+    menu_id INTEGER REFERENCES MenuCard(id), -- Menu item
+    item_name VARCHAR(250), -- Item snapshot
+    quantity NUMERIC(12,3),
+    rate NUMERIC(12,2),
+    gross_amount NUMERIC(12,2),
+    discount_amount NUMERIC(12,2),
+    tax_amount NUMERIC(12,2),
+    final_amount NUMERIC(12,2),
+    kitchen_section_id INTEGER REFERENCES kitchen_section(id),
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- BILL TAX DETAILS
+-- Tax breakup for bill
+
+CREATE TABLE bill_tax_detail (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    bill_id INTEGER REFERENCES bill_master(id) ON DELETE CASCADE, -- Linked bill
+    tax_id INTEGER REFERENCES tax_master(id), -- Tax reference
+    tax_name VARCHAR(100),  -- Tax snapshot
+    tax_percentage NUMERIC(12,4),
+    taxable_amount NUMERIC(12,2),
+    tax_amount NUMERIC(12,2),
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- PAYMENT MASTER
+-- Main payment entry
+CREATE TABLE payment_master (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    bill_id INTEGER REFERENCES bill_master(id),  -- Linked bill
+    payment_type VARCHAR(20),  -- CASH / CARD / UPI / DUE / Part 
+    payment_amount NUMERIC(12,2), -- Main payment amount
+    reference_no VARCHAR(100), -- UPI/Card reference
+
+    remarks TEXT,
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- PAYMENT PART DETAILS
+-- Part payment modes
+
+
+CREATE TABLE payment_Part_detail (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    payment_id INTEGER REFERENCES payment_master(id) ON DELETE CASCADE, -- Linked payment
+    payment_mode VARCHAR(20),  -- CASH / UPI / CARD
+    amount NUMERIC(12,2),
+    reference_no VARCHAR(100),
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- SETTLEMENT MASTER
+-- Final bill settlement
+
+CREATE TABLE settlement_master (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    bill_id INTEGER REFERENCES bill_master(id), -- Linked bill
+    settlement_type VARCHAR(20), -- FULL / PARTIAL / DUE / WRITE_OFF
+    settled_amount NUMERIC(12,2),  -- Actual settled amount
+    pending_amount NUMERIC(12,2), -- Pending due
+    write_off_amount NUMERIC(12,2), -- Write off
+    settlement_remarks TEXT,
+    settled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+   -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- CUSTOMER DUE LEDGER
+-- Tracks pending customer dues
+
+CREATE TABLE customer_due_ledger (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,  
+    customer_id INTEGER REFERENCES customer_information(id), -- Customer reference
+    bill_id INTEGER REFERENCES bill_master(id),    -- Bill reference
+    total_amount NUMERIC(12,2),
+    paid_amount NUMERIC(12,2),
+    pending_amount NUMERIC(12,2),  
+    due_status VARCHAR(20) DEFAULT 'PENDING', -- PENDING / CLEARED
+    due_date TIMESTAMP,
+    remarks TEXT,
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- ORDER STATUS HISTORY
+-- Audit trail for order actions
+
+
+CREATE TABLE order_status_history (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,  
+    order_session_id INTEGER REFERENCES order_session(id), -- Linked order session 
+    status_name VARCHAR(50), --ITEM_ADDED, KOT_GENERATED, BILL_PRINTED, PAYMENT_DONE, ORDER_CANCELLED
+    remarks TEXT,
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- TABLE SESSION HISTORY
+-- Tracks table occupancy analytics
+
+CREATE TABLE table_session_history (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    table_id INTEGER REFERENCES restaurant_table(id),   -- Table reference
+    order_session_id INTEGER REFERENCES order_session(id), -- Order session reference
+    opened_at TIMESTAMP,
+    closed_at TIMESTAMP,
+    total_minutes INTEGER,  -- Total occupied minutes
+
+    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+

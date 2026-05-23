@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -43,10 +44,15 @@ const EMPTY = {
 
 export default function RestaurantTable() {
   const queryClient = useQueryClient();
+  const { state: navState } = useLocation();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
+
+  useEffect(() => {
+    if (navState?.openAdd) setDialog({ open: true, mode: "create", data: null });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const query = useQuery({
     queryKey: [...QK, qs],

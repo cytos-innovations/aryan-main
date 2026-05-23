@@ -1,0 +1,214 @@
+import { createContext, useContext, useReducer, useCallback } from "react";
+import { BILLING_VIEW, ORDER_TYPE } from "../constants/billing";
+
+function r2(n) { return Math.round(n * 100) / 100; }
+function calcDraftAmounts(rate, qty, taxPct) {
+  const gross = r2(rate * qty);
+  const tax   = r2(gross * ((taxPct || 0) / 100));
+  return { gross_amount: gross, discount_amount: 0, taxable_amount: gross, tax_amount: tax, final_amount: r2(gross + tax) };
+}
+
+const initialState = {
+  activeSessionId:      null,
+  selectedTableId:      null,
+  selectedTableName:    null,
+  view:                 BILLING_VIEW.TABLE_SELECT,
+
+  selectedMenuCategoryId: null,
+  selectedMenuGroupId:    null,
+
+  paymentEntries: [],
+
+  // Draft mode — holds items before a DB session is created
+  draftItems:          [],
+  draftOrderType:      ORDER_TYPE.DINE_IN,
+  draftCovers:         2,
+  draftApplicableRate: 1,
+};
+
+const BillingContext = createContext(null);
+
+function billingReducer(state, action) {
+  switch (action.type) {
+
+    case "SET_SESSION":
+      return {
+        ...state,
+        activeSessionId:      action.payload.sessionId,
+        selectedTableId:      action.payload.tableId,
+        selectedTableName:    action.payload.tableName,
+        view:                 action.payload.view ?? BILLING_VIEW.ORDER_ENTRY,
+        // Reset draft slate whenever we enter order entry
+        draftItems:          [],
+        draftOrderType:      action.payload.orderType ?? ORDER_TYPE.DINE_IN,
+        draftCovers:         2,
+        draftApplicableRate: action.payload.applicableRate ?? 1,
+      };
+
+    case "SET_VIEW":
+      return { ...state, view: action.payload };
+
+    case "SELECT_MENU_CATEGORY":
+      return { ...state, selectedMenuCategoryId: action.payload, selectedMenuGroupId: null };
+
+    case "SELECT_MENU_GROUP":
+      return { ...state, selectedMenuGroupId: action.payload };
+
+    case "SET_PAYMENT_ENTRIES":
+      return { ...state, paymentEntries: action.payload };
+
+    case "ADD_PAYMENT_ENTRY":
+      return { ...state, paymentEntries: [...state.paymentEntries, action.payload] };
+
+    case "REMOVE_PAYMENT_ENTRY":
+      return { ...state, paymentEntries: state.paymentEntries.filter((_, i) => i !== action.payload) };
+
+    // ── Draft items ───────────────────────────────────────────────
+
+    case "ADD_DRAFT_ITEM": {
+      const { menuItem, rate } = action.payload;
+      const existing = state.draftItems.find((i) => i.menu_id === menuItem.id);
+      if (existing) {
+        const newQty = existing.quantity + 1;
+        const amounts = calcDraftAmounts(existing.rate, newQty, existing.tax_percentage);
+        return {
+          ...state,
+          draftItems: state.draftItems.map((i) =>
+            i.menu_id === menuItem.id ? { ...i, quantity: newQty, ...amounts } : i,
+          ),
+        };
+      }
+      const amounts = calcDraftAmounts(rate, 1, menuItem.tax_percentage ?? 0);
+      return {
+        ...state,
+        draftItems: [...state.draftItems, {
+          id:                  -(Date.now()),
+          menu_id:             menuItem.id,
+          item_name:           menuItem.item_name,
+          quantity:            1,
+          rate,
+          discount_percent:    0,
+          tax_name:            menuItem.tax_name ?? null,
+          tax_percentage:      menuItem.tax_percentage ?? 0,
+          food_type:           menuItem.food_type ?? null,
+          food_type_id:        menuItem.food_type_id ?? null,
+          is_liquor:           menuItem.is_liquor ?? false,
+          special_instruction: null,
+          kot_status:          "PENDING",
+          item_status:         "ACTIVE",
+          ordered_at:          null,
+          ...amounts,
+        }],
+      };
+    }
+
+    case "UPDATE_DRAFT_QTY": {
+      const { menuId, qty } = action.payload;
+      if (qty <= 0) {
+        return { ...state, draftItems: state.draftItems.filter((i) => i.menu_id !== menuId) };
+      }
+      return {
+        ...state,
+        draftItems: state.draftItems.map((i) => {
+          if (i.menu_id !== menuId) return i;
+          return { ...i, quantity: qty, ...calcDraftAmounts(i.rate, qty, i.tax_percentage) };
+        }),
+      };
+    }
+
+    case "REMOVE_DRAFT_ITEM":
+      return { ...state, draftItems: state.draftItems.filter((i) => i.menu_id !== action.payload) };
+
+    case "SET_DRAFT_CONFIG":
+      return {
+        ...state,
+        ...(action.payload.orderType !== undefined ? { draftOrderType: action.payload.orderType } : {}),
+        ...(action.payload.covers   !== undefined ? { draftCovers:    action.payload.covers    } : {}),
+      };
+
+    case "CLEAR_SESSION":
+      return { ...initialState };
+
+    default:
+      return state;
+  }
+}
+
+export function BillingProvider({ children }) {
+  const [state, dispatch] = useReducer(billingReducer, initialState);
+
+  // sessionId=null means draft mode (no DB session yet)
+  const setSession = useCallback((sessionId, tableId, tableName, view, applicableRate, orderType) =>
+    dispatch({ type: "SET_SESSION", payload: { sessionId, tableId, tableName, view, applicableRate, orderType } }),
+  []);
+
+  const setView = useCallback((view) =>
+    dispatch({ type: "SET_VIEW", payload: view }),
+  []);
+
+  const selectMenuCategory = useCallback((id) =>
+    dispatch({ type: "SELECT_MENU_CATEGORY", payload: id }),
+  []);
+
+  const selectMenuGroup = useCallback((id) =>
+    dispatch({ type: "SELECT_MENU_GROUP", payload: id }),
+  []);
+
+  const addPaymentEntry = useCallback((entry) =>
+    dispatch({ type: "ADD_PAYMENT_ENTRY", payload: entry }),
+  []);
+
+  const removePaymentEntry = useCallback((index) =>
+    dispatch({ type: "REMOVE_PAYMENT_ENTRY", payload: index }),
+  []);
+
+  const setPaymentEntries = useCallback((entries) =>
+    dispatch({ type: "SET_PAYMENT_ENTRIES", payload: entries }),
+  []);
+
+  const clearSession = useCallback(() =>
+    dispatch({ type: "CLEAR_SESSION" }),
+  []);
+
+  const addDraftItem = useCallback((menuItem, rate) =>
+    dispatch({ type: "ADD_DRAFT_ITEM", payload: { menuItem, rate } }),
+  []);
+
+  const updateDraftQty = useCallback((menuId, qty) =>
+    dispatch({ type: "UPDATE_DRAFT_QTY", payload: { menuId, qty } }),
+  []);
+
+  const removeDraftItem = useCallback((menuId) =>
+    dispatch({ type: "REMOVE_DRAFT_ITEM", payload: menuId }),
+  []);
+
+  const setDraftConfig = useCallback((cfg) =>
+    dispatch({ type: "SET_DRAFT_CONFIG", payload: cfg }),
+  []);
+
+  return (
+    <BillingContext.Provider value={{
+      ...state,
+      setSession,
+      setView,
+      selectMenuCategory,
+      selectMenuGroup,
+      addPaymentEntry,
+      removePaymentEntry,
+      setPaymentEntries,
+      clearSession,
+      addDraftItem,
+      updateDraftQty,
+      removeDraftItem,
+      setDraftConfig,
+    }}>
+      {children}
+    </BillingContext.Provider>
+  );
+}
+
+export function useBillingContext() {
+  const ctx = useContext(BillingContext);
+  if (!ctx) throw new Error("useBillingContext must be used inside <BillingProvider>");
+  return ctx;
+}
