@@ -1034,3 +1034,35 @@ CREATE TABLE table_session_history (
     updated_by INTEGER REFERENCES users(id)
 );
 
+-- TABLE RESERVATION MASTER
+-- Handles future dining reservations
+
+CREATE TABLE reservation_master (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    reservation_no VARCHAR(30) UNIQUE, -- Visible reservation number
+    table_id INTEGER REFERENCES restaurant_table(id), -- Reserved table
+    customer_id INTEGER REFERENCES customer_information(id), -- Customer reference
+
+    customer_name VARCHAR(100), -- Customer snapshot
+    customer_mobile VARCHAR(20),
+
+    guest_count INTEGER DEFAULT 1, -- Number of guests
+
+    reservation_date DATE, -- Reservation date/time
+    reservation_time TIME,
+
+    reservation_status VARCHAR(20) DEFAULT 'RESERVED', -- Reservation status (RESERVED / ARRIVED / COMPLETED / CANCELLED / NO_SHOW)
+    notes TEXT, -- Special customer notes
+    arrived_at TIMESTAMP, -- Arrival tracking
+    expires_at TIMESTAMP, -- Expiry handling
+
+    order_session_id INTEGER REFERENCES order_session(id), -- after sends order to kot start sesstion
+
+    -- Audit fields
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
