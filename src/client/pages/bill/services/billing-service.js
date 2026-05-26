@@ -28,13 +28,15 @@ export const billingService = {
 
   // ── Session lifecycle ────────────────────────────────────────
 
-  openOrderSession: ({ tableId, orderType, covers, customerId, waiterId }) =>
+  openOrderSession: ({ tableId, orderType, covers, customerId, waiterId, reservationId, customerName }) =>
     invoke("open_order_session", {
       tableId,
       orderType,
-      covers:     covers     ?? 1,
-      customerId: customerId ?? null,
-      waiterId:   waiterId   ?? null,
+      covers:         covers         ?? 1,
+      customerId:     customerId     ?? null,
+      waiterId:       waiterId       ?? null,
+      reservationId:  reservationId  ?? null,
+      customerName:   customerName   ?? null,
     }),
 
   getOrderSession: (sessionId) =>

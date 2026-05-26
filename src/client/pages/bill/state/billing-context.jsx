@@ -24,6 +24,7 @@ const initialState = {
   draftOrderType:      ORDER_TYPE.DINE_IN,
   draftCovers:         2,
   draftApplicableRate: 1,
+  draftCustomerName:   null,  // pre-filled from reservation when guest has arrived
 };
 
 const BillingContext = createContext(null);
@@ -40,9 +41,10 @@ function billingReducer(state, action) {
         view:                 action.payload.view ?? BILLING_VIEW.ORDER_ENTRY,
         // Reset draft slate whenever we enter order entry
         draftItems:          [],
-        draftOrderType:      action.payload.orderType ?? ORDER_TYPE.DINE_IN,
-        draftCovers:         2,
-        draftApplicableRate: action.payload.applicableRate ?? 1,
+        draftOrderType:      action.payload.orderType       ?? ORDER_TYPE.DINE_IN,
+        draftCovers:         action.payload.draftCovers     ?? 2,
+        draftApplicableRate: action.payload.applicableRate  ?? 1,
+        draftCustomerName:   action.payload.draftCustomerName ?? null,
       };
 
     case "SET_VIEW":
@@ -137,10 +139,13 @@ function billingReducer(state, action) {
 export function BillingProvider({ children }) {
   const [state, dispatch] = useReducer(billingReducer, initialState);
 
-  // sessionId=null means draft mode (no DB session yet)
-  const setSession = useCallback((sessionId, tableId, tableName, view, applicableRate, orderType) =>
-    dispatch({ type: "SET_SESSION", payload: { sessionId, tableId, tableName, view, applicableRate, orderType } }),
-  []);
+  // sessionId=null means draft mode (no DB session yet).
+  // opts: { draftCovers, draftCustomerName } — optional reservation pre-fill
+  const setSession = useCallback(
+    (sessionId, tableId, tableName, view, applicableRate, orderType, opts = {}) =>
+      dispatch({ type: "SET_SESSION", payload: { sessionId, tableId, tableName, view, applicableRate, orderType, ...opts } }),
+    [],
+  );
 
   const setView = useCallback((view) =>
     dispatch({ type: "SET_VIEW", payload: view }),
@@ -188,7 +193,7 @@ export function BillingProvider({ children }) {
 
   return (
     <BillingContext.Provider value={{
-      ...state,
+      ...state,            // includes draftCustomerName from state
       setSession,
       setView,
       selectMenuCategory,

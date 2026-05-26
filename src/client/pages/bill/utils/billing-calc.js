@@ -129,21 +129,23 @@ export function minsUntilReservation(timeStr, nowMs) {
 
 /**
  * Compute reservation warning phase for a floor-view table row.
- * Only applies to RESERVED (not yet ARRIVED) reservations for today.
  *
  * Returns:
- *   null      – no active reservation overlay
- *   "NORMAL"  – reservation > 30 min away: no special behavior
- *   "WARNING" – 10–30 min away: show warning toast on click, no visual change
- *   "NEAR"    – 0–10 min away: blue visual, block KOT / session creation
- *   "PAST"    – reservation time has passed: restrictions fully cleared
+ *   null       – no active reservation overlay
+ *   "ARRIVED"  – guest marked arrived, KOT allowed, reservation_id must be attached to session
+ *   "NEAR"     – 0–10 min before reservation time: blue visual, KOT blocked
+ *   "WARNING"  – 10–30 min before: warning toast on click, no visual change
+ *   "NORMAL"   – > 30 min away: no special behavior
+ *   "PAST"     – reservation time has passed without arrival: restrictions cleared
  */
 export function getReservationPhase(table, nowMs) {
-  if (
-    table.reservation_id == null ||
-    table.reservation_status !== "RESERVED" ||
-    !table.reservation_time
-  ) return null;
+  if (table.reservation_id == null) return null;
+
+  // Guest has been marked as arrived — show blue, allow KOT with reservation attachment
+  if (table.reservation_status === "ARRIVED") return "ARRIVED";
+
+  // Only apply timing logic for RESERVED status
+  if (table.reservation_status !== "RESERVED" || !table.reservation_time) return null;
 
   const mins = minsUntilReservation(table.reservation_time, nowMs);
   if (mins === null) return null;

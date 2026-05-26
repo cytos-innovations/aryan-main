@@ -286,6 +286,7 @@ export default function OrderEntryView() {
     draftOrderType,
     draftCovers,
     draftApplicableRate,
+    draftCustomerName,
     addDraftItem,
     updateDraftQty,
     removeDraftItem,
@@ -380,14 +381,23 @@ export default function OrderEntryView() {
       toast.error("This table has an upcoming reservation. KOT cannot be created before reservation time.");
       return;
     }
+
+    // Look up the table's reservation — attach only when guest has been marked ARRIVED
+    const tableData      = (floorQuery.data ?? []).find((t) => t.id === selectedTableId);
+    const resPhase       = tableData ? getReservationPhase(tableData, now) : null;
+    const reservationId  = resPhase === "ARRIVED" ? (tableData?.reservation_id ?? null)   : null;
+    const reservWaiterId = resPhase === "ARRIVED" ? (tableData?.reservation_preferred_waiter ?? null) : null;
+
     setIsKotting(true);
     try {
       const sessionId = await billingService.openOrderSession({
-        tableId:    selectedTableId ?? null,
-        orderType:  draftOrderType,
-        covers:     draftCovers,
-        customerId: null,
-        waiterId:   null,
+        tableId:       selectedTableId ?? null,
+        orderType:     draftOrderType,
+        covers:        draftCovers,
+        customerId:    null,
+        waiterId:      reservWaiterId,
+        reservationId,
+        customerName:  draftCustomerName ?? null,
       });
 
       // Add all draft items in parallel

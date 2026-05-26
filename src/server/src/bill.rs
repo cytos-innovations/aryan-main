@@ -151,12 +151,13 @@ pub struct FloorTableRow {
     pub running_total:            f64,
     pub bill_status:              Option<String>,
     // Reservation overlay (null when no active reservation today)
-    pub reservation_id:           Option<i32>,
-    pub reservation_no:           Option<String>,
-    pub reservation_time:         Option<String>,
-    pub reservation_customer:     Option<String>,
-    pub reservation_guest_count:  Option<i32>,
-    pub reservation_status:       Option<String>,
+    pub reservation_id:               Option<i32>,
+    pub reservation_no:               Option<String>,
+    pub reservation_time:             Option<String>,
+    pub reservation_customer:         Option<String>,
+    pub reservation_guest_count:      Option<i32>,
+    pub reservation_status:           Option<String>,
+    pub reservation_preferred_waiter: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -391,7 +392,8 @@ pub async fn get_floor_view(
                 res.reservation_time,
                 res.reservation_customer,
                 res.reservation_guest_count,
-                res.reservation_status
+                res.reservation_status,
+                res.reservation_preferred_waiter
          FROM   restaurant_table rt
          LEFT JOIN table_group tg ON tg.id = rt.table_group_id
          LEFT JOIN order_session os
@@ -413,7 +415,8 @@ pub async fn get_floor_view(
                       rm.reservation_time::text  AS reservation_time,
                       rm.customer_name           AS reservation_customer,
                       rm.guest_count             AS reservation_guest_count,
-                      rm.reservation_status
+                      rm.reservation_status,
+                      rm.preferred_waiter_id     AS reservation_preferred_waiter
                FROM   reservation_master rm
                WHERE  rm.table_id           = rt.id
                  AND  rm.reservation_date   = CURRENT_DATE
@@ -448,12 +451,13 @@ pub async fn get_floor_view(
         waiter_name:              r.try_get("waiter_name").ok().flatten(),
         running_total:            r.try_get::<f64, _>("running_total").unwrap_or(0.0),
         bill_status:              r.try_get("bill_status").ok().flatten(),
-        reservation_id:           r.try_get("reservation_id").ok().flatten(),
-        reservation_no:           r.try_get("reservation_no").ok().flatten(),
-        reservation_time:         r.try_get("reservation_time").ok().flatten(),
-        reservation_customer:     r.try_get("reservation_customer").ok().flatten(),
-        reservation_guest_count:  r.try_get("reservation_guest_count").ok().flatten(),
-        reservation_status:       r.try_get("reservation_status").ok().flatten(),
+        reservation_id:               r.try_get("reservation_id").ok().flatten(),
+        reservation_no:               r.try_get("reservation_no").ok().flatten(),
+        reservation_time:             r.try_get("reservation_time").ok().flatten(),
+        reservation_customer:         r.try_get("reservation_customer").ok().flatten(),
+        reservation_guest_count:      r.try_get("reservation_guest_count").ok().flatten(),
+        reservation_status:           r.try_get("reservation_status").ok().flatten(),
+        reservation_preferred_waiter: r.try_get("reservation_preferred_waiter").ok().flatten(),
     }).collect())
 }
 
@@ -461,13 +465,15 @@ pub async fn get_floor_view(
 
 #[tauri::command]
 pub async fn open_order_session(
-    app:         tauri::AppHandle,
-    state:       tauri::State<'_, AppState>,
-    table_id:    Option<i32>,
-    order_type:  String,
-    covers:      i32,
-    customer_id: Option<i32>,
-    waiter_id:   Option<i32>,
+    app:            tauri::AppHandle,
+    state:          tauri::State<'_, AppState>,
+    table_id:       Option<i32>,
+    order_type:     String,
+    covers:         i32,
+    customer_id:    Option<i32>,
+    waiter_id:      Option<i32>,
+    reservation_id: Option<i32>,
+    customer_name:  Option<String>,
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
@@ -514,8 +520,8 @@ pub async fn open_order_session(
 
     let session_id: i32 = sqlx::query_scalar(
         "INSERT INTO order_session
-            (order_type, table_id, table_group_id, covers, customer_id, waiter_id, session_status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'OPEN')
+            (order_type, table_id, table_group_id, covers, customer_id, customer_name, waiter_id, reservation_id, session_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'OPEN')
          RETURNING id",
     )
     .bind(&order_type)
@@ -523,7 +529,9 @@ pub async fn open_order_session(
     .bind(table_group_id)
     .bind(covers)
     .bind(customer_id)
+    .bind(&customer_name)
     .bind(waiter_id)
+    .bind(reservation_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -552,6 +560,25 @@ pub async fn open_order_session(
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to mark table occupied: {e}"))?;
+    }
+
+    // Link reservation → session: record session id on the reservation and
+    // ensure status is ARRIVED (idempotent — stays ARRIVED if already set).
+    if let Some(res_id) = reservation_id {
+        sqlx::query(
+            "UPDATE reservation_master
+             SET    order_session_id  = $1,
+                    reservation_status = CASE
+                        WHEN reservation_status = 'RESERVED' THEN 'ARRIVED'
+                        ELSE reservation_status
+                    END
+             WHERE  id = $2 AND is_active = 1",
+        )
+        .bind(session_id)
+        .bind(res_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to link reservation to session: {e}"))?;
     }
 
     tx.commit()

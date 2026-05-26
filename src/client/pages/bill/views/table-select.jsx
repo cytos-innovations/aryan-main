@@ -44,7 +44,7 @@ function getTableStatus(table, nowMs) {
 
   // Available/Reserved: override with reservation timing phase
   const phase = getReservationPhase(table, nowMs);
-  if (phase === "NEAR")    return "NEAR_RESERVATION"; // blue, clickable, KOT blocked
+  if (phase === "NEAR" || phase === "ARRIVED") return "NEAR_RESERVATION"; // blue, clickable
   if (phase === "NORMAL" || phase === "WARNING" || phase === "PAST") return "AVAILABLE";
 
   // No timed reservation data — fall back to raw DB status
@@ -169,9 +169,9 @@ function TableCard({ table, onClick, now }) {
         </div>
       </div>
 
-      {/* Status text */}
+      {/* Status text — differentiate NEAR vs ARRIVED for the blue state */}
       <span className={`text-[11px] font-medium mt-1 ${statusLabel.cls}`}>
-        {statusLabel.text}
+        {isNear && phase === "ARRIVED" ? "Guest Arrived" : statusLabel.text}
       </span>
 
       {/* Occupied details */}
@@ -207,7 +207,7 @@ function TableCard({ table, onClick, now }) {
         </div>
       )}
 
-      {/* Near-reservation overlay details */}
+      {/* Near-reservation overlay details (both NEAR and ARRIVED phases) */}
       {isNear && (
         <div className="mt-2.5 space-y-1 border-t border-blue-200/60 dark:border-blue-800/40 pt-2">
           {table.reservation_customer && (
@@ -217,11 +217,16 @@ function TableCard({ table, onClick, now }) {
             </div>
           )}
           <div className="flex items-center justify-between gap-2 text-[11px] text-blue-600/70 dark:text-blue-400/70">
-            {table.reservation_time && (
-              <div className="flex items-center gap-1">
-                <HugeiconsIcon icon={Clock01Icon} size={11} strokeWidth={2} />
-                <span>{fmtResTime(table.reservation_time)}</span>
-              </div>
+            {/* Show time for NEAR; show "ready to order" hint for ARRIVED */}
+            {phase === "ARRIVED" ? (
+              <span className="text-emerald-600 dark:text-emerald-400 font-medium">Ready to order</span>
+            ) : (
+              table.reservation_time && (
+                <div className="flex items-center gap-1">
+                  <HugeiconsIcon icon={Clock01Icon} size={11} strokeWidth={2} />
+                  <span>{fmtResTime(table.reservation_time)}</span>
+                </div>
+              )
             )}
             {table.reservation_guest_count != null && (
               <div className="flex items-center gap-1 ml-auto">
@@ -341,14 +346,18 @@ export default function TableSelectView() {
         return;
       }
 
-      // NEAR_RESERVATION: allow entry, warn that KOT will be blocked
+      // NEAR_RESERVATION: two sub-cases based on phase
       if (status === "NEAR_RESERVATION") {
-        const mins = Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, Date.now())));
-        toast.warning(
-          `Reserved in ${mins} minute${mins !== 1 ? "s" : ""}. KOT is blocked until reservation time.`,
-          { duration: 4000 },
-        );
-        // fall through — navigation is allowed
+        if (phase === "NEAR") {
+          // Guest not yet arrived — KOT will be blocked
+          const mins = Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, Date.now())));
+          toast.warning(
+            `Reserved in ${mins} minute${mins !== 1 ? "s" : ""}. KOT is blocked until reservation time.`,
+            { duration: 4000 },
+          );
+        }
+        // ARRIVED phase → no toast, navigate normally
+        // fall through to navigate in both cases
       }
 
       // WARNING phase: table looks available but has a near reservation
@@ -363,7 +372,12 @@ export default function TableSelectView() {
         if (table.session_id) {
           setSession(table.session_id, table.id, table.table_name);
         } else {
-          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1);
+          // For ARRIVED guests: pre-fill covers + customer name from reservation
+          const opts = phase === "ARRIVED" ? {
+            draftCovers:       table.reservation_guest_count ?? 2,
+            draftCustomerName: table.reservation_customer   ?? null,
+          } : {};
+          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1, undefined, opts);
         }
         return;
       }

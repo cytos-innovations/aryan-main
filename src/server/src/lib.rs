@@ -1027,6 +1027,7 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             bill_printed_at        TIMESTAMP,
             settled_at             TIMESTAMP,
             total_occupancy_minutes INTEGER    NOT NULL DEFAULT 0,
+            reservation_id         INTEGER,
             remarks                TEXT,
             is_active              INTEGER   NOT NULL DEFAULT 1,
             created_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1274,6 +1275,7 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             arrived_at          TIMESTAMP,
             expires_at          TIMESTAMP,
             order_session_id    INTEGER REFERENCES order_session(id),
+            bill_id             INTEGER REFERENCES bill_master(id),
             is_active           INTEGER   NOT NULL DEFAULT 1,
             created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_by          INTEGER,
@@ -1303,6 +1305,13 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|e| format!("Migration error (preferred_waiter_id): {e}"))?;
+
+    sqlx::query(
+        "ALTER TABLE order_session ADD COLUMN IF NOT EXISTS reservation_id INTEGER",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (order_session.reservation_id): {e}"))?;
 
     seed_applications(pool).await?;
     seed_module_permissions(pool).await?;

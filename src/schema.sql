@@ -1058,7 +1058,8 @@ CREATE TABLE reservation_master (
     expires_at TIMESTAMP, -- Expiry handling
 
     order_session_id INTEGER REFERENCES order_session(id), -- after sends order to kot start sesstion
-
+    bill_id INTEGER REFERENCES bill_master(id),
+    
     -- Audit fields
     is_active INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
