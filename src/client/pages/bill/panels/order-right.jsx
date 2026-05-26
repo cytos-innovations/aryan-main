@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { toast } from "sonner";
 import {
   Add01Icon,
   MinusSignIcon,
@@ -22,6 +23,7 @@ import {
   Cancel01Icon,
   SendingOrderIcon,
   Discount01Icon,
+  AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -583,6 +585,7 @@ function ActionButtons({
   billId, onSettle, isSettling,
   onCancel,
   isDraft, onKotDraft, isKotting,
+  isNearReservation,
 }) {
   const { clearSession, paymentEntries } = useBillingContext();
   const generateKot  = useGenerateKot(sessionId);
@@ -602,6 +605,11 @@ function ActionButtons({
   const kotPending = isDraft ? isKotting : generateKot.isPending;
 
   function handleKot() {
+    // Block KOT when table has an active reservation within 10 minutes
+    if (isNearReservation) {
+      toast.error("This table has an upcoming reservation. KOT cannot be created before reservation time.");
+      return;
+    }
     if (isDraft) { onKotDraft(); return; }
     generateKot.mutate({}, { onSuccess: clearSession });
   }
@@ -618,8 +626,24 @@ function ActionButtons({
     onSettle(useEntries);
   }
 
+  const kotTitle = isNearReservation
+    ? "KOT blocked — table has an upcoming reservation"
+    : isDraft
+      ? (activeItems.length === 0 ? "Add items first" : "Send KOT")
+      : (pendingKot > 0 ? `Send ${pendingKot} pending item${pendingKot > 1 ? "s" : ""}` : "No pending items");
+
   return (
     <>
+      {/* Reservation warning banner */}
+      {isNearReservation && (
+        <div className="shrink-0 mx-3 mt-2.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/80 dark:bg-blue-950/30 px-3 py-2 flex items-start gap-2">
+          <HugeiconsIcon icon={AlertCircleIcon} size={13} strokeWidth={2} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-blue-700 dark:text-blue-300 leading-snug">
+            Table reserved soon — KOT &amp; session creation are blocked until reservation time.
+          </p>
+        </div>
+      )}
+
       <div className="shrink-0 border-t bg-card px-3 py-2.5 grid grid-cols-3 gap-2">
         {/* Row 1 */}
         <Button
@@ -628,9 +652,7 @@ function ActionButtons({
           className="h-9 flex-col gap-0.5 text-[11px] font-semibold bg-amber-500 hover:bg-amber-600 text-white border-0 col-span-1"
           disabled={!canKot || kotPending}
           onClick={handleKot}
-          title={isDraft
-            ? (activeItems.length === 0 ? "Add items first" : "Send KOT")
-            : (pendingKot > 0 ? `Send ${pendingKot} pending item${pendingKot > 1 ? "s" : ""}` : "No pending items")}
+          title={kotTitle}
         >
           <HugeiconsIcon icon={SendingOrderIcon} size={14} strokeWidth={2} />
           {kotPending ? "Sending…" : `KOT${!isDraft && pendingKot > 0 ? ` (${pendingKot})` : ""}`}
@@ -721,6 +743,7 @@ export default function OrderRightPanel({
   session, sessionId,
   isDraft, draftItems, draftOrderType, draftCovers,
   onSetDraftConfig, onKotDraft, isKotting,
+  isNearReservation,
   onCancelSession,
 }) {
   const [discountPercent, setDiscountPercent] = useState(0);
@@ -807,6 +830,7 @@ export default function OrderRightPanel({
         isDraft={isDraft}
         onKotDraft={onKotDraft}
         isKotting={isKotting}
+        isNearReservation={isNearReservation}
       />
     </div>
   );

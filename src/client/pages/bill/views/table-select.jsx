@@ -22,45 +22,74 @@ import { Separator } from "@/components/ui/separator";
 import { useBillingContext } from "../state/billing-context";
 import { useFloorView } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
+import { minsUntilReservation, getReservationPhase } from "../utils/billing-calc";
+import ReservationPanel from "../panels/reservation-panel";
 
 // ─── Status helpers ──────────────────────────────────────────────
 
-function getTableStatus(table) {
+/**
+ * Compute display status from floor-view table data + current time.
+ * Reservation timing overrides the DB current_status for AVAILABLE/RESERVED tables.
+ */
+function getTableStatus(table, nowMs) {
   const cs = table.current_status ?? "AVAILABLE";
   const ss = table.session_status;
-  if (cs === "RESERVED") return "RESERVED";
-  if (cs !== "OCCUPIED") return "AVAILABLE";
-  if (ss === "BILL_PRINTED") return "BILL_PRINTED";
-  if (ss === "OPEN") return "AVAILABLE"; // pre-KOT session → still free visually
-  return "OCCUPIED";                      // KOT_SENT
+
+  // Occupied tables: trust DB session state entirely
+  if (cs === "OCCUPIED") {
+    if (ss === "BILL_PRINTED") return "BILL_PRINTED";
+    if (ss === "OPEN") return "AVAILABLE"; // pre-KOT session → still free visually
+    return "OCCUPIED";                      // KOT_SENT
+  }
+
+  // Available/Reserved: override with reservation timing phase
+  const phase = getReservationPhase(table, nowMs);
+  if (phase === "NEAR")    return "NEAR_RESERVATION"; // blue, clickable, KOT blocked
+  if (phase === "NORMAL" || phase === "WARNING" || phase === "PAST") return "AVAILABLE";
+
+  // No timed reservation data — fall back to raw DB status
+  if (cs === "RESERVED") return "RESERVED"; // permanently blocked (no timing info)
+  return "AVAILABLE";
+}
+
+/** Format reservation time string "HH:MM[:SS]" → "H:MM AM/PM" */
+function fmtResTime(timeStr) {
+  if (!timeStr) return "";
+  const [h, m] = timeStr.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
 const STATUS_RING = {
-  AVAILABLE:    "ring-border",
-  OCCUPIED:     "ring-amber-300 dark:ring-amber-600",
-  BILL_PRINTED: "ring-emerald-400 dark:ring-emerald-600",
-  RESERVED:     "ring-blue-300 dark:ring-blue-600",
+  AVAILABLE:        "ring-border",
+  OCCUPIED:         "ring-amber-300 dark:ring-amber-600",
+  BILL_PRINTED:     "ring-emerald-400 dark:ring-emerald-600",
+  RESERVED:         "ring-blue-300 dark:ring-blue-600",
+  NEAR_RESERVATION: "ring-blue-400 dark:ring-blue-500",
 };
 
 const STATUS_BG = {
-  AVAILABLE:    "bg-card hover:bg-muted/50",
-  OCCUPIED:     "bg-amber-50/80 dark:bg-amber-950/40 hover:bg-amber-100/80 dark:hover:bg-amber-950/60",
-  BILL_PRINTED: "bg-emerald-50/80 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60",
-  RESERVED:     "bg-blue-50/60 dark:bg-blue-950/30",
+  AVAILABLE:        "bg-card hover:bg-muted/50",
+  OCCUPIED:         "bg-amber-50/80 dark:bg-amber-950/40 hover:bg-amber-100/80 dark:hover:bg-amber-950/60",
+  BILL_PRINTED:     "bg-emerald-50/80 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60",
+  RESERVED:         "bg-blue-50/60 dark:bg-blue-950/30",
+  NEAR_RESERVATION: "bg-blue-50/80 dark:bg-blue-950/40 hover:bg-blue-100/80 dark:hover:bg-blue-950/60",
 };
 
 const STATUS_ACCENT = {
-  AVAILABLE:    "bg-transparent",
-  OCCUPIED:     "bg-amber-400 dark:bg-amber-500",
-  BILL_PRINTED: "bg-emerald-500",
-  RESERVED:     "bg-blue-500",
+  AVAILABLE:        "bg-transparent",
+  OCCUPIED:         "bg-amber-400 dark:bg-amber-500",
+  BILL_PRINTED:     "bg-emerald-500",
+  RESERVED:         "bg-blue-500",
+  NEAR_RESERVATION: "bg-blue-500",
 };
 
 const STATUS_LABEL = {
-  AVAILABLE:    { text: "Available",  cls: "text-muted-foreground" },
-  OCCUPIED:     { text: "KOT Sent",   cls: "text-amber-700 dark:text-amber-400" },
-  BILL_PRINTED: { text: "Bill Out",   cls: "text-emerald-700 dark:text-emerald-400" },
-  RESERVED:     { text: "Reserved",   cls: "text-blue-700 dark:text-blue-400" },
+  AVAILABLE:        { text: "Available",     cls: "text-muted-foreground" },
+  OCCUPIED:         { text: "KOT Sent",      cls: "text-amber-700 dark:text-amber-400" },
+  BILL_PRINTED:     { text: "Bill Out",      cls: "text-emerald-700 dark:text-emerald-400" },
+  RESERVED:         { text: "Reserved",      cls: "text-blue-700 dark:text-blue-400" },
+  NEAR_RESERVATION: { text: "Reserved Soon", cls: "text-blue-700 dark:text-blue-400" },
 };
 
 const ORDER_TYPE_PILL = {
@@ -94,17 +123,23 @@ function useNow() {
 // ─── Table Card ──────────────────────────────────────────────────
 
 function TableCard({ table, onClick, now }) {
-  const status = getTableStatus(table);
-  const isOccupied = status === "OCCUPIED" || status === "BILL_PRINTED";
-  const isReserved = status === "RESERVED";
-  const elapsed = calcElapsed(table.occupied_since, now);
-  const orderPill = isOccupied && table.order_type ? ORDER_TYPE_PILL[table.order_type] : null;
+  const status      = getTableStatus(table, now);
+  const phase       = getReservationPhase(table, now);
+  const isOccupied  = status === "OCCUPIED" || status === "BILL_PRINTED";
+  const isReserved  = status === "RESERVED";           // permanently blocked (no timing)
+  const isNear      = status === "NEAR_RESERVATION";   // near-reservation blue state
+  const elapsed     = calcElapsed(table.occupied_since, now);
+  const orderPill   = isOccupied && table.order_type ? ORDER_TYPE_PILL[table.order_type] : null;
   const statusLabel = STATUS_LABEL[status];
+
+  const minsLeft = isNear
+    ? Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, now)))
+    : null;
 
   return (
     <button
       type="button"
-      onClick={() => onClick(table, status)}
+      onClick={() => onClick(table, status, phase)}
       disabled={isReserved}
       className={[
         "relative flex flex-col rounded-xl p-3.5 text-left select-none transition-all duration-150",
@@ -117,14 +152,21 @@ function TableCard({ table, onClick, now }) {
       {/* Top accent strip */}
       <div className={`absolute top-0 left-0 right-0 h-1 ${STATUS_ACCENT[status]}`} />
 
-      {/* Header: table name + order type pill */}
+      {/* Header: table name + pills */}
       <div className="flex items-start justify-between gap-1.5 mt-0.5">
         <span className="font-semibold text-sm leading-snug truncate">{table.table_name}</span>
-        {orderPill && (
-          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${orderPill.cls}`}>
-            {orderPill.label}
-          </span>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
+          {isNear && minsLeft !== null && (
+            <span className="rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+              {minsLeft}m
+            </span>
+          )}
+          {orderPill && (
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${orderPill.cls}`}>
+              {orderPill.label}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Status text */}
@@ -159,6 +201,32 @@ function TableCard({ table, onClick, now }) {
               <div className="flex items-center gap-1 shrink-0 ml-auto">
                 <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
                 <span>{table.covers}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Near-reservation overlay details */}
+      {isNear && (
+        <div className="mt-2.5 space-y-1 border-t border-blue-200/60 dark:border-blue-800/40 pt-2">
+          {table.reservation_customer && (
+            <div className="flex items-center gap-1 text-[11px] text-blue-700 dark:text-blue-300">
+              <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} className="shrink-0" />
+              <span className="truncate font-medium">{table.reservation_customer}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2 text-[11px] text-blue-600/70 dark:text-blue-400/70">
+            {table.reservation_time && (
+              <div className="flex items-center gap-1">
+                <HugeiconsIcon icon={Clock01Icon} size={11} strokeWidth={2} />
+                <span>{fmtResTime(table.reservation_time)}</span>
+              </div>
+            )}
+            {table.reservation_guest_count != null && (
+              <div className="flex items-center gap-1 ml-auto">
+                <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
+                <span>{table.reservation_guest_count}</span>
               </div>
             )}
           </div>
@@ -225,6 +293,7 @@ export default function TableSelectView() {
   const navigate = useNavigate();
   const { setSession } = useBillingContext();
   const [search, setSearch] = useState("");
+  const [reservationOpen, setReservationOpen] = useState(false);
   const now = useNow();
 
   const floorQuery = useFloorView();
@@ -253,30 +322,47 @@ export default function TableSelectView() {
   const stats = useMemo(() => {
     let available = 0, occupied = 0, billPrinted = 0, reserved = 0;
     for (const t of tables) {
-      const s = getTableStatus(t);
-      if (s === "AVAILABLE")         available++;
+      const s = getTableStatus(t, now);
+      if (s === "AVAILABLE" || s === "NEAR_RESERVATION") available++;
       else if (s === "OCCUPIED")     occupied++;
       else if (s === "BILL_PRINTED") billPrinted++;
       else if (s === "RESERVED")     reserved++;
     }
     return { available, occupied, billPrinted, reserved };
-  }, [tables]);
+  }, [tables, now]);
 
-  // Clicking any table just opens the billing screen — no DB writes.
-  // Session is only created when the user clicks KOT/KOT+Print.
+  // Clicking any table opens the billing screen — no DB writes at this point.
+  // Session is only created when the user sends a KOT.
   const handleTableClick = useCallback(
-    (table, status) => {
+    (table, status, phase) => {
+      // Permanently blocked (no timing data)
       if (status === "RESERVED") {
         toast.info("This table is reserved.");
         return;
       }
 
-      if (status === "AVAILABLE") {
+      // NEAR_RESERVATION: allow entry, warn that KOT will be blocked
+      if (status === "NEAR_RESERVATION") {
+        const mins = Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, Date.now())));
+        toast.warning(
+          `Reserved in ${mins} minute${mins !== 1 ? "s" : ""}. KOT is blocked until reservation time.`,
+          { duration: 4000 },
+        );
+        // fall through — navigation is allowed
+      }
+
+      // WARNING phase: table looks available but has a near reservation
+      if (phase === "WARNING") {
+        const mins = Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, Date.now())));
+        toast.info(`This table has a reservation in ${mins} minutes.`);
+        // fall through — navigation is allowed, no visual change
+      }
+
+      // Navigate to order entry (all non-blocked statuses land here)
+      if (status === "AVAILABLE" || status === "NEAR_RESERVATION") {
         if (table.session_id) {
-          // Pre-KOT (OPEN) session already exists — resume it
           setSession(table.session_id, table.id, table.table_name);
         } else {
-          // Truly free — open in draft mode, zero DB changes
           setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1);
         }
         return;
@@ -296,6 +382,7 @@ export default function TableSelectView() {
   }
 
   return (
+    <>
     <div className="flex flex-col h-full overflow-hidden">
       {/* ── Toolbar ── */}
       <div className="shrink-0 border-b bg-card px-4 py-2 flex items-center gap-2 flex-wrap">
@@ -303,7 +390,7 @@ export default function TableSelectView() {
           variant="outline"
           size="sm"
           className="h-8 gap-1.5 text-xs"
-          onClick={() => toast.info("Table reservation — coming soon")}
+          onClick={() => setReservationOpen(true)}
         >
           <HugeiconsIcon icon={Calendar01Icon} size={14} strokeWidth={2} />
           Reserve
@@ -381,10 +468,11 @@ export default function TableSelectView() {
       <div className="shrink-0 border-b bg-muted/20 px-4 py-1.5 flex items-center gap-4 flex-wrap">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Legend</span>
         {[
-          { dot: "bg-border ring-1 ring-border",   label: "Available" },
-          { dot: "bg-amber-400 dark:bg-amber-500",  label: "KOT Sent"  },
-          { dot: "bg-emerald-500",                  label: "Bill Out"  },
-          { dot: "bg-blue-500",                     label: "Reserved"  },
+          { dot: "bg-border ring-1 ring-border",   label: "Available"     },
+          { dot: "bg-amber-400 dark:bg-amber-500",  label: "KOT Sent"     },
+          { dot: "bg-emerald-500",                  label: "Bill Out"     },
+          { dot: "bg-blue-500",                     label: "Reserved Soon" },
+          { dot: "bg-blue-400 opacity-50",          label: "Reserved"     },
         ].map(({ dot, label }) => (
           <div key={label} className="flex items-center gap-1.5">
             <span className={`inline-block h-2.5 w-2.5 rounded-sm shrink-0 ${dot}`} />
@@ -443,5 +531,11 @@ export default function TableSelectView() {
         )}
       </div>
     </div>
+
+    <ReservationPanel
+      open={reservationOpen}
+      onOpenChange={setReservationOpen}
+    />
+    </>
   );
 }

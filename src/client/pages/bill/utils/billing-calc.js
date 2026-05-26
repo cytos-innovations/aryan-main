@@ -113,3 +113,42 @@ export function validatePayments(payments, netAmount) {
 export function fmtAmount(n) {
   return Number(n || 0).toFixed(2);
 }
+
+/**
+ * Minutes until reservation time today (negative = already past).
+ * timeStr is "HH:MM" or "HH:MM:SS" in local restaurant time.
+ */
+export function minsUntilReservation(timeStr, nowMs) {
+  if (!timeStr) return null;
+  const [h, m] = timeStr.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return null;
+  const res = new Date(nowMs);
+  res.setHours(h, m, 0, 0);
+  return (res.getTime() - nowMs) / 60_000;
+}
+
+/**
+ * Compute reservation warning phase for a floor-view table row.
+ * Only applies to RESERVED (not yet ARRIVED) reservations for today.
+ *
+ * Returns:
+ *   null      – no active reservation overlay
+ *   "NORMAL"  – reservation > 30 min away: no special behavior
+ *   "WARNING" – 10–30 min away: show warning toast on click, no visual change
+ *   "NEAR"    – 0–10 min away: blue visual, block KOT / session creation
+ *   "PAST"    – reservation time has passed: restrictions fully cleared
+ */
+export function getReservationPhase(table, nowMs) {
+  if (
+    table.reservation_id == null ||
+    table.reservation_status !== "RESERVED" ||
+    !table.reservation_time
+  ) return null;
+
+  const mins = minsUntilReservation(table.reservation_time, nowMs);
+  if (mins === null) return null;
+  if (mins <= 0)  return "PAST";
+  if (mins <= 10) return "NEAR";
+  if (mins <= 30) return "WARNING";
+  return "NORMAL";
+}

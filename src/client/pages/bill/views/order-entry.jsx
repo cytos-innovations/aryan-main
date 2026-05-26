@@ -43,13 +43,14 @@ import { useBillingContext } from "../state/billing-context";
 import {
   useSessionDetail,
   useMenuForBilling,
+  useFloorView,
   useAddOrderItem,
   useCancelOrderSession,
   useUpdateSessionInfo,
 } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, ORDER_TYPE_LABELS, BILLING_VIEW, BQK } from "../constants/billing";
-import { selectItemRate } from "../utils/billing-calc";
+import { selectItemRate, getReservationPhase } from "../utils/billing-calc";
 
 import MenuLeftPanel   from "../panels/menu-left";
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
@@ -293,7 +294,8 @@ export default function OrderEntryView() {
     setView,
   } = useBillingContext();
 
-  const qc = useQueryClient();
+  const qc  = useQueryClient();
+  const now = useNow();
 
   const [editOpen,   setEditOpen]   = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -305,8 +307,18 @@ export default function OrderEntryView() {
 
   const sessionQuery = useSessionDetail(activeSessionId);
   const menuQuery    = useMenuForBilling();
+  const floorQuery   = useFloorView();
   const cancelMut    = useCancelOrderSession();
   const addItemMut   = useAddOrderItem(activeSessionId);
+
+  // Reservation guard: true when selected table is within 10 min of its reservation time.
+  // Uses cached floor view (refetches every 30 s) + 60 s now-tick for reactivity.
+  const isNearReservation = useMemo(() => {
+    if (!selectedTableId) return false;
+    const table = (floorQuery.data ?? []).find((t) => t.id === selectedTableId);
+    if (!table) return false;
+    return getReservationPhase(table, now) === "NEAR";
+  }, [floorQuery.data, selectedTableId, now]);
 
   const session         = sessionQuery.data;
   const menu            = menuQuery.data ?? [];
@@ -362,6 +374,10 @@ export default function OrderEntryView() {
   async function handleKotDraft() {
     if (draftItems.length === 0) {
       toast.error("Add at least one item before sending KOT");
+      return;
+    }
+    if (isNearReservation) {
+      toast.error("This table has an upcoming reservation. KOT cannot be created before reservation time.");
       return;
     }
     setIsKotting(true);
@@ -471,6 +487,7 @@ export default function OrderEntryView() {
             onRemoveDraftItem={removeDraftItem}
             onKotDraft={handleKotDraft}
             isKotting={isKotting}
+            isNearReservation={isNearReservation}
             onCancelSession={() => setCancelOpen(true)}
           />
         </div>

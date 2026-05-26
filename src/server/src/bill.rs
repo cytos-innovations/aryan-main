@@ -150,6 +150,13 @@ pub struct FloorTableRow {
     // Running total from active order items
     pub running_total:            f64,
     pub bill_status:              Option<String>,
+    // Reservation overlay (null when no active reservation today)
+    pub reservation_id:           Option<i32>,
+    pub reservation_no:           Option<String>,
+    pub reservation_time:         Option<String>,
+    pub reservation_customer:     Option<String>,
+    pub reservation_guest_count:  Option<i32>,
+    pub reservation_status:       Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -378,7 +385,13 @@ pub async fn get_floor_view(
                   WHERE  oi.order_session_id = os.id
                     AND  oi.item_status = 'ACTIVE'
                 ), 0)::float8 AS running_total,
-                bm.bill_status
+                bm.bill_status,
+                res.reservation_id,
+                res.reservation_no,
+                res.reservation_time,
+                res.reservation_customer,
+                res.reservation_guest_count,
+                res.reservation_status
          FROM   restaurant_table rt
          LEFT JOIN table_group tg ON tg.id = rt.table_group_id
          LEFT JOIN order_session os
@@ -394,6 +407,21 @@ pub async fn get_floor_view(
                     WHERE  b2.order_session_id = os.id
                       AND  b2.bill_status NOT IN ('PAID', 'CANCELLED')
                   )
+         LEFT JOIN LATERAL (
+               SELECT rm.id                     AS reservation_id,
+                      rm.reservation_no,
+                      rm.reservation_time::text  AS reservation_time,
+                      rm.customer_name           AS reservation_customer,
+                      rm.guest_count             AS reservation_guest_count,
+                      rm.reservation_status
+               FROM   reservation_master rm
+               WHERE  rm.table_id           = rt.id
+                 AND  rm.reservation_date   = CURRENT_DATE
+                 AND  rm.reservation_status IN ('RESERVED', 'ARRIVED')
+                 AND  rm.is_active          = 1
+               ORDER  BY rm.reservation_time
+               LIMIT  1
+         ) res ON TRUE
          WHERE  rt.is_active = TRUE
          ORDER  BY tg.name NULLS LAST, rt.code, rt.table_name",
     )
@@ -420,6 +448,12 @@ pub async fn get_floor_view(
         waiter_name:              r.try_get("waiter_name").ok().flatten(),
         running_total:            r.try_get::<f64, _>("running_total").unwrap_or(0.0),
         bill_status:              r.try_get("bill_status").ok().flatten(),
+        reservation_id:           r.try_get("reservation_id").ok().flatten(),
+        reservation_no:           r.try_get("reservation_no").ok().flatten(),
+        reservation_time:         r.try_get("reservation_time").ok().flatten(),
+        reservation_customer:     r.try_get("reservation_customer").ok().flatten(),
+        reservation_guest_count:  r.try_get("reservation_guest_count").ok().flatten(),
+        reservation_status:       r.try_get("reservation_status").ok().flatten(),
     }).collect())
 }
 
@@ -1721,4 +1755,608 @@ pub async fn settle_bill(
     .ok();
 
     Ok(())
+}
+
+// ── Reservations ──────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct ReservationRow {
+    pub id:                    i32,
+    pub code:                  i64,
+    pub reservation_no:        Option<String>,
+    pub table_id:              Option<i32>,
+    pub table_name:            Option<String>,
+    pub table_group_name:      Option<String>,
+    pub customer_name:         Option<String>,
+    pub customer_mobile:       Option<String>,
+    pub guest_count:           i32,
+    pub reservation_date:      Option<String>,
+    pub reservation_time:      Option<String>,
+    pub duration_minutes:      i32,
+    pub reservation_status:    String,
+    pub notes:                 Option<String>,
+    pub arrived_at:            Option<String>,
+    pub expires_at:            Option<String>,
+    pub order_session_id:      Option<i32>,
+    pub preferred_waiter_id:   Option<i32>,
+    pub preferred_waiter_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmployeeForBilling {
+    pub id:   i32,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateReservationInput {
+    pub table_id:            Option<i32>,
+    pub customer_name:       Option<String>,
+    pub customer_mobile:     Option<String>,
+    pub guest_count:         i32,
+    pub reservation_date:    String,
+    pub reservation_time:    String,
+    pub duration_minutes:    Option<i32>,
+    pub preferred_waiter_id: Option<i32>,
+    pub notes:               Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateReservationInput {
+    pub table_id:            Option<i32>,
+    pub customer_name:       Option<String>,
+    pub customer_mobile:     Option<String>,
+    pub guest_count:         i32,
+    pub reservation_date:    String,
+    pub reservation_time:    String,
+    pub duration_minutes:    Option<i32>,
+    pub preferred_waiter_id: Option<i32>,
+    pub notes:               Option<String>,
+}
+
+// ── Internal helpers ──────────────────────────────────────────
+
+fn validate_mobile(mobile: &str) -> Result<(), String> {
+    let digits: String = mobile.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() < 7 || digits.len() > 15 {
+        return Err("Mobile number must be 7–15 digits".into());
+    }
+    Ok(())
+}
+
+fn validate_guest_count(count: i32) -> Result<(), String> {
+    if count < 1 || count > 999 {
+        return Err("Guest count must be between 1 and 999".into());
+    }
+    Ok(())
+}
+
+fn validate_reservation_datetime(date: &str, time: &str) -> Result<(), String> {
+    use chrono::{Local, NaiveDate, NaiveTime};
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| "Invalid reservation date (YYYY-MM-DD required)".to_string())?;
+    let t = NaiveTime::parse_from_str(time, "%H:%M")
+        .or_else(|_| NaiveTime::parse_from_str(time, "%H:%M:%S"))
+        .map_err(|_| "Invalid reservation time (HH:MM required)".to_string())?;
+    let dt = d.and_time(t);
+    let now = Local::now().naive_local();
+    if dt < now - chrono::Duration::minutes(5) {
+        return Err("Reservation cannot be set in the past".into());
+    }
+    Ok(())
+}
+
+async fn check_time_conflict(
+    pool:          &sqlx::PgPool,
+    table_id:      i32,
+    date:          &str,
+    time:          &str,
+    duration_mins: i32,
+    exclude_id:    Option<i32>,
+) -> Result<(), String> {
+    let conflict: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM reservation_master
+         WHERE  table_id = $1
+           AND  reservation_date = $2::date
+           AND  reservation_status IN ('RESERVED', 'ARRIVED')
+           AND  is_active = 1
+           AND  ($3::integer IS NULL OR id <> $3)
+           AND  reservation_time < ($4::time + $5 * INTERVAL '1 minute')
+           AND  (reservation_time + COALESCE(duration_minutes, 120) * INTERVAL '1 minute') > $4::time
+         LIMIT 1",
+    )
+    .bind(table_id)
+    .bind(date)
+    .bind(exclude_id)
+    .bind(time)
+    .bind(duration_mins)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Conflict check failed: {e}"))?;
+
+    if conflict.is_some() {
+        return Err("This table already has a reservation that overlaps the requested time".into());
+    }
+    Ok(())
+}
+
+fn map_reservation_row(r: &sqlx::postgres::PgRow) -> ReservationRow {
+    ReservationRow {
+        id:                    r.try_get("id").unwrap_or(0),
+        code:                  r.try_get("code").unwrap_or(0),
+        reservation_no:        r.try_get("reservation_no").ok().flatten(),
+        table_id:              r.try_get("table_id").ok().flatten(),
+        table_name:            r.try_get("table_name").ok().flatten(),
+        table_group_name:      r.try_get("table_group_name").ok().flatten(),
+        customer_name:         r.try_get("customer_name").ok().flatten(),
+        customer_mobile:       r.try_get("customer_mobile").ok().flatten(),
+        guest_count:           r.try_get("guest_count").unwrap_or(1),
+        reservation_date:      r.try_get("reservation_date").ok().flatten(),
+        reservation_time:      r.try_get("reservation_time").ok().flatten(),
+        duration_minutes:      r.try_get("duration_minutes").unwrap_or(120),
+        reservation_status:    r.try_get("reservation_status").unwrap_or_else(|_| "RESERVED".to_string()),
+        notes:                 r.try_get("notes").ok().flatten(),
+        arrived_at:            r.try_get::<Option<chrono::NaiveDateTime>, _>("arrived_at")
+                                .ok().flatten()
+                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
+        expires_at:            r.try_get::<Option<chrono::NaiveDateTime>, _>("expires_at")
+                                .ok().flatten()
+                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
+        order_session_id:      r.try_get("order_session_id").ok().flatten(),
+        preferred_waiter_id:   r.try_get("preferred_waiter_id").ok().flatten(),
+        preferred_waiter_name: r.try_get("preferred_waiter_name").ok().flatten(),
+    }
+}
+
+const RESERVATION_SELECT: &str =
+    "SELECT rm.id, rm.code, rm.reservation_no,
+            rm.table_id, rt.table_name, tg.name AS table_group_name,
+            rm.customer_name, rm.customer_mobile,
+            COALESCE(rm.guest_count, 1)          AS guest_count,
+            rm.reservation_date::text             AS reservation_date,
+            rm.reservation_time::text             AS reservation_time,
+            COALESCE(rm.duration_minutes, 120)   AS duration_minutes,
+            COALESCE(rm.reservation_status, 'RESERVED') AS reservation_status,
+            rm.notes, rm.arrived_at, rm.expires_at,
+            rm.order_session_id,
+            rm.preferred_waiter_id,
+            pw.name AS preferred_waiter_name
+     FROM   reservation_master rm
+     LEFT JOIN restaurant_table rt     ON rt.id = rm.table_id
+     LEFT JOIN table_group tg          ON tg.id = rt.table_group_id
+     LEFT JOIN employee_information pw ON pw.id = rm.preferred_waiter_id";
+
+// ── Commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_reservations(
+    app:    tauri::AppHandle,
+    state:  tauri::State<'_, AppState>,
+    filter: Option<String>,
+) -> Result<Vec<ReservationRow>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let date_clause = match filter.as_deref() {
+        Some("TODAY")    => "AND rm.reservation_date = CURRENT_DATE",
+        Some("UPCOMING") => "AND rm.reservation_date > CURRENT_DATE",
+        _                => "AND rm.reservation_date >= CURRENT_DATE",
+    };
+
+    let sql = format!(
+        "{RESERVATION_SELECT}
+         WHERE  rm.is_active = 1
+           AND  rm.reservation_status NOT IN ('COMPLETED', 'CANCELLED', 'NO_SHOW')
+           {date_clause}
+         ORDER  BY rm.reservation_date, rm.reservation_time"
+    );
+
+    let rows = sqlx::query(&sql)
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("Failed to load reservations: {e}"))?;
+
+    Ok(rows.iter().map(map_reservation_row).collect())
+}
+
+#[tauri::command]
+pub async fn get_reservation_by_id(
+    app:            tauri::AppHandle,
+    state:          tauri::State<'_, AppState>,
+    reservation_id: i32,
+) -> Result<ReservationRow, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let sql = format!(
+        "{RESERVATION_SELECT}
+         WHERE  rm.id = $1 AND rm.is_active = 1"
+    );
+
+    let row = sqlx::query(&sql)
+        .bind(reservation_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| format!("Failed to load reservation: {e}"))?
+        .ok_or_else(|| format!("Reservation #{reservation_id} not found"))?;
+
+    Ok(map_reservation_row(&row))
+}
+
+#[tauri::command]
+pub async fn create_reservation(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    input: CreateReservationInput,
+) -> Result<i32, String> {
+    validate_guest_count(input.guest_count)?;
+    validate_reservation_datetime(&input.reservation_date, &input.reservation_time)?;
+    if let Some(ref mobile) = input.customer_mobile {
+        if !mobile.trim().is_empty() {
+            validate_mobile(mobile)?;
+        }
+    }
+
+    let duration = input.duration_minutes.unwrap_or(120).max(15);
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    if let Some(tid) = input.table_id {
+        check_time_conflict(&pool, tid, &input.reservation_date, &input.reservation_time, duration, None).await?;
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| format!("TX begin failed: {e}"))?;
+
+    let reservation_id: i32 = sqlx::query_scalar(
+        "INSERT INTO reservation_master
+            (table_id, customer_name, customer_mobile, guest_count,
+             reservation_date, reservation_time, duration_minutes, notes,
+             reservation_status, preferred_waiter_id,
+             expires_at)
+         VALUES ($1, $2, $3, $4, $5::date, $6::time, $7, $8, 'RESERVED', $9,
+                 ($5::date || ' ' || $6)::timestamp + $7 * INTERVAL '1 minute')
+         RETURNING id",
+    )
+    .bind(input.table_id)
+    .bind(input.customer_name.as_deref())
+    .bind(input.customer_mobile.as_deref())
+    .bind(input.guest_count)
+    .bind(&input.reservation_date)
+    .bind(&input.reservation_time)
+    .bind(duration)
+    .bind(input.notes.as_deref())
+    .bind(input.preferred_waiter_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to create reservation: {e}"))?;
+
+    sqlx::query("UPDATE reservation_master SET reservation_no = $1 WHERE id = $2")
+        .bind(format!("RES-{reservation_id:06}"))
+        .bind(reservation_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to assign reservation_no: {e}"))?;
+
+    if let Some(tid) = input.table_id {
+        sqlx::query(
+            "UPDATE restaurant_table
+             SET    current_status = 'RESERVED'
+             WHERE  id = $1 AND current_status = 'AVAILABLE'",
+        )
+        .bind(tid)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to update table status: {e}"))?;
+    }
+
+    tx.commit().await.map_err(|e| format!("TX commit failed: {e}"))?;
+
+    Ok(reservation_id)
+}
+
+#[tauri::command]
+pub async fn update_reservation(
+    app:            tauri::AppHandle,
+    state:          tauri::State<'_, AppState>,
+    reservation_id: i32,
+    input:          UpdateReservationInput,
+) -> Result<(), String> {
+    validate_guest_count(input.guest_count)?;
+    validate_reservation_datetime(&input.reservation_date, &input.reservation_time)?;
+    if let Some(ref mobile) = input.customer_mobile {
+        if !mobile.trim().is_empty() {
+            validate_mobile(mobile)?;
+        }
+    }
+
+    let duration = input.duration_minutes.unwrap_or(120).max(15);
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let row = sqlx::query(
+        "SELECT reservation_status, table_id
+         FROM   reservation_master
+         WHERE  id = $1 AND is_active = 1",
+    )
+    .bind(reservation_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Failed to load reservation: {e}"))?
+    .ok_or_else(|| format!("Reservation #{reservation_id} not found"))?;
+
+    let current_status: String = row.try_get("reservation_status").unwrap_or_default();
+    let old_table_id: Option<i32> = row.try_get("table_id").ok().flatten();
+
+    if current_status != "RESERVED" {
+        return Err(format!(
+            "Cannot edit a reservation with status '{current_status}' — only RESERVED bookings can be edited"
+        ));
+    }
+
+    if let Some(tid) = input.table_id {
+        check_time_conflict(&pool, tid, &input.reservation_date, &input.reservation_time, duration, Some(reservation_id)).await?;
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| format!("TX begin failed: {e}"))?;
+
+    sqlx::query(
+        "UPDATE reservation_master
+         SET    table_id            = $1,
+                customer_name       = $2,
+                customer_mobile     = $3,
+                guest_count         = $4,
+                reservation_date    = $5::date,
+                reservation_time    = $6::time,
+                duration_minutes    = $7,
+                notes               = $8,
+                preferred_waiter_id = $9,
+                expires_at          = ($5::date || ' ' || $6)::timestamp + $7 * INTERVAL '1 minute',
+                updated_at          = NOW()
+         WHERE  id = $10",
+    )
+    .bind(input.table_id)
+    .bind(input.customer_name.as_deref())
+    .bind(input.customer_mobile.as_deref())
+    .bind(input.guest_count)
+    .bind(&input.reservation_date)
+    .bind(&input.reservation_time)
+    .bind(duration)
+    .bind(input.notes.as_deref())
+    .bind(input.preferred_waiter_id)
+    .bind(reservation_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to update reservation: {e}"))?;
+
+    if old_table_id != input.table_id {
+        if let Some(old_tid) = old_table_id {
+            sqlx::query(
+                "UPDATE restaurant_table
+                 SET    current_status = 'AVAILABLE'
+                 WHERE  id = $1 AND current_status = 'RESERVED'
+                   AND  current_order_session_id IS NULL",
+            )
+            .bind(old_tid)
+            .execute(&mut *tx)
+            .await
+            .ok();
+        }
+        if let Some(new_tid) = input.table_id {
+            sqlx::query(
+                "UPDATE restaurant_table
+                 SET    current_status = 'RESERVED'
+                 WHERE  id = $1 AND current_status = 'AVAILABLE'",
+            )
+            .bind(new_tid)
+            .execute(&mut *tx)
+            .await
+            .ok();
+        }
+    }
+
+    tx.commit().await.map_err(|e| format!("TX commit failed: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_reservation_status(
+    app:            tauri::AppHandle,
+    state:          tauri::State<'_, AppState>,
+    reservation_id: i32,
+    status:         String,
+) -> Result<(), String> {
+    let allowed = ["RESERVED", "ARRIVED", "COMPLETED", "CANCELLED", "NO_SHOW"];
+    if !allowed.contains(&status.as_str()) {
+        return Err(format!("Invalid reservation status '{status}'"));
+    }
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let row = sqlx::query(
+        "SELECT reservation_status, table_id
+         FROM   reservation_master
+         WHERE  id = $1 AND is_active = 1",
+    )
+    .bind(reservation_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Failed to load reservation: {e}"))?
+    .ok_or_else(|| format!("Reservation #{reservation_id} not found"))?;
+
+    let current_status: String = row.try_get("reservation_status").unwrap_or_default();
+    let table_id: Option<i32> = row.try_get("table_id").ok().flatten();
+
+    let valid_transition = matches!(
+        (current_status.as_str(), status.as_str()),
+        ("RESERVED", "ARRIVED")
+        | ("RESERVED", "CANCELLED")
+        | ("RESERVED", "NO_SHOW")
+        | ("ARRIVED", "COMPLETED")
+        | ("ARRIVED", "CANCELLED")
+    );
+    if !valid_transition {
+        return Err(format!(
+            "Cannot transition reservation from '{current_status}' to '{status}'"
+        ));
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| format!("TX begin failed: {e}"))?;
+
+    if status == "ARRIVED" {
+        sqlx::query(
+            "UPDATE reservation_master
+             SET    reservation_status = $1, arrived_at = NOW(), updated_at = NOW()
+             WHERE  id = $2",
+        )
+        .bind(&status)
+        .bind(reservation_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to update reservation: {e}"))?;
+    } else {
+        sqlx::query(
+            "UPDATE reservation_master
+             SET    reservation_status = $1, updated_at = NOW()
+             WHERE  id = $2",
+        )
+        .bind(&status)
+        .bind(reservation_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to update reservation: {e}"))?;
+    }
+
+    if let Some(tid) = table_id {
+        if matches!(status.as_str(), "CANCELLED" | "NO_SHOW" | "COMPLETED") {
+            sqlx::query(
+                "UPDATE restaurant_table
+                 SET    current_status = 'AVAILABLE'
+                 WHERE  id = $1 AND current_status = 'RESERVED'
+                   AND  current_order_session_id IS NULL",
+            )
+            .bind(tid)
+            .execute(&mut *tx)
+            .await
+            .ok();
+        }
+    }
+
+    tx.commit().await.map_err(|e| format!("TX commit failed: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_reservation(
+    app:            tauri::AppHandle,
+    state:          tauri::State<'_, AppState>,
+    reservation_id: i32,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let row = sqlx::query(
+        "SELECT reservation_status, table_id
+         FROM   reservation_master
+         WHERE  id = $1 AND is_active = 1",
+    )
+    .bind(reservation_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Failed to load reservation: {e}"))?
+    .ok_or_else(|| format!("Reservation #{reservation_id} not found"))?;
+
+    let current_status: String = row.try_get("reservation_status").unwrap_or_default();
+    let table_id: Option<i32> = row.try_get("table_id").ok().flatten();
+
+    if matches!(current_status.as_str(), "COMPLETED" | "CANCELLED") {
+        return Err(format!("Reservation is already '{current_status}'"));
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| format!("TX begin failed: {e}"))?;
+
+    sqlx::query(
+        "UPDATE reservation_master
+         SET    reservation_status = 'CANCELLED', updated_at = NOW()
+         WHERE  id = $1",
+    )
+    .bind(reservation_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to cancel reservation: {e}"))?;
+
+    if let Some(tid) = table_id {
+        sqlx::query(
+            "UPDATE restaurant_table
+             SET    current_status = 'AVAILABLE'
+             WHERE  id = $1 AND current_status = 'RESERVED'
+               AND  current_order_session_id IS NULL",
+        )
+        .bind(tid)
+        .execute(&mut *tx)
+        .await
+        .ok();
+    }
+
+    tx.commit().await.map_err(|e| format!("TX commit failed: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn expire_no_show_reservations(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<u64, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let mut tx = pool.begin().await.map_err(|e| format!("TX begin failed: {e}"))?;
+
+    let result = sqlx::query(
+        "UPDATE reservation_master
+         SET    reservation_status = 'NO_SHOW', updated_at = NOW()
+         WHERE  reservation_status = 'RESERVED'
+           AND  reservation_date   = CURRENT_DATE
+           AND  is_active          = 1
+           AND  expires_at         < NOW()",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to expire reservations: {e}"))?;
+
+    let expired = result.rows_affected();
+
+    sqlx::query(
+        "UPDATE restaurant_table rt
+         SET    current_status = 'AVAILABLE'
+         FROM   reservation_master rm
+         WHERE  rm.table_id             = rt.id
+           AND  rm.reservation_status   = 'NO_SHOW'
+           AND  rm.reservation_date     = CURRENT_DATE
+           AND  rt.current_status       = 'RESERVED'
+           AND  rt.current_order_session_id IS NULL",
+    )
+    .execute(&mut *tx)
+    .await
+    .ok();
+
+    tx.commit().await.map_err(|e| format!("TX commit failed: {e}"))?;
+
+    Ok(expired)
+}
+
+#[tauri::command]
+pub async fn get_employees_for_billing(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<EmployeeForBilling>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, name FROM employee_information ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load employees: {e}"))?;
+
+    Ok(rows.iter().map(|r| EmployeeForBilling {
+        id:   r.try_get("id").unwrap_or(0),
+        name: r.try_get("name").unwrap_or_default(),
+    }).collect())
 }

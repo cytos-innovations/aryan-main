@@ -83,6 +83,22 @@ export const BILLING_VIEW = {
 // TanStack Query keys — centralised so cache invalidation is consistent
 // ─────────────────────────────────────────────────────────────
 
+export const RESERVATION_STATUS = {
+  RESERVED:  "RESERVED",
+  ARRIVED:   "ARRIVED",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+  NO_SHOW:   "NO_SHOW",
+};
+
+export const RESERVATION_STATUS_LABELS = {
+  RESERVED:  "Reserved",
+  ARRIVED:   "Arrived",
+  COMPLETED: "Completed",
+  CANCELLED: "Cancelled",
+  NO_SHOW:   "No Show",
+};
+
 export const BQK = {
   TABLES:          ["billing-tables"],
   FLOOR_VIEW:      ["billing-floor-view"],
@@ -93,6 +109,7 @@ export const BQK = {
   ORDER_ITEMS:     (sessionId) => ["billing-order-items", sessionId],
   BILL_SUMMARY:    (sessionId) => ["billing-bill-summary", sessionId],
   KOT_LIST:        (sessionId) => ["billing-kot-list", sessionId],
+  RESERVATIONS:    ["billing-reservations"],
 };
 
 // ─────────────────────────────────────────────────────────────

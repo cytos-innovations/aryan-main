@@ -171,6 +171,15 @@ use bill::{
     get_bill_summary,
     generate_bill,
     settle_bill,
+    // Reservations
+    get_reservations,
+    get_reservation_by_id,
+    create_reservation,
+    update_reservation,
+    update_reservation_status,
+    cancel_reservation,
+    expire_no_show_reservations,
+    get_employees_for_billing,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -1249,6 +1258,28 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by       INTEGER
         )"#,
+        r#"CREATE TABLE IF NOT EXISTS reservation_master (
+            id                  SERIAL PRIMARY KEY,
+            code                BIGSERIAL UNIQUE,
+            reservation_no      VARCHAR(30) UNIQUE,
+            table_id            INTEGER REFERENCES restaurant_table(id),
+            customer_id         INTEGER REFERENCES customer_information(id),
+            customer_name       VARCHAR(100),
+            customer_mobile     VARCHAR(20),
+            guest_count         INTEGER     NOT NULL DEFAULT 1,
+            reservation_date    DATE,
+            reservation_time    TIME,
+            reservation_status  VARCHAR(20) NOT NULL DEFAULT 'RESERVED',
+            notes               TEXT,
+            arrived_at          TIMESTAMP,
+            expires_at          TIMESTAMP,
+            order_session_id    INTEGER REFERENCES order_session(id),
+            is_active           INTEGER   NOT NULL DEFAULT 1,
+            created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by          INTEGER,
+            updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by          INTEGER
+        )"#,
     ];
 
     for stmt in stmts {
@@ -1257,6 +1288,21 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             .await
             .map_err(|e| format!("Schema init error: {e}"))?;
     }
+
+    // Migrations: add columns that may not exist in older deployments
+    sqlx::query(
+        "ALTER TABLE reservation_master ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 120",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (duration_minutes): {e}"))?;
+
+    sqlx::query(
+        "ALTER TABLE reservation_master ADD COLUMN IF NOT EXISTS preferred_waiter_id INTEGER",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (preferred_waiter_id): {e}"))?;
 
     seed_applications(pool).await?;
     seed_module_permissions(pool).await?;
@@ -1801,6 +1847,15 @@ pub fn run() {
             get_bill_summary,
             generate_bill,
             settle_bill,
+            // Billing — reservations
+            get_reservations,
+            get_reservation_by_id,
+            create_reservation,
+            update_reservation,
+            update_reservation_status,
+            cancel_reservation,
+            expire_no_show_reservations,
+            get_employees_for_billing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

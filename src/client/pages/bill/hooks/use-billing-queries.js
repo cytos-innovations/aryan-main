@@ -361,3 +361,107 @@ export function useSettleBill(sessionId) {
     onError: (e) => toast.error(String(e)),
   });
 }
+
+// ─────────────────────────────────────────────────────────────
+// Reservation queries & mutations
+// ─────────────────────────────────────────────────────────────
+
+export function useReservations(filter) {
+  return useQuery({
+    queryKey:        [...BQK.RESERVATIONS, filter ?? "default"],
+    queryFn:         () => billingService.getReservations(filter),
+    staleTime:       0,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useReservationById(reservationId) {
+  return useQuery({
+    queryKey: [...BQK.RESERVATIONS, "detail", reservationId],
+    queryFn:  () => billingService.getReservationById(reservationId),
+    enabled:  !!reservationId,
+  });
+}
+
+export function useCreateReservation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.createReservation,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      toast.success("Reservation created");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+export function useUpdateReservation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ reservationId, ...input }) =>
+      billingService.updateReservation(reservationId, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      toast.success("Reservation updated");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+export function useUpdateReservationStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ reservationId, status }) =>
+      billingService.updateReservationStatus(reservationId, status),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      toast.success("Reservation updated");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+export function useCancelReservation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (reservationId) =>
+      billingService.cancelReservation(reservationId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      toast.success("Reservation cancelled");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+export function useEmployeesForBilling() {
+  return useQuery({
+    queryKey:  ["billing-employees"],
+    queryFn:   billingService.getEmployeesForBilling,
+    staleTime: 300_000,
+  });
+}
+
+export function useExpireNoShowReservations() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.expireNoShowReservations,
+    onSuccess: (count) => {
+      if (count > 0) {
+        qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+        qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+        qc.invalidateQueries({ queryKey: BQK.TABLES });
+        toast.info(`${count} reservation(s) marked as no-show`);
+      }
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}

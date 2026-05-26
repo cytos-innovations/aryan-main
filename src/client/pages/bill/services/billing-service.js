@@ -110,4 +110,55 @@ export const billingService = {
       partPayments:   partPayments   ?? [],
       writeOffAmount: writeOffAmount ?? 0,
     }),
+
+  // ── Reservations ──────────────────────────────────────────────
+
+  getReservations: (filter) =>
+    invoke("get_reservations", { filter: filter ?? null }),
+
+  getReservationById: (reservationId) =>
+    invoke("get_reservation_by_id", { reservationId }),
+
+  createReservation: ({ tableId, customerName, customerMobile, guestCount, reservationDate, reservationTime, durationMinutes, preferredWaiterId, notes }) =>
+    invoke("create_reservation", {
+      input: {
+        table_id:             tableId          ?? null,
+        customer_name:        customerName     ?? null,
+        customer_mobile:      customerMobile   ?? null,
+        guest_count:          guestCount       ?? 1,
+        reservation_date:     reservationDate,
+        reservation_time:     reservationTime,
+        duration_minutes:     durationMinutes  ?? null,
+        preferred_waiter_id:  preferredWaiterId ?? null,
+        notes:                notes            ?? null,
+      },
+    }),
+
+  updateReservation: (reservationId, { tableId, customerName, customerMobile, guestCount, reservationDate, reservationTime, durationMinutes, preferredWaiterId, notes }) =>
+    invoke("update_reservation", {
+      reservationId,
+      input: {
+        table_id:             tableId          ?? null,
+        customer_name:        customerName     ?? null,
+        customer_mobile:      customerMobile   ?? null,
+        guest_count:          guestCount       ?? 1,
+        reservation_date:     reservationDate,
+        reservation_time:     reservationTime,
+        duration_minutes:     durationMinutes  ?? null,
+        preferred_waiter_id:  preferredWaiterId ?? null,
+        notes:                notes            ?? null,
+      },
+    }),
+
+  getEmployeesForBilling: () =>
+    invoke("get_employees_for_billing"),
+
+  updateReservationStatus: (reservationId, status) =>
+    invoke("update_reservation_status", { reservationId, status }),
+
+  cancelReservation: (reservationId) =>
+    invoke("cancel_reservation", { reservationId }),
+
+  expireNoShowReservations: () =>
+    invoke("expire_no_show_reservations"),
 };
