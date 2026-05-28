@@ -375,7 +375,8 @@ function SidebarAutoCollapse({ isBilling }) {
 export default function AppShell() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { refreshPermissions } = useAuth();
+  const { auth, refreshPermissions } = useAuth();
+  const isRestaurant = auth?.application?.id === APP_ID.restaurant;
   const current = flatRoutes.find((r) => r.path === pathname);
   const isBilling = pathname.startsWith("/billing");
 
@@ -402,16 +403,18 @@ export default function AppShell() {
               </BreadcrumbList>
             </Breadcrumb>
             <div className="ml-auto flex items-center gap-2">
-              <Can perm="billing:new-order">
-                <Button
-                  size="sm"
-                  className="h-8 gap-1.5 px-3 text-xs"
-                  onClick={() => navigate("/billing")}
-                >
-                  <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
-                  New Order
-                </Button>
-              </Can>
+              {isRestaurant && (
+                <Can perm="billing:new-order">
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1.5 px-3 text-xs"
+                    onClick={() => navigate("/billing")}
+                  >
+                    <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
+                    New Order
+                  </Button>
+                </Can>
+              )}
               <ThemeToggle />
             </div>
           </header>
