@@ -111,12 +111,12 @@ function calcElapsed(since, now) {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-function useNow() {
+function useNow(intervalMs = 60_000) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(id);
-  }, []);
+  }, [intervalMs]);
   return now;
 }
 
@@ -299,10 +299,17 @@ export default function TableSelectView() {
   const { setSession } = useBillingContext();
   const [search, setSearch] = useState("");
   const [reservationOpen, setReservationOpen] = useState(false);
-  const now = useNow();
 
   const floorQuery = useFloorView();
   const tables = floorQuery.data ?? [];
+
+  // Use a shorter tick interval when any table has an active reservation today
+  // so countdown pills and phase transitions stay visually responsive.
+  const hasActiveReservation = useMemo(
+    () => tables.some((t) => t.reservation_id != null),
+    [tables],
+  );
+  const now = useNow(hasActiveReservation ? 30_000 : 60_000);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return tables;

@@ -1,6 +1,7 @@
 import { Component } from "react";
 import { BillingProvider, useBillingContext } from "./bill/state/billing-context";
 import { BILLING_VIEW } from "./bill/constants/billing";
+import { useReservationAutoExpiry } from "./bill/hooks/use-billing-queries";
 import TableSelectView from "./bill/views/table-select";
 import OrderEntryView from "./bill/views/order-entry";
 
@@ -44,6 +45,8 @@ export default function BillingPage() {
 
 function BillingScreen() {
   const { view } = useBillingContext();
+  // Auto-expire no-show reservations and keep floor data live in all views
+  useReservationAutoExpiry();
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">

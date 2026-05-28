@@ -1,3 +1,4 @@
+import { useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { billingService } from "../services/billing-service";
@@ -354,6 +355,7 @@ export function useSettleBill(sessionId) {
       qc.invalidateQueries({ queryKey: BQK.TABLES });
       qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
       qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
       qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
       toast.success("Bill settled");
@@ -464,4 +466,64 @@ export function useExpireNoShowReservations() {
     },
     onError: (e) => toast.error(String(e)),
   });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reservation auto-expiry watcher
+// Mount once at the BillingScreen root. Checks floor data on every
+// 30s poll cycle + an independent 60s heartbeat.  Calls the
+// expire_no_show backend when any RESERVED table has gone 15 min
+// past its reservation_time without an ARRIVED mark.
+// Debounced with a 55s window so concurrent triggers can't stack.
+// ─────────────────────────────────────────────────────────────
+
+export function useReservationAutoExpiry() {
+  const qc       = useQueryClient();
+  const { data: floorData } = useFloorView();
+  const lastCallRef = useRef(0);
+
+  const checkAndExpire = useCallback(() => {
+    if (!Array.isArray(floorData) || floorData.length === 0) return;
+
+    const now = Date.now();
+    // Debounce: skip if we called within the last 55 s
+    if (now - lastCallRef.current < 55_000) return;
+
+    const hasExpirable = floorData.some((t) => {
+      if (!t.reservation_id || t.reservation_status !== "RESERVED" || !t.reservation_time) return false;
+      const [h, m] = t.reservation_time.split(":").map(Number);
+      if (isNaN(h) || isNaN(m)) return false;
+      const cutoff = new Date(now);
+      cutoff.setHours(h, m, 0, 0);
+      return now >= cutoff.getTime() + 15 * 60_000;
+    });
+
+    if (!hasExpirable) return;
+
+    lastCallRef.current = now;
+    billingService.expireNoShowReservations()
+      .then((count) => {
+        if (Number(count) > 0) {
+          qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+          qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+          qc.invalidateQueries({ queryKey: BQK.TABLES });
+          toast.info(`${count} reservation(s) marked as no-show`);
+        }
+      })
+      .catch(() => {
+        // Reset debounce so the next cycle retries
+        lastCallRef.current = 0;
+      });
+  }, [floorData, qc]);
+
+  // Trigger on every floor-data refresh (primary path — every 30 s poll)
+  useEffect(() => { checkAndExpire(); }, [checkAndExpire]);
+
+  // Stable 60 s heartbeat — catches transitions between poll cycles
+  const cbRef = useRef(checkAndExpire);
+  useEffect(() => { cbRef.current = checkAndExpire; }, [checkAndExpire]);
+  useEffect(() => {
+    const id = setInterval(() => cbRef.current(), 60_000);
+    return () => clearInterval(id);
+  }, []);
 }

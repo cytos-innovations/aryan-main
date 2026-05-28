@@ -1781,6 +1781,22 @@ pub async fn settle_bill(
     .await
     .ok();
 
+    // Complete the linked reservation and record the settled bill_id
+    sqlx::query(
+        "UPDATE reservation_master
+         SET    reservation_status = 'COMPLETED',
+                bill_id    = $2,
+                updated_at = NOW()
+         WHERE  order_session_id = $1
+           AND  reservation_status = 'ARRIVED'
+           AND  is_active = 1",
+    )
+    .bind(session_id)
+    .bind(bill_id)
+    .execute(&pool)
+    .await
+    .ok();
+
     Ok(())
 }
 
@@ -1807,6 +1823,11 @@ pub struct ReservationRow {
     pub order_session_id:      Option<i32>,
     pub preferred_waiter_id:   Option<i32>,
     pub preferred_waiter_name: Option<String>,
+    // Settled bill info (populated after COMPLETED)
+    pub bill_id:               Option<i32>,
+    pub bill_no:               Option<String>,
+    pub bill_net_amount:       Option<f64>,
+    pub bill_status:           Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1932,6 +1953,10 @@ fn map_reservation_row(r: &sqlx::postgres::PgRow) -> ReservationRow {
         order_session_id:      r.try_get("order_session_id").ok().flatten(),
         preferred_waiter_id:   r.try_get("preferred_waiter_id").ok().flatten(),
         preferred_waiter_name: r.try_get("preferred_waiter_name").ok().flatten(),
+        bill_id:               r.try_get("bill_id").ok().flatten(),
+        bill_no:               r.try_get("bill_no").ok().flatten(),
+        bill_net_amount:       r.try_get::<Option<f64>, _>("bill_net_amount").ok().flatten(),
+        bill_status:           r.try_get("bill_status").ok().flatten(),
     }
 }
 
@@ -1947,11 +1972,16 @@ const RESERVATION_SELECT: &str =
             rm.notes, rm.arrived_at, rm.expires_at,
             rm.order_session_id,
             rm.preferred_waiter_id,
-            pw.name AS preferred_waiter_name
+            pw.name AS preferred_waiter_name,
+            rm.bill_id,
+            bm.bill_no,
+            bm.net_amount::float8 AS bill_net_amount,
+            bm.bill_status
      FROM   reservation_master rm
      LEFT JOIN restaurant_table rt     ON rt.id = rm.table_id
      LEFT JOIN table_group tg          ON tg.id = rt.table_group_id
-     LEFT JOIN employee_information pw ON pw.id = rm.preferred_waiter_id";
+     LEFT JOIN employee_information pw ON pw.id = rm.preferred_waiter_id
+     LEFT JOIN bill_master bm          ON bm.id = rm.bill_id";
 
 // ── Commands ──────────────────────────────────────────────────
 
@@ -1972,7 +2002,7 @@ pub async fn get_reservations(
     let sql = format!(
         "{RESERVATION_SELECT}
          WHERE  rm.is_active = 1
-           AND  rm.reservation_status NOT IN ('COMPLETED', 'CANCELLED', 'NO_SHOW')
+           AND  rm.reservation_status != 'CANCELLED'
            {date_clause}
          ORDER  BY rm.reservation_date, rm.reservation_time"
     );
@@ -2341,7 +2371,7 @@ pub async fn expire_no_show_reservations(
          WHERE  reservation_status = 'RESERVED'
            AND  reservation_date   = CURRENT_DATE
            AND  is_active          = 1
-           AND  expires_at         < NOW()",
+           AND  (reservation_date::date + reservation_time::time) + INTERVAL '15 minutes' < NOW()",
     )
     .execute(&mut *tx)
     .await

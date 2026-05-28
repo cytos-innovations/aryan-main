@@ -13,6 +13,8 @@ import {
   AlertCircleIcon,
   Refresh01Icon,
   PencilEdit01Icon,
+  EyeIcon,
+  Invoice03Icon,
 } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 
@@ -72,6 +74,11 @@ const RES_STATUS_CFG = {
     dot:   "bg-red-400",
     badge: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
     label: "No Show",
+  },
+  COMPLETED: {
+    dot:   "bg-slate-400",
+    badge: "bg-slate-100 text-slate-600 dark:bg-slate-800/50 dark:text-slate-400",
+    label: "Completed",
   },
 };
 
@@ -759,9 +766,97 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
   );
 }
 
+// ─── Bill View Dialog ─────────────────────────────────────────
+
+function BillViewDialog({ reservation, onClose }) {
+  if (!reservation) return null;
+
+  const isPaid = reservation.bill_status === "PAID";
+
+  return (
+    <Dialog open={!!reservation} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-xs">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <HugeiconsIcon icon={Invoice03Icon} size={16} strokeWidth={2} className="text-muted-foreground" />
+            Bill Summary
+          </DialogTitle>
+          <DialogDescription>
+            {reservation.customer_name ?? "Walk-in"}{reservation.table_name ? ` · ${reservation.table_name}` : ""}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-2.5 text-sm py-1">
+          {reservation.bill_no && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">Bill No.</span>
+              <span className="font-semibold font-mono">{reservation.bill_no}</span>
+            </div>
+          )}
+          {reservation.bill_id && !reservation.bill_no && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">Bill ID</span>
+              <span className="font-semibold font-mono">#{reservation.bill_id}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground text-xs">Guest</span>
+            <span className="font-medium">{reservation.customer_name ?? "Walk-in"}</span>
+          </div>
+          {reservation.table_name && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">Table</span>
+              <span className="font-medium">{reservation.table_name}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground text-xs">Covers</span>
+            <span className="font-medium">{reservation.guest_count}</span>
+          </div>
+          {reservation.reservation_date && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">Date</span>
+              <span className="font-medium">{fmtDate(reservation.reservation_date)}</span>
+            </div>
+          )}
+
+          {reservation.bill_net_amount != null && (
+            <div className="flex items-center justify-between border-t pt-2.5 mt-2">
+              <span className="font-semibold">Total</span>
+              <span className="text-xl font-bold tabular-nums">
+                ₹{Number(reservation.bill_net_amount).toFixed(2)}
+              </span>
+            </div>
+          )}
+
+          {reservation.bill_status && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">Payment</span>
+              <span className={cn(
+                "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                isPaid
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+              )}>
+                {isPaid ? "Paid" : reservation.bill_status}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" className="w-full" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Reservation Card ─────────────────────────────────────────
 
-function ReservationCard({ res, onStatusChange, onCancel, onEdit }) {
+function ReservationCard({ res, onStatusChange, onCancel, onEdit, onViewBill }) {
   const cfg   = RES_STATUS_CFG[res.reservation_status] ?? RES_STATUS_CFG.RESERVED;
   const today = isToday(res.reservation_date);
 
@@ -871,6 +966,40 @@ function ReservationCard({ res, onStatusChange, onCancel, onEdit }) {
           </Button>
         </div>
       )}
+
+      {res.reservation_status === "COMPLETED" && res.bill_id && (
+        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-border/50 mt-0.5">
+          <div className="flex items-center gap-2 text-[11px]">
+            {res.bill_no && (
+              <span className="text-muted-foreground font-mono">#{res.bill_no}</span>
+            )}
+            {res.bill_net_amount != null && (
+              <span className="font-bold text-foreground tabular-nums">
+                ₹{Number(res.bill_net_amount).toFixed(2)}
+              </span>
+            )}
+            {res.bill_status && (
+              <span className={cn(
+                "rounded-full px-1.5 py-0.5 text-[9px] font-semibold",
+                res.bill_status === "PAID"
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
+              )}>
+                {res.bill_status === "PAID" ? "Paid" : res.bill_status}
+              </span>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 shrink-0 text-muted-foreground/60 hover:text-primary hover:bg-primary/10"
+            onClick={() => onViewBill?.(res)}
+            title="View bill"
+          >
+            <HugeiconsIcon icon={EyeIcon} size={13} strokeWidth={2} />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -878,19 +1007,20 @@ function ReservationCard({ res, onStatusChange, onCancel, onEdit }) {
 // ─── Reservation List ─────────────────────────────────────────
 
 const STATUS_FILTERS = [
-  { value: "ALL",      label: "All" },
-  { value: "RESERVED", label: "Reserved" },
-  { value: "ARRIVED",  label: "Arrived" },
-  { value: "NO_SHOW",  label: "No Show" },
+  { value: "ALL",       label: "All Statuses" },
+  { value: "RESERVED",  label: "Reserved" },
+  { value: "ARRIVED",   label: "Arrived" },
+  { value: "NO_SHOW",   label: "No Show" },
+  { value: "COMPLETED", label: "Completed" },
 ];
 
 const DATE_FILTERS = [
-  { value: "ALL",      label: "All" },
+  { value: "ALL",      label: "All Dates" },
   { value: "TODAY",    label: "Today" },
   { value: "UPCOMING", label: "Upcoming" },
 ];
 
-function ReservationList({ reservations, isLoading, onStatusChange, onCancel, onEdit }) {
+function ReservationList({ reservations, isLoading, onStatusChange, onCancel, onEdit, onViewBill }) {
   const [search,       setSearch]       = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [dateFilter,   setDateFilter]   = useState("ALL");
@@ -954,45 +1084,33 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
           />
         </div>
 
-        {/* Filter chips */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Date filter */}
-          <div className="flex items-center gap-1">
-            {DATE_FILTERS.map((f) => (
-              <button
-                key={f.value}
-                type="button"
-                onClick={() => setDateFilter(f.value)}
-                className={cn(
-                  "h-6 px-2 rounded-full text-[10px] font-medium transition-colors",
-                  dateFilter === f.value
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80",
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <div className="w-px h-4 bg-border shrink-0" />
-          {/* Status filter */}
-          <div className="flex items-center gap-1">
-            {STATUS_FILTERS.map((f) => (
-              <button
-                key={f.value}
-                type="button"
-                onClick={() => setStatusFilter(f.value)}
-                className={cn(
-                  "h-6 px-2 rounded-full text-[10px] font-medium transition-colors",
-                  statusFilter === f.value
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80",
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
+        {/* Filter dropdowns */}
+        <div className="flex items-center gap-2">
+          <Select value={dateFilter} onValueChange={setDateFilter}>
+            <SelectTrigger className="h-8 text-xs flex-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DATE_FILTERS.map((f) => (
+                <SelectItem key={f.value} value={f.value} className="text-xs">
+                  {f.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-8 text-xs flex-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_FILTERS.map((f) => (
+                <SelectItem key={f.value} value={f.value} className="text-xs">
+                  {f.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -1019,7 +1137,7 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
                   <div className="flex-1 h-px bg-border" />
                 </div>
                 {today.map((r) => (
-                  <ReservationCard key={r.id} res={r} onStatusChange={onStatusChange} onCancel={onCancel} onEdit={onEdit} />
+                  <ReservationCard key={r.id} res={r} onStatusChange={onStatusChange} onCancel={onCancel} onEdit={onEdit} onViewBill={onViewBill} />
                 ))}
               </div>
             )}
@@ -1033,7 +1151,7 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
                   <div className="flex-1 h-px bg-border" />
                 </div>
                 {upcoming.map((r) => (
-                  <ReservationCard key={r.id} res={r} onStatusChange={onStatusChange} onCancel={onCancel} onEdit={onEdit} />
+                  <ReservationCard key={r.id} res={r} onStatusChange={onStatusChange} onCancel={onCancel} onEdit={onEdit} onViewBill={onViewBill} />
                 ))}
               </div>
             )}
@@ -1047,9 +1165,10 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
 // ─── Main Panel ───────────────────────────────────────────────
 
 export default function ReservationPanel({ open, onOpenChange }) {
-  const [showForm, setShowForm]         = useState(false);
-  const [editTarget, setEditTarget]     = useState(null);
-  const [cancelTarget, setCancelTarget] = useState(null);
+  const [showForm, setShowForm]           = useState(false);
+  const [editTarget, setEditTarget]       = useState(null);
+  const [cancelTarget, setCancelTarget]   = useState(null);
+  const [billViewTarget, setBillViewTarget] = useState(null);
 
   const resQuery       = useReservations();
   const floorQuery     = useFloorView();
@@ -1150,11 +1269,15 @@ export default function ReservationPanel({ open, onOpenChange }) {
                 onStatusChange={handleStatusChange}
                 onCancel={(res) => setCancelTarget(res)}
                 onEdit={(res) => setEditTarget(res)}
+                onViewBill={(res) => setBillViewTarget(res)}
               />
             )}
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Bill view dialog */}
+      <BillViewDialog reservation={billViewTarget} onClose={() => setBillViewTarget(null)} />
 
       {/* Cancel confirmation */}
       <AlertDialog open={!!cancelTarget} onOpenChange={(o) => { if (!o) setCancelTarget(null); }}>
