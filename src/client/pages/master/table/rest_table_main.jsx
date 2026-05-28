@@ -142,51 +142,69 @@ export default function RestaurantTable() {
 
   const columns = useMemo(() => [
     {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
-    {
       accessorKey: "code",
-      header: "Code",
-      size: 90,
+      header: ({ column }) => (
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
+      ),
+      size: 70,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code ?? "—"}
+          </span>
+        </div>
+      ),
       meta: { label: "Code" },
     },
     {
       accessorKey: "table_name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Table Name" />,
+      cell: ({ row }) => <span className="font-medium">{row.original.table_name}</span>,
       meta: { label: "Table Name" },
     },
     {
       accessorKey: "group_name",
       header: "Group",
+      size: 160,
       cell: ({ row }) => row.original.group_name
-        ? row.original.group_name
+        ? <span className="text-sm">{row.original.group_name}</span>
         : <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Group" },
     },
     {
       accessorKey: "applicable_rate",
-      header: "Rate Applied",
-      size: 100,
-      cell: ({ row }) => `Rate ${row.original.applicable_rate}`,
-      meta: { label: "Rate Applied" },
+      header: () => <div className="text-center">Rate</div>,
+      size: 90,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="rounded-sm bg-muted px-1.5 py-0.5 text-xs font-medium">
+            Rate {row.original.applicable_rate}
+          </span>
+        </div>
+      ),
+      meta: { label: "Rate" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       size: 80,
       cell: ({ row }) => (
-        <Switch size="sm" checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending} />
+        <div className="flex justify-center">
+          <Switch size="sm" checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending} />
+        </div>
       ),
       meta: { label: "Active" },
     },
     {
-      id: "actions", header: "Actions", size: 90,
+      id: "actions",
+      header: () => <div className="text-center">Actions</div>,
+      size: 90,
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
+        <div className="flex justify-center items-center gap-0.5">
           <Can perm="restaurant-table:update">
             <Tooltip>
               <TooltipTrigger asChild>

@@ -177,86 +177,139 @@ export default function MenuCardPage() {
   const columns = useMemo(() => [
     {
       accessorKey: "code",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Code" />,
-      size: 80,
+      header: ({ column }) => (
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
+      ),
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code}
+          </span>
+        </div>
+      ),
+      size: 70,
       meta: { label: "Code" },
     },
     {
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Item Name" />,
+      cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
       meta: { label: "Item Name" },
     },
     {
       accessorKey: "menu_alias",
       header: "Alias",
       cell: ({ row }) =>
-        row.original.menu_alias ?? <span className="text-muted-foreground text-xs">—</span>,
+        row.original.menu_alias
+          ? <span className="text-sm">{row.original.menu_alias}</span>
+          : <span className="text-muted-foreground text-xs">—</span>,
+      size: 120,
       meta: { label: "Alias" },
     },
     {
       accessorKey: "food_type_name",
       header: "Food Type",
       cell: ({ row }) =>
-        row.original.food_type_name ?? <span className="text-muted-foreground text-xs">—</span>,
+        row.original.food_type_name
+          ? <span className="text-sm">{row.original.food_type_name}</span>
+          : <span className="text-muted-foreground text-xs">—</span>,
+      size: 120,
       meta: { label: "Food Type" },
     },
     {
       accessorKey: "menu_group_name",
       header: "Group",
       cell: ({ row }) =>
-        row.original.menu_group_name ?? <span className="text-muted-foreground text-xs">—</span>,
+        row.original.menu_group_name
+          ? <span className="text-sm">{row.original.menu_group_name}</span>
+          : <span className="text-muted-foreground text-xs">—</span>,
+      size: 130,
       meta: { label: "Group" },
     },
     {
       accessorKey: "rate_1",
-      header: "Rate 1",
-      size: 80,
-      cell: ({ row }) => row.original.rate_1.toFixed(2),
+      header: () => <div className="text-right pr-1">Rate 1</div>,
+      size: 90,
+      cell: ({ row }) => (
+        <div className="text-right pr-1 font-mono text-sm tabular-nums">
+          {row.original.rate_1.toFixed(2)}
+        </div>
+      ),
       meta: { label: "Rate 1" },
     },
     {
       accessorKey: "rate_2",
-      header: "Rate 2",
-      size: 80,
-      cell: ({ row }) => row.original.rate_2.toFixed(2),
+      header: () => <div className="text-right pr-1">Rate 2</div>,
+      size: 90,
+      cell: ({ row }) => (
+        <div className="text-right pr-1 font-mono text-sm tabular-nums">
+          {row.original.rate_2 > 0
+            ? row.original.rate_2.toFixed(2)
+            : <span className="text-muted-foreground text-xs">—</span>}
+        </div>
+      ),
       meta: { label: "Rate 2" },
     },
     {
       accessorKey: "rate_3",
-      header: "Rate 3",
-      size: 80,
-      cell: ({ row }) => row.original.rate_3.toFixed(2),
+      header: () => <div className="text-right pr-1">Rate 3</div>,
+      size: 90,
+      cell: ({ row }) => (
+        <div className="text-right pr-1 font-mono text-sm tabular-nums">
+          {row.original.rate_3 > 0
+            ? row.original.rate_3.toFixed(2)
+            : <span className="text-muted-foreground text-xs">—</span>}
+        </div>
+      ),
       meta: { label: "Rate 3" },
     },
     {
       accessorKey: "rate_4",
-      header: "Rate 4",
-      size: 80,
-      cell: ({ row }) => row.original.rate_4.toFixed(2),
+      header: () => <div className="text-right pr-1">Rate 4</div>,
+      size: 90,
+      cell: ({ row }) => (
+        <div className="text-right pr-1 font-mono text-sm tabular-nums">
+          {row.original.rate_4 > 0
+            ? row.original.rate_4.toFixed(2)
+            : <span className="text-muted-foreground text-xs">—</span>}
+        </div>
+      ),
       meta: { label: "Rate 4" },
     },
     {
       accessorKey: "rate_5",
-      header: "Rate 5",
-      size: 80,
-      cell: ({ row }) => row.original.rate_5.toFixed(2),
+      header: () => <div className="text-right pr-1">Rate 5</div>,
+      size: 90,
+      cell: ({ row }) => (
+        <div className="text-right pr-1 font-mono text-sm tabular-nums">
+          {row.original.rate_5 > 0
+            ? row.original.rate_5.toFixed(2)
+            : <span className="text-muted-foreground text-xs">—</span>}
+        </div>
+      ),
       meta: { label: "Rate 5" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       size: 80,
       cell: ({ row }) => (
-        <Switch size="sm" checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending} />
+        <div className="flex justify-center">
+          <Switch size="sm" checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending} />
+        </div>
       ),
       meta: { label: "Active" },
     },
     {
-      id: "actions", header: "Actions", size: 90,
+      id: "actions",
+      header: () => <div className="text-center">Actions</div>,
+      size: 90,
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
+        <div className="flex justify-center items-center gap-0.5">
           <Can perm="menu-card:update">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -293,7 +346,12 @@ export default function MenuCardPage() {
             <DataTable
               columns={columns} data={query.data?.data ?? []} total={query.data?.total ?? 0}
               state={qs} onStateChange={setQs} loading={query.isLoading}
-              initialColumnVisibility={{ rate_4: false, rate_5: false }}
+              initialColumnVisibility={{
+                menu_alias: false,
+                menu_group_name: false,
+                rate_4: false,
+                rate_5: false,
+              }}
               searchPlaceholder="Search by item name…" emptyText="No menu items found."
               toolbar={
                 <>

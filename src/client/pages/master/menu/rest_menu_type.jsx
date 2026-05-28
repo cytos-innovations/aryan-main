@@ -91,8 +91,8 @@ export default function FoodType() {
     },
     {
       accessorKey: "name",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Food Type Name" />,
-      meta: { label: "Food Type Name" },
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Food Type" />,
+      meta: { label: "Food Type" },
     },
     {
       accessorKey: "is_active",
@@ -173,7 +173,7 @@ export default function FoodType() {
           </DialogHeader>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-3">
                 <Field>
                   <FieldLabel>Code</FieldLabel>
                   <Input
@@ -181,16 +181,20 @@ export default function FoodType() {
                     min="1"
                     value={form.code}
                     onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                    placeholder={dialog.mode === "create" ? "Auto" : ""}
+                    placeholder={dialog.mode === "create" ? "Auto-generated" : ""}
                     readOnly={dialog.mode === "edit"}
                     className={dialog.mode === "edit" ? "bg-muted" : ""}
                   />
                 </Field>
                 <Field>
-                  <FieldLabel>Food Type Name <span className="text-destructive">*</span></FieldLabel>
-                  <Input value={form.name} maxLength={50}
+                  <FieldLabel>Food Type <span className="text-destructive">*</span></FieldLabel>
+                  <Input
+                    value={form.name}
+                    maxLength={50}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    placeholder="e.g. Vegetarian" required />
+                    placeholder="e.g. Vegetarian"
+                    required
+                  />
                 </Field>
               </div>
             </FieldGroup>

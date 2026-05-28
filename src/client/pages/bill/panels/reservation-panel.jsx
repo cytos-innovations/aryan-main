@@ -29,6 +29,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -771,84 +777,107 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
 function BillViewDialog({ reservation, onClose }) {
   if (!reservation) return null;
 
-  const isPaid = reservation.bill_status === "PAID";
+  const isPaid    = reservation.bill_status === "PAID";
+  const isDue     = reservation.bill_status === "DUE";
+  const netAmount = Number(reservation.bill_net_amount ?? 0);
 
   return (
     <Dialog open={!!reservation} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-xs">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <HugeiconsIcon icon={Invoice03Icon} size={16} strokeWidth={2} className="text-muted-foreground" />
-            Bill Summary
-          </DialogTitle>
-          <DialogDescription>
-            {reservation.customer_name ?? "Walk-in"}{reservation.table_name ? ` · ${reservation.table_name}` : ""}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-sm p-0 overflow-hidden gap-0">
 
-        <div className="space-y-2.5 text-sm py-1">
-          {reservation.bill_no && (
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-xs">Bill No.</span>
-              <span className="font-semibold font-mono">{reservation.bill_no}</span>
-            </div>
+        {/* ── Receipt Header ── */}
+        <div className="bg-primary/5 border-b px-5 py-4 text-center space-y-0.5">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold tracking-tight">
+              Bill Receipt
+            </DialogTitle>
+          </DialogHeader>
+          {(reservation.bill_no || reservation.bill_id) && (
+            <p className="text-[11px] text-muted-foreground font-mono">
+              #{reservation.bill_no ?? reservation.bill_id}
+            </p>
           )}
-          {reservation.bill_id && !reservation.bill_no && (
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-xs">Bill ID</span>
-              <span className="font-semibold font-mono">#{reservation.bill_id}</span>
-            </div>
+          {reservation.reservation_date && (
+            <p className="text-[11px] text-muted-foreground">
+              {fmtDate(reservation.reservation_date)}
+              {reservation.reservation_time ? ` · ${fmtTime(reservation.reservation_time)}` : ""}
+            </p>
           )}
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground text-xs">Guest</span>
-            <span className="font-medium">{reservation.customer_name ?? "Walk-in"}</span>
+        </div>
+
+        {/* ── Guest & Table Info ── */}
+        <div className="px-5 py-3 border-b space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+              <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} />
+              Guest
+            </div>
+            <span className="font-medium text-sm">{reservation.customer_name ?? "Walk-in"}</span>
           </div>
           {reservation.table_name && (
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-xs">Table</span>
-              <span className="font-medium">{reservation.table_name}</span>
+              <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                <HugeiconsIcon icon={TableIcon} size={11} strokeWidth={2} />
+                Table
+              </div>
+              <span className="font-medium text-sm">{reservation.table_name}</span>
             </div>
           )}
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground text-xs">Covers</span>
-            <span className="font-medium">{reservation.guest_count}</span>
+            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+              <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
+              Covers
+            </div>
+            <span className="font-medium text-sm">{reservation.guest_count} {reservation.guest_count === 1 ? "Guest" : "Guests"}</span>
           </div>
-          {reservation.reservation_date && (
+          {reservation.preferred_waiter_name && (
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-xs">Date</span>
-              <span className="font-medium">{fmtDate(reservation.reservation_date)}</span>
-            </div>
-          )}
-
-          {reservation.bill_net_amount != null && (
-            <div className="flex items-center justify-between border-t pt-2.5 mt-2">
-              <span className="font-semibold">Total</span>
-              <span className="text-xl font-bold tabular-nums">
-                ₹{Number(reservation.bill_net_amount).toFixed(2)}
-              </span>
-            </div>
-          )}
-
-          {reservation.bill_status && (
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-xs">Payment</span>
-              <span className={cn(
-                "rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                isPaid
-                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
-                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
-              )}>
-                {isPaid ? "Paid" : reservation.bill_status}
-              </span>
+              <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} />
+                Waiter
+              </div>
+              <span className="font-medium text-sm">{reservation.preferred_waiter_name}</span>
             </div>
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" className="w-full" onClick={onClose}>
+        {/* ── Dashed divider ── */}
+        <div className="px-5 py-2">
+          <div className="border-t border-dashed border-border" />
+        </div>
+
+        {/* ── Amount Block ── */}
+        <div className="px-5 pb-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Bill Total</span>
+            <span className="text-2xl font-bold tabular-nums tracking-tight">
+              ₹{netAmount.toFixed(2)}
+            </span>
+          </div>
+
+          {/* Payment status pill */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Status</span>
+            <span className={cn(
+              "rounded-full px-3 py-1 text-[11px] font-semibold",
+              isPaid
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                : isDue
+                  ? "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300"
+                  : "bg-muted text-muted-foreground",
+            )}>
+              {isPaid ? "✓ Paid" : isDue ? "Due" : reservation.bill_status ?? "—"}
+            </span>
+          </div>
+        </div>
+
+        {/* ── Footer ── */}
+        <div className="px-5 pb-4 pt-1 border-t bg-muted/20">
+          <Button variant="outline" className="w-full h-8 text-xs" onClick={onClose}>
             Close
           </Button>
-        </DialogFooter>
+        </div>
+
       </DialogContent>
     </Dialog>
   );

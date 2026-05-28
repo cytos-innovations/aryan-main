@@ -10,7 +10,6 @@ import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/compone
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -123,34 +122,48 @@ export default function KitchenSection() {
   const columns = useMemo(() => [
     {
       accessorKey: "code",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Code" />,
-      size: 90,
+      header: ({ column }) => (
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
+      ),
+      size: 70,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code}
+          </span>
+        </div>
+      ),
       meta: { label: "Code" },
     },
     {
       accessorKey: "name",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Name" />,
-      meta: { label: "Name" },
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Section Name" />,
+      cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      meta: { label: "Section Name" },
     },
     {
       accessorKey: "is_print_enabled",
-      header: "Print Enabled",
-      size: 110,
+      header: () => <div className="text-center">Print</div>,
+      size: 80,
       cell: ({ row }) => (
-        <span className={row.original.is_print_enabled ? "text-green-600" : "text-muted-foreground"}>
-          {row.original.is_print_enabled ? "Yes" : "No"}
-        </span>
+        <div className="text-center">
+          <span className={`text-xs font-semibold ${row.original.is_print_enabled ? "text-green-600" : "text-muted-foreground"}`}>
+            {row.original.is_print_enabled ? "Yes" : "No"}
+          </span>
+        </div>
       ),
-      meta: { label: "Print Enabled" },
+      meta: { label: "Print" },
     },
     {
       accessorKey: "printer_name",
       header: "Printer Name",
-      size: 140,
+      size: 150,
       cell: ({ row }) =>
-        row.original.printer_name ?? (
-          <span className="text-muted-foreground text-xs">—</span>
-        ),
+        row.original.printer_name
+          ? <span className="text-sm">{row.original.printer_name}</span>
+          : <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Printer Name" },
     },
     {
@@ -158,31 +171,33 @@ export default function KitchenSection() {
       header: "Printer Type",
       size: 120,
       cell: ({ row }) =>
-        row.original.printer_type ?? (
-          <span className="text-muted-foreground text-xs">—</span>
-        ),
+        row.original.printer_type
+          ? <span className="text-sm">{row.original.printer_type}</span>
+          : <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Printer Type" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       size: 80,
       cell: ({ row }) => (
-        <Switch
-          size="sm"
-          checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending}
-        />
+        <div className="flex justify-center">
+          <Switch
+            size="sm"
+            checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending}
+          />
+        </div>
       ),
       meta: { label: "Active" },
     },
     {
       id: "actions",
-      header: "Actions",
+      header: () => <div className="text-center">Actions</div>,
       size: 90,
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
+        <div className="flex justify-center items-center gap-0.5">
           <Can perm="kitchen-section:update">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -230,6 +245,7 @@ export default function KitchenSection() {
               loading={query.isLoading}
               searchPlaceholder="Search by name…"
               emptyText="No kitchen sections found."
+              initialColumnVisibility={{ printer_name: false, printer_type: false }}
               toolbar={
                 <Can perm="kitchen-section:add">
                   <Button size="sm" onClick={openCreate}>
@@ -258,8 +274,8 @@ export default function KitchenSection() {
 
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              {/* Row 1 — Code | Name */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Row 1 — Code (narrow) | Section Name (wide) */}
+              <div className="grid grid-cols-3 gap-3">
                 <Field>
                   <FieldLabel>Code</FieldLabel>
                   <Input
@@ -267,10 +283,12 @@ export default function KitchenSection() {
                     min="1"
                     value={form.code}
                     onChange={(e) => setF("code", e.target.value)}
-                    placeholder={dialog.mode === "create" ? "Auto" : ""}
+                    placeholder={dialog.mode === "create" ? "Auto-generated" : ""}
+                    readOnly={dialog.mode === "edit"}
+                    className={dialog.mode === "edit" ? "bg-muted" : ""}
                   />
                 </Field>
-                <Field>
+                <Field className="col-span-2">
                   <FieldLabel>
                     Section Name <span className="text-destructive">*</span>
                   </FieldLabel>
@@ -279,45 +297,47 @@ export default function KitchenSection() {
                     maxLength={50}
                     onChange={(e) => setF("name", e.target.value)}
                     placeholder="e.g. Main Kitchen"
+                    autoFocus
                     required
                   />
                 </Field>
               </div>
 
-              {/* Row 2 — Print Enabled | Printer Name | Printer Type */}
-              <div className="grid grid-cols-3 gap-3">
-                <Field>
-                  <FieldLabel>Print Enabled</FieldLabel>
-                  <Select value={form.isPrintEnabled} onValueChange={(v) => setF("isPrintEnabled", v)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">Yes</SelectItem>
-                      <SelectItem value="0">No</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>Printer Name</FieldLabel>
-                  <Input
-                    value={form.printerName}
-                    maxLength={50}
-                    onChange={(e) => setF("printerName", e.target.value)}
-                    placeholder="e.g. Kitchen_LP1"
-                    disabled={form.isPrintEnabled === "0"}
+              {/* Print settings */}
+              <div className="rounded-md border p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Print Enabled</p>
+                    <p className="text-xs text-muted-foreground">Send KOT prints to this section</p>
+                  </div>
+                  <Switch
+                    checked={form.isPrintEnabled === "1"}
+                    onCheckedChange={(v) => setF("isPrintEnabled", v ? "1" : "0")}
                   />
-                </Field>
-                <Field>
-                  <FieldLabel>Printer Type</FieldLabel>
-                  <Input
-                    value={form.printerType}
-                    maxLength={20}
-                    onChange={(e) => setF("printerType", e.target.value)}
-                    placeholder="e.g. Thermal"
-                    disabled={form.isPrintEnabled === "0"}
-                  />
-                </Field>
+                </div>
+
+                {form.isPrintEnabled === "1" && (
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <Field>
+                      <FieldLabel>Printer Name</FieldLabel>
+                      <Input
+                        value={form.printerName}
+                        maxLength={50}
+                        onChange={(e) => setF("printerName", e.target.value)}
+                        placeholder="e.g. Kitchen_LP1"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel>Printer Type</FieldLabel>
+                      <Input
+                        value={form.printerType}
+                        maxLength={20}
+                        onChange={(e) => setF("printerType", e.target.value)}
+                        placeholder="e.g. Thermal"
+                      />
+                    </Field>
+                  </div>
+                )}
               </div>
             </FieldGroup>
 

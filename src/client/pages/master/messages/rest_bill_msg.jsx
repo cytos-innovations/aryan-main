@@ -109,54 +109,73 @@ export default function BillMessage() {
 
   const columns = useMemo(() => [
     {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
-    {
       accessorKey: "code",
-      header: "Code",
-      size: 90,
+      header: ({ column }) => (
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
+      ),
+      size: 70,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code ?? "—"}
+          </span>
+        </div>
+      ),
       meta: { label: "Code" },
     },
     {
       accessorKey: "message_text",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Message" />,
+      cell: ({ row }) => <span className="font-medium">{row.original.message_text}</span>,
       meta: { label: "Message" },
     },
     {
       accessorKey: "valid_from",
-      header: "From Date",
-      size: 110,
-      cell: ({ row }) => row.original.valid_from
-        ? row.original.valid_from
-        : <span className="text-muted-foreground text-xs">—</span>,
+      header: () => <div className="text-center">From Date</div>,
+      size: 120,
+      cell: ({ row }) => (
+        <div className="text-center">
+          {row.original.valid_from
+            ? <span className="text-sm tabular-nums">{row.original.valid_from}</span>
+            : <span className="text-muted-foreground text-xs">—</span>}
+        </div>
+      ),
       meta: { label: "From Date" },
     },
     {
       accessorKey: "valid_to",
-      header: "To Date",
-      size: 110,
-      cell: ({ row }) => row.original.valid_to
-        ? row.original.valid_to
-        : <span className="text-muted-foreground text-xs">—</span>,
+      header: () => <div className="text-center">To Date</div>,
+      size: 120,
+      cell: ({ row }) => (
+        <div className="text-center">
+          {row.original.valid_to
+            ? <span className="text-sm tabular-nums">{row.original.valid_to}</span>
+            : <span className="text-muted-foreground text-xs">—</span>}
+        </div>
+      ),
       meta: { label: "To Date" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       size: 80,
       cell: ({ row }) => (
-        <Switch size="sm" checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending} />
+        <div className="flex justify-center">
+          <Switch size="sm" checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending} />
+        </div>
       ),
       meta: { label: "Active" },
     },
     {
-      id: "actions", header: "Actions", size: 90,
+      id: "actions",
+      header: () => <div className="text-center">Actions</div>,
+      size: 90,
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
+        <div className="flex justify-center items-center gap-0.5">
           <Can perm="bill-message:update">
             <Tooltip>
               <TooltipTrigger asChild>

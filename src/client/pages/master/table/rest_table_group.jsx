@@ -34,10 +34,6 @@ const RATE_OPTIONS = [
   { value: "5", label: "Rate 5" },
 ];
 
-const YN_OPTIONS = [
-  { value: "Y", label: "Yes" },
-  { value: "N", label: "No" },
-];
 
 const EMPTY = {
   code: "",
@@ -159,79 +155,113 @@ export default function TableGroup() {
 
   const columns = useMemo(() => [
     {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
-    {
       accessorKey: "code",
-      header: "Code",
-      size: 90,
+      header: ({ column }) => (
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
+      ),
+      size: 70,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code ?? "—"}
+          </span>
+        </div>
+      ),
       meta: { label: "Code" },
     },
     {
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Group Name" />,
+      cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
       meta: { label: "Group Name" },
     },
     {
       accessorKey: "applicable_rate",
-      header: "Rate",
-      size: 70,
-      cell: ({ row }) => `Rate ${row.original.applicable_rate}`,
+      header: () => <div className="text-center">Rate</div>,
+      size: 80,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="rounded-sm bg-muted px-1.5 py-0.5 text-xs font-medium">
+            Rate {row.original.applicable_rate}
+          </span>
+        </div>
+      ),
       meta: { label: "Rate" },
     },
     {
       accessorKey: "service_printer_name",
       header: "Service Printer",
+      size: 150,
       cell: ({ row }) => row.original.service_printer_name
-        ? row.original.service_printer_name
+        ? <span className="text-sm">{row.original.service_printer_name}</span>
         : <span className="text-muted-foreground text-xs">—</span>,
       meta: { label: "Service Printer" },
     },
     {
+      accessorKey: "is_tax_applicable",
+      header: () => <div className="text-center">Tax</div>,
+      size: 75,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <YNBadge value={row.original.is_tax_applicable} />
+        </div>
+      ),
+      meta: { label: "Tax" },
+    },
+    {
       accessorKey: "allow_incentive",
-      header: "Incentive",
-      size: 80,
-      cell: ({ row }) => <YNBadge value={row.original.allow_incentive} />,
+      header: () => <div className="text-center">Incentive</div>,
+      size: 85,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <YNBadge value={row.original.allow_incentive} />
+        </div>
+      ),
       meta: { label: "Incentive" },
     },
     {
       accessorKey: "is_home_delivery",
-      header: "Home Del.",
-      size: 80,
-      cell: ({ row }) => <YNBadge value={row.original.is_home_delivery} />,
+      header: () => <div className="text-center">Home Del.</div>,
+      size: 85,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <YNBadge value={row.original.is_home_delivery} />
+        </div>
+      ),
       meta: { label: "Home Del." },
     },
     {
-      accessorKey: "is_tax_applicable",
-      header: "Tax",
-      size: 70,
-      cell: ({ row }) => <YNBadge value={row.original.is_tax_applicable} />,
-      meta: { label: "Tax" },
-    },
-    {
       accessorKey: "is_takeaway_enabled",
-      header: "Takeaway",
-      size: 80,
-      cell: ({ row }) => <YNBadge value={row.original.is_takeaway_enabled} />,
+      header: () => <div className="text-center">Takeaway</div>,
+      size: 85,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <YNBadge value={row.original.is_takeaway_enabled} />
+        </div>
+      ),
       meta: { label: "Takeaway" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       size: 80,
       cell: ({ row }) => (
-        <Switch size="sm" checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending} />
+        <div className="flex justify-center">
+          <Switch size="sm" checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending} />
+        </div>
       ),
       meta: { label: "Active" },
     },
     {
-      id: "actions", header: "Actions", size: 90,
+      id: "actions",
+      header: () => <div className="text-center">Actions</div>,
+      size: 90,
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
+        <div className="flex justify-center items-center gap-0.5">
           <Can perm="table-group:update">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -269,6 +299,11 @@ export default function TableGroup() {
               columns={columns} data={query.data?.data ?? []} total={query.data?.total ?? 0}
               state={qs} onStateChange={setQs} loading={query.isLoading}
               searchPlaceholder="Search by group name…" emptyText="No table groups found."
+              initialColumnVisibility={{
+                allow_incentive: false,
+                is_home_delivery: false,
+                is_takeaway_enabled: false,
+              }}
               toolbar={
                 <Can perm="table-group:add">
                   <Button size="sm" onClick={openCreate}>
@@ -292,130 +327,89 @@ export default function TableGroup() {
           </DialogHeader>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              <div className="grid grid-cols-2 gap-3">
+              {/* Row 1 — Code | Group Name */}
+              <div className="grid grid-cols-3 gap-3">
                 <Field>
-                  <FieldLabel>Group Name <span className="text-destructive">*</span></FieldLabel>
-                  <Input value={form.name} maxLength={50}
-                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    placeholder="Group name (max 50 chars)" required />
-                </Field>
-                <Field>
-                  <FieldLabel>Code <span className="text-muted-foreground font-normal">(numeric)</span></FieldLabel>
+                  <FieldLabel>Code</FieldLabel>
                   <Input type="number" min="1" value={form.code}
                     onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                    placeholder="Auto if empty" />
+                    placeholder="Auto-generated" />
+                </Field>
+                <Field className="col-span-2">
+                  <FieldLabel>Group Name <span className="text-destructive">*</span></FieldLabel>
+                  <Input value={form.name} maxLength={50} autoFocus
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. Rooftop, Lounge" required />
                 </Field>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel>Rate <span className="text-destructive">*</span></FieldLabel>
-                  <Select value={form.applicable_rate}
-                    onValueChange={(v) => setForm((f) => ({ ...f, applicable_rate: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {RATE_OPTIONS.map((r) => (
-                        <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>Allow Incentive</FieldLabel>
-                  <Select value={form.allow_incentive}
-                    onValueChange={(v) => setForm((f) => ({ ...f, allow_incentive: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {YN_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
+              {/* Applicable Rate */}
+              <Field>
+                <FieldLabel>Applicable Rate <span className="text-destructive">*</span></FieldLabel>
+                <Select value={form.applicable_rate}
+                  onValueChange={(v) => setForm((f) => ({ ...f, applicable_rate: v }))}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {RATE_OPTIONS.map((r) => (
+                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+
+              {/* Toggle flags */}
+              <div className="rounded-md border divide-y">
+                {[
+                  { key: "allow_incentive",    label: "Allow Incentive",  desc: "Staff incentive applies to this group" },
+                  { key: "is_tax_applicable",  label: "Apply Tax",        desc: "GST / tax is applicable on orders" },
+                  { key: "is_home_delivery",   label: "Home Delivery",    desc: "This group handles home delivery orders" },
+                  { key: "is_takeaway_enabled",label: "Takeaway",         desc: "Allow takeaway orders for this group" },
+                  { key: "is_print_enabled",   label: "Print Enabled",    desc: "Print KOT / bills for this group" },
+                ].map(({ key, label, desc }) => (
+                  <div key={key} className="flex items-center justify-between px-4 py-2.5">
+                    <div>
+                      <p className="text-sm font-medium">{label}</p>
+                      <p className="text-xs text-muted-foreground">{desc}</p>
+                    </div>
+                    <Switch
+                      checked={form[key] === "Y"}
+                      onCheckedChange={(v) => setForm((f) => ({ ...f, [key]: v ? "Y" : "N" }))}
+                    />
+                  </div>
+                ))}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel>Home Delivery</FieldLabel>
-                  <Select value={form.is_home_delivery}
-                    onValueChange={(v) => setForm((f) => ({ ...f, is_home_delivery: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {YN_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>Apply Tax</FieldLabel>
-                  <Select value={form.is_tax_applicable}
-                    onValueChange={(v) => setForm((f) => ({ ...f, is_tax_applicable: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {YN_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel>Takeaway</FieldLabel>
-                  <Select value={form.is_takeaway_enabled}
-                    onValueChange={(v) => setForm((f) => ({ ...f, is_takeaway_enabled: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {YN_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>Print</FieldLabel>
-                  <Select value={form.is_print_enabled}
-                    onValueChange={(v) => setForm((f) => ({ ...f, is_print_enabled: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {YN_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel>Service Printer</FieldLabel>
-                  <Select value={form.service_printer_name}
-                    onValueChange={(v) => setForm((f) => ({ ...f, service_printer_name: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">None</SelectItem>
-                      {kitchenSections.map((ks) => (
-                        <SelectItem key={ks.id} value={ks.name}>{ks.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>Printer Location</FieldLabel>
-                  <Select value={form.printer_location}
-                    onValueChange={(v) => setForm((f) => ({ ...f, printer_location: v }))}>
-                    <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">None</SelectItem>
-                      {kitchenSections.map((ks) => (
-                        <SelectItem key={ks.id} value={ks.name}>{ks.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
+              {/* Printer selects — only when print is on */}
+              {form.is_print_enabled === "Y" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field>
+                    <FieldLabel>Service Printer</FieldLabel>
+                    <Select value={form.service_printer_name}
+                      onValueChange={(v) => setForm((f) => ({ ...f, service_printer_name: v }))}>
+                      <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">None</SelectItem>
+                        {kitchenSections.map((ks) => (
+                          <SelectItem key={ks.id} value={ks.name}>{ks.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>Printer Location</FieldLabel>
+                    <Select value={form.printer_location}
+                      onValueChange={(v) => setForm((f) => ({ ...f, printer_location: v }))}>
+                      <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">None</SelectItem>
+                        {kitchenSections.map((ks) => (
+                          <SelectItem key={ks.id} value={ks.name}>{ks.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+              )}
             </FieldGroup>
 
             <DialogFooter className="mt-6">

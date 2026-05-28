@@ -163,8 +163,11 @@ function NationalityInput({ value, onChange }) {
 
   const options = useMemo(() => {
     const q = value.trim().toLowerCase();
-    if (!q) return NATIONALITIES.slice(0, 30);
-    return NATIONALITIES.filter((n) => n.toLowerCase().includes(q));
+    const pinned = ["Indian"];
+    const rest = NATIONALITIES.filter((n) => !pinned.includes(n));
+    const all = [...pinned, ...rest];
+    if (!q) return all.slice(0, 30);
+    return all.filter((n) => n.toLowerCase().includes(q));
   }, [value]);
 
   useEffect(() => {
@@ -480,6 +483,10 @@ export default function LodgeCustomerInfo() {
     }
     if (!form.address_line1.trim()) {
       toast.error("Address line 1 is required");
+      return;
+    }
+    if (!form.mobile_no1.trim()) {
+      toast.error("Mobile 1 is required");
       return;
     }
     if (dialog.mode === "create") {
@@ -907,7 +914,9 @@ export default function LodgeCustomerInfo() {
               <SectionTitle>Contact Details</SectionTitle>
 
               <Field className="col-span-1">
-                <FieldLabel>Mobile 1</FieldLabel>
+                <FieldLabel>
+                  Mobile 1 <span className="text-destructive">*</span>
+                </FieldLabel>
                 <Input
                   type="tel"
                   value={form.mobile_no1}

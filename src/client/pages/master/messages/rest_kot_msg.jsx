@@ -88,36 +88,47 @@ export default function KotMessage() {
 
   const columns = useMemo(() => [
     {
-      accessorKey: "id",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="#" />,
-      size: 60, meta: { label: "#" },
-    },
-    {
       accessorKey: "code",
-      header: "Code",
-      size: 90,
+      header: ({ column }) => (
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
+      ),
+      size: 70,
+      cell: ({ row }) => (
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code ?? "—"}
+          </span>
+        </div>
+      ),
       meta: { label: "Code" },
     },
     {
       accessorKey: "kot_message",
       header: ({ column }) => <DataTableColumnHeader column={column} title="KOT Message" />,
+      cell: ({ row }) => <span className="font-medium">{row.original.kot_message}</span>,
       meta: { label: "KOT Message" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       size: 80,
       cell: ({ row }) => (
-        <Switch size="sm" checked={row.original.is_active}
-          onCheckedChange={() => toggleMut.mutate(row.original)}
-          disabled={toggleMut.isPending} />
+        <div className="flex justify-center">
+          <Switch size="sm" checked={row.original.is_active}
+            onCheckedChange={() => toggleMut.mutate(row.original)}
+            disabled={toggleMut.isPending} />
+        </div>
       ),
       meta: { label: "Active" },
     },
     {
-      id: "actions", header: "Actions", size: 90,
+      id: "actions",
+      header: () => <div className="text-center">Actions</div>,
+      size: 90,
       cell: ({ row }) => (
-        <div className="flex items-center gap-0.5">
+        <div className="flex justify-center items-center gap-0.5">
           <Can perm="kot-message:update">
             <Tooltip>
               <TooltipTrigger asChild>

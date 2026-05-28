@@ -96,6 +96,14 @@ export default function MenuCategory() {
     setForm((f) => ({ ...f, [k]: v }));
   }
 
+  function handleDiscountChange(key, val) {
+    if (val !== "" && parseFloat(val) >= 100) {
+      toast.error("Discount is not allowed more than 99");
+      return;
+    }
+    setF(key, val);
+  }
+
   // ── Queries ───────────────────────────────────────────────
 
   const { data, isLoading } = useQuery({
@@ -319,13 +327,13 @@ export default function MenuCategory() {
       return;
     }
     const maxPct = Number(form.maxDiscountPercent);
-    if (isNaN(maxPct) || maxPct < 0 || maxPct > 100) {
-      toast.error("Max discount must be between 0 and 100");
+    if (isNaN(maxPct) || maxPct < 0 || maxPct >= 100) {
+      toast.error("Discount is not allowed more than 99");
       return;
     }
     const autoPct = Number(form.autoDiscountPercent);
-    if (isNaN(autoPct) || autoPct < 0) {
-      toast.error("Auto discount cannot be negative");
+    if (isNaN(autoPct) || autoPct < 0 || autoPct >= 100) {
+      toast.error("Discount is not allowed more than 99");
       return;
     }
     const payload = { ...form, id: dialog.data?.id };
@@ -343,14 +351,19 @@ export default function MenuCategory() {
     {
       accessorKey: "code",
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title="Code" />
+        <div className="text-center">
+          <DataTableColumnHeader column={column} title="Code" />
+        </div>
       ),
       cell: ({ row }) => (
-        <span className="font-mono text-xs text-muted-foreground">
-          {row.original.code}
-        </span>
+        <div className="text-center">
+          <span className="font-mono text-xs font-semibold text-muted-foreground">
+            {row.original.code}
+          </span>
+        </div>
       ),
-      size: 80,
+      size: 70,
+      meta: { label: "Code" },
     },
     {
       accessorKey: "name",
@@ -360,6 +373,7 @@ export default function MenuCategory() {
       cell: ({ row }) => (
         <span className="font-medium">{row.original.name}</span>
       ),
+      meta: { label: "Category Name" },
     },
     {
       accessorKey: "unit_name",
@@ -371,7 +385,8 @@ export default function MenuCategory() {
           )}
         </span>
       ),
-      size: 90,
+      size: 100,
+      meta: { label: "Unit" },
     },
     {
       accessorKey: "tally_name",
@@ -383,69 +398,84 @@ export default function MenuCategory() {
           )}
         </span>
       ),
-      size: 120,
+      size: 130,
+      meta: { label: "Tally" },
     },
     {
       accessorKey: "allow_discount",
-      header: "Discount",
+      header: () => <div className="text-center">Discount</div>,
       cell: ({ row }) => (
-        <span
-          className={
-            row.original.allow_discount
-              ? "text-green-600 text-xs font-medium"
-              : "text-muted-foreground text-xs"
-          }
-        >
-          {row.original.allow_discount ? "Yes" : "No"}
-        </span>
+        <div className="text-center">
+          <span
+            className={
+              row.original.allow_discount
+                ? "text-green-600 text-xs font-semibold"
+                : "text-muted-foreground text-xs"
+            }
+          >
+            {row.original.allow_discount ? "Yes" : "No"}
+          </span>
+        </div>
       ),
-      size: 80,
+      size: 90,
+      meta: { label: "Discount" },
     },
     {
       accessorKey: "max_discount_percent",
-      header: "Max %",
-      cell: ({ row }) =>
-        row.original.max_discount_percent > 0 ? (
-          <span className="font-mono text-sm">
-            {Number(row.original.max_discount_percent).toFixed(2)}%
-          </span>
-        ) : (
-          <span className="text-muted-foreground text-xs">—</span>
-        ),
-      size: 80,
+      header: () => <div className="text-right pr-1">Max %</div>,
+      cell: ({ row }) => (
+        <div className="text-right pr-1">
+          {row.original.max_discount_percent > 0 ? (
+            <span className="font-mono text-sm tabular-nums">
+              {Number(row.original.max_discount_percent).toFixed(2)}%
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-xs">—</span>
+          )}
+        </div>
+      ),
+      size: 100,
+      meta: { label: "Max %" },
     },
     {
       accessorKey: "auto_discount_percent",
-      header: "Auto %",
-      cell: ({ row }) =>
-        row.original.auto_discount_percent > 0 ? (
-          <span className="font-mono text-sm">
-            {Number(row.original.auto_discount_percent).toFixed(2)}%
-          </span>
-        ) : (
-          <span className="text-muted-foreground text-xs">—</span>
-        ),
-      size: 80,
+      header: () => <div className="text-right pr-1">Auto %</div>,
+      cell: ({ row }) => (
+        <div className="text-right pr-1">
+          {row.original.auto_discount_percent > 0 ? (
+            <span className="font-mono text-sm tabular-nums">
+              {Number(row.original.auto_discount_percent).toFixed(2)}%
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-xs">—</span>
+          )}
+        </div>
+      ),
+      size: 100,
+      meta: { label: "Auto %" },
     },
     {
       accessorKey: "is_active",
-      header: "Active",
+      header: () => <div className="text-center">Active</div>,
       cell: ({ row }) => (
-        <Can perm="menu-category:update">
-          <Switch
-            checked={row.original.is_active}
-            onCheckedChange={() => toggleMut.mutate(row.original)}
-            disabled={toggleMut.isPending}
-          />
-        </Can>
+        <div className="flex justify-center">
+          <Can perm="menu-category:update">
+            <Switch
+              checked={row.original.is_active}
+              onCheckedChange={() => toggleMut.mutate(row.original)}
+              disabled={toggleMut.isPending}
+            />
+          </Can>
+        </div>
       ),
-      size: 70,
+      size: 80,
+      meta: { label: "Active" },
     },
     {
       id: "actions",
-      header: "Actions",
+      header: () => <div className="text-center">Actions</div>,
       cell: ({ row }) => (
-        <div className="flex gap-1">
+        <div className="flex justify-center gap-1">
           <TooltipProvider>
             <Can perm="menu-category:update">
               <Tooltip>
@@ -511,6 +541,11 @@ export default function MenuCategory() {
             onStateChange={setQs}
             searchPlaceholder="Search by category name…"
             emptyText="No categories found."
+            initialColumnVisibility={{
+              unit_name: false,
+              tally_name: false,
+              allow_discount: false,
+            }}
             toolbar={
               <Can perm="menu-category:add">
                 <Button size="sm" onClick={openCreate}>
@@ -642,9 +677,9 @@ export default function MenuCategory() {
                   type="number"
                   step="0.01"
                   min="0"
-                  max="100"
+                  max="99"
                   value={form.maxDiscountPercent}
-                  onChange={(e) => setF("maxDiscountPercent", e.target.value)}
+                  onChange={(e) => handleDiscountChange("maxDiscountPercent", e.target.value)}
                   disabled={!discountEnabled}
                   placeholder="0.00"
                 />
@@ -655,8 +690,9 @@ export default function MenuCategory() {
                   type="number"
                   step="0.01"
                   min="0"
+                  max="99"
                   value={form.autoDiscountPercent}
-                  onChange={(e) => setF("autoDiscountPercent", e.target.value)}
+                  onChange={(e) => handleDiscountChange("autoDiscountPercent", e.target.value)}
                   disabled={!discountEnabled}
                   placeholder="0.00"
                 />
