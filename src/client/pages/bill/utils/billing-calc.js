@@ -149,8 +149,10 @@ export function getReservationPhase(table, nowMs) {
 
   const mins = minsUntilReservation(table.reservation_time, nowMs);
   if (mins === null) return null;
-  if (mins <= 0)  return "PAST";
-  if (mins <= 10) return "NEAR";
+  // Keep table BLUE for the full 15-min no-show grace window after reservation time.
+  // Only revert to normal once the auto-expiry backend has had a chance to run.
+  if (mins < -15) return "PAST";
+  if (mins <= 10) return "NEAR";   // covers 0–10 min before AND overdue within grace period
   if (mins <= 30) return "WARNING";
   return "NORMAL";
 }

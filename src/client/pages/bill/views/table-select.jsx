@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -132,9 +132,11 @@ function TableCard({ table, onClick, now }) {
   const orderPill   = isOccupied && table.order_type ? ORDER_TYPE_PILL[table.order_type] : null;
   const statusLabel = STATUS_LABEL[status];
 
-  const minsLeft = isNear
-    ? Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, now)))
-    : null;
+  // Countdown: positive = minutes until reservation, negative = minutes overdue
+  const minsUntil   = isNear ? minsUntilReservation(table.reservation_time, now) : null;
+  const isOverdue   = minsUntil !== null && minsUntil < 0;
+  const minsLeft    = minsUntil !== null && minsUntil > 0 ? Math.ceil(minsUntil) : null;
+  const minsLate    = isOverdue ? Math.floor(Math.abs(minsUntil)) : null;
 
   return (
     <button
@@ -156,9 +158,14 @@ function TableCard({ table, onClick, now }) {
       <div className="flex items-start justify-between gap-1.5 mt-0.5">
         <span className="font-semibold text-sm leading-snug truncate">{table.table_name}</span>
         <div className="flex items-center gap-1 shrink-0">
-          {isNear && minsLeft !== null && (
+          {isNear && phase !== "ARRIVED" && minsLeft !== null && (
             <span className="rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
               {minsLeft}m
+            </span>
+          )}
+          {isNear && phase !== "ARRIVED" && isOverdue && (
+            <span className="rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300">
+              +{minsLate}m
             </span>
           )}
           {orderPill && (
@@ -169,9 +176,13 @@ function TableCard({ table, onClick, now }) {
         </div>
       </div>
 
-      {/* Status text — differentiate NEAR vs ARRIVED for the blue state */}
+      {/* Status text */}
       <span className={`text-[11px] font-medium mt-1 ${statusLabel.cls}`}>
-        {isNear && phase === "ARRIVED" ? "Guest Arrived" : statusLabel.text}
+        {isNear && phase === "ARRIVED"
+          ? "Guest Arrived"
+          : isNear && isOverdue
+            ? "Awaiting Guest"
+            : statusLabel.text}
       </span>
 
       {/* Occupied details */}
@@ -217,9 +228,13 @@ function TableCard({ table, onClick, now }) {
             </div>
           )}
           <div className="flex items-center justify-between gap-2 text-[11px] text-blue-600/70 dark:text-blue-400/70">
-            {/* Show time for NEAR; show "ready to order" hint for ARRIVED */}
+            {/* Show time / overdue / arrived hint */}
             {phase === "ARRIVED" ? (
               <span className="text-emerald-600 dark:text-emerald-400 font-medium">Ready to order</span>
+            ) : isOverdue ? (
+              <span className="text-orange-500 dark:text-orange-400 font-medium">
+                {minsLate}m overdue · waiting
+              </span>
             ) : (
               table.reservation_time && (
                 <div className="flex items-center gap-1">
@@ -299,6 +314,10 @@ export default function TableSelectView() {
   const { setSession } = useBillingContext();
   const [search, setSearch] = useState("");
   const [reservationOpen, setReservationOpen] = useState(false);
+  const searchRef = useRef(null);
+
+  // Auto-focus search on mount
+  useEffect(() => { searchRef.current?.focus(); }, []);
 
   const floorQuery = useFloorView();
   const tables = floorQuery.data ?? [];
@@ -317,9 +336,11 @@ export default function TableSelectView() {
     return tables.filter(
       (t) =>
         t.table_name.toLowerCase().includes(q) ||
-        (t.table_group_name ?? "Ungrouped").toLowerCase().includes(q),
+        (t.table_group_name ?? "Ungrouped").toLowerCase().includes(q) ||
+        String(t.code ?? "").toLowerCase().includes(q),
     );
   }, [tables, search]);
+
 
   const groups = useMemo(() => {
     const map = new Map();
@@ -397,6 +418,22 @@ export default function TableSelectView() {
     [setSession],
   );
 
+  // Direct-open on Enter: if search is purely numeric and matches a table code, open it
+  const handleSearchKeyDown = useCallback(
+    (e) => {
+      if (e.key !== "Enter") return;
+      const q = search.trim();
+      if (!q || !/^\d+$/.test(q) || tables.length === 0) return;
+      const match = tables.find((t) => String(t.code ?? "") === q);
+      if (!match) return;
+      const status = getTableStatus(match, Date.now());
+      const phase  = getReservationPhase(match, Date.now());
+      setSearch("");
+      handleTableClick(match, status, phase);
+    },
+    [search, tables, handleTableClick],
+  );
+
   // Pickup: also enters draft mode, no table
   function handlePickup() {
     setSession(null, null, "Pickup", undefined, 1, ORDER_TYPE.PICKUP);
@@ -460,10 +497,12 @@ export default function TableSelectView() {
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
           />
           <Input
+            ref={searchRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search tables…"
-            className="h-8 pl-8 w-44 text-xs"
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search by name or code…"
+            className="h-8 pl-8 w-52 text-xs"
           />
         </div>
 
