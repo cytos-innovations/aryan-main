@@ -450,7 +450,7 @@ export default function MenuCardPage() {
                     onChange={(e) => setF("code", e.target.value)}
                     placeholder={dialog.mode === "create" ? "Auto" : ""}
                     readOnly={dialog.mode === "edit"}
-                    className={dialog.mode === "edit" ? "bg-muted" : ""}
+                    className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""}
                   />
                 </Field>
                 <Field className="col-span-2">

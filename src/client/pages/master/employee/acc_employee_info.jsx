@@ -341,9 +341,11 @@ export default function AccEmployeeInfo() {
                 <Input
                   value={form.code}
                   onChange={(e) => setF("code", e.target.value)}
-                  placeholder="e.g. EMP001"
+                  placeholder={isEditMode ? "" : "e.g. EMP001"}
                   maxLength={20}
                   autoFocus
+                  readOnly={isEditMode}
+                  className={isEditMode ? "bg-muted cursor-not-allowed" : ""}
                 />
               </Field>
               <Field>

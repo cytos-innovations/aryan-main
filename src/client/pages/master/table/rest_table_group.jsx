@@ -333,7 +333,9 @@ export default function TableGroup() {
                   <FieldLabel>Code</FieldLabel>
                   <Input type="number" min="1" value={form.code}
                     onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                    placeholder="Auto-generated" />
+                    placeholder={dialog.mode === "create" ? "Auto-generated" : ""}
+                    readOnly={dialog.mode === "edit"}
+                    className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""} />
                 </Field>
                 <Field className="col-span-2">
                   <FieldLabel>Group Name <span className="text-destructive">*</span></FieldLabel>

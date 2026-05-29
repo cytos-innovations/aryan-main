@@ -609,8 +609,10 @@ export default function AccTaxMaster() {
                 type="number"
                 value={form.code}
                 onChange={(e) => setF("code", e.target.value)}
-                placeholder={isEditMode ? "Enter code" : "Auto-generated"}
+                placeholder={isEditMode ? "" : "Auto-generated"}
                 min={1}
+                readOnly={isEditMode}
+                className={isEditMode ? "bg-muted cursor-not-allowed" : ""}
               />
             </Field>
 

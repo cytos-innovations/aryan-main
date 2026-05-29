@@ -347,7 +347,9 @@ export default function MaterialItemGroup() {
                 <FieldLabel>Code {isEditMode && <span className="text-destructive">*</span>}</FieldLabel>
                 <Input type="number" value={form.code}
                   onChange={(e) => setF("code", e.target.value)}
-                  placeholder={isEditMode ? "Enter code" : "Auto-generated"} min={1} autoFocus />
+                  placeholder={isEditMode ? "" : "Auto-generated"} min={1} autoFocus
+                  readOnly={isEditMode}
+                  className={isEditMode ? "bg-muted cursor-not-allowed" : ""} />
               </Field>
               <Field>
                 <FieldLabel>Item Group Name <span className="text-destructive">*</span></FieldLabel>

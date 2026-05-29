@@ -7,7 +7,6 @@ import {
   Add01Icon,
   PencilEdit01Icon,
   Delete01Icon,
-  PlusSignIcon,
   MinusSignIcon,
 } from "@hugeicons/core-free-icons";
 
@@ -89,7 +88,6 @@ export default function MenuCategory() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [taxRows, setTaxRows] = useState([{ ...EMPTY_TAX_ROW }]);
-  const taxCodeRefs = useRef([]);
   const taxPctRefs = useRef([]);
 
   function setF(k, v) {
@@ -114,6 +112,11 @@ export default function MenuCategory() {
   const { data: units = [] } = useQuery({
     queryKey: ["units-for-menu-category"],
     queryFn: () => invoke("get_all_units_for_menu_category"),
+  });
+
+  const { data: allTaxes = [] } = useQuery({
+    queryKey: ["all-taxes-for-menu-category"],
+    queryFn: () => invoke("get_all_taxes_for_item"),
   });
 
   function inv() {
@@ -153,43 +156,19 @@ export default function MenuCategory() {
     });
   }, []);
 
-  async function handleTaxCodeLookup(index) {
-    const row = taxRows[index];
-    if (!row.taxCodeInput) {
-      updateTaxRow(index, "taxId", null);
-      updateTaxRow(index, "taxName", "");
+  function handleTaxSelect(taxId) {
+    const tax = allTaxes.find((t) => String(t.id) === taxId);
+    if (!tax) return;
+    if (taxRows.some((r) => r.taxId === tax.id)) {
+      toast.error(`"${tax.name}" is already added`);
       return;
     }
-    try {
-      const result = await invoke("lookup_tax_for_menu_category", {
-        code: Number(row.taxCodeInput),
-      });
-      if (result) {
-        setTaxRows((rows) => {
-          const updated = [...rows];
-          updated[index] = {
-            ...updated[index],
-            taxId: result.id,
-            taxName: result.name,
-          };
-          return updated;
-        });
-        setTimeout(() => taxPctRefs.current[index]?.focus(), 50);
-      } else {
-        toast.error("Tax code not found");
-        setTaxRows((rows) => {
-          const updated = [...rows];
-          updated[index] = { ...updated[index], taxId: null, taxName: "" };
-          return updated;
-        });
-      }
-    } catch (e) {
-      toast.error(String(e));
-    }
-  }
-
-  function addTaxRow() {
-    setTaxRows((rows) => [...rows, { ...EMPTY_TAX_ROW }]);
+    const newRow = { taxCodeInput: String(tax.code), taxId: tax.id, taxName: tax.name, taxPercentage: "" };
+    setTaxRows((rows) => {
+      const hasOnlyEmptyRow = rows.length === 1 && !rows[0].taxId;
+      return hasOnlyEmptyRow ? [newRow] : [...rows, newRow];
+    });
+    setTimeout(() => taxPctRefs.current[taxRows.length === 1 && !taxRows[0].taxId ? 0 : taxRows.length]?.focus(), 50);
   }
 
   function removeTaxRow(index) {
@@ -586,9 +565,11 @@ export default function MenuCategory() {
                   type="number"
                   value={form.code}
                   onChange={(e) => setF("code", e.target.value)}
-                  placeholder={isEditMode ? "Enter code" : "Auto-generated"}
+                  placeholder={isEditMode ? "" : "Auto-generated"}
                   min={1}
                   autoFocus
+                  readOnly={isEditMode}
+                  className={isEditMode ? "bg-muted cursor-not-allowed" : ""}
                 />
               </Field>
               <Field>
@@ -703,111 +684,73 @@ export default function MenuCategory() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <FieldLabel className="mb-0">Tax Chart</FieldLabel>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={addTaxRow}
+                <Select
+                  value=""
+                  onValueChange={handleTaxSelect}
+                  disabled={allTaxes.filter((t) => !taxRows.some((r) => r.taxId === t.id)).length === 0}
                 >
-                  <HugeiconsIcon
-                    icon={PlusSignIcon}
-                    size={12}
-                    strokeWidth={2}
-                    className="mr-1"
-                  />
-                  Add Row
-                </Button>
+                  <SelectTrigger className="h-8 w-48 text-xs">
+                    <SelectValue placeholder="+ Add Tax" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allTaxes
+                      .filter((t) => !taxRows.some((r) => r.taxId === t.id))
+                      .map((t) => (
+                        <SelectItem key={t.id} value={String(t.id)} className="text-xs">
+                          {t.code} — {t.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="border rounded-md overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-10">
-                        Sr
-                      </th>
-                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-28">
-                        Tax Code
-                      </th>
-                      <th className="px-3 py-2 text-left font-medium text-muted-foreground">
-                        Tax Name
-                      </th>
-                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-32">
-                        Tax %
-                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-10">Sr</th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-24">Tax Code</th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground">Tax Name</th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground w-32">Tax %</th>
                       <th className="px-2 py-2 w-8" />
                     </tr>
                   </thead>
                   <tbody>
                     {taxRows.map((row, i) => (
                       <tr key={i} className="border-t">
-                        <td className="px-3 py-1.5 text-muted-foreground text-xs">
-                          {i + 1}
+                        <td className="px-3 py-1.5 text-muted-foreground text-xs">{i + 1}</td>
+
+                        {/* Tax Code — read-only display */}
+                        <td className="px-3 py-1.5">
+                          {row.taxCodeInput ? (
+                            <span className="font-mono text-xs font-semibold text-muted-foreground">
+                              {row.taxCodeInput}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </td>
 
-                        {/* Tax Code input */}
-                        <td className="px-2 py-1.5">
-                          <Input
-                            ref={(el) => {
-                              taxCodeRefs.current[i] = el;
-                            }}
-                            type="number"
-                            className="h-7 text-xs"
-                            value={row.taxCodeInput}
-                            onChange={(e) =>
-                              updateTaxRow(i, "taxCodeInput", e.target.value)
-                            }
-                            onBlur={() => handleTaxCodeLookup(i)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                handleTaxCodeLookup(i);
-                              }
-                            }}
-                            placeholder="Code"
-                          />
-                        </td>
-
-                        {/* Tax Name (auto-filled) */}
+                        {/* Tax Name */}
                         <td className="px-3 py-1.5">
                           {row.taxName ? (
                             <span className="text-xs">{row.taxName}</span>
                           ) : (
-                            <span className="text-xs text-muted-foreground">
-                              —
-                            </span>
+                            <span className="text-xs text-muted-foreground">—</span>
                           )}
                         </td>
 
                         {/* Tax % input */}
                         <td className="px-2 py-1.5">
                           <Input
-                            ref={(el) => {
-                              taxPctRefs.current[i] = el;
-                            }}
+                            ref={(el) => { taxPctRefs.current[i] = el; }}
                             type="number"
                             step="0.01"
                             min="0"
                             className="h-7 text-xs"
                             value={row.taxPercentage}
-                            onChange={(e) =>
-                              updateTaxRow(i, "taxPercentage", e.target.value)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                // Auto-add next row when Enter on last row
-                                setTaxRows((rows) => {
-                                  if (i === rows.length - 1)
-                                    return [...rows, { ...EMPTY_TAX_ROW }];
-                                  return rows;
-                                });
-                                setTimeout(
-                                  () => taxCodeRefs.current[i + 1]?.focus(),
-                                  50
-                                );
-                              }
-                            }}
+                            onChange={(e) => updateTaxRow(i, "taxPercentage", e.target.value)}
                             placeholder="0.00"
+                            disabled={!row.taxId}
                           />
                         </td>
 
@@ -820,11 +763,7 @@ export default function MenuCategory() {
                             className="h-6 w-6 text-muted-foreground hover:text-destructive"
                             onClick={() => removeTaxRow(i)}
                           >
-                            <HugeiconsIcon
-                              icon={MinusSignIcon}
-                              size={12}
-                              strokeWidth={2}
-                            />
+                            <HugeiconsIcon icon={MinusSignIcon} size={12} strokeWidth={2} />
                           </Button>
                         </td>
                       </tr>

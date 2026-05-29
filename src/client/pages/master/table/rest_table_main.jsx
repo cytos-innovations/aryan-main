@@ -277,13 +277,19 @@ export default function RestaurantTable() {
                   <Input
                     type="number" min="1" value={form.code}
                     onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                    placeholder="Auto" />
+                    placeholder={dialog.mode === "create" ? "Auto" : ""}
+                    readOnly={dialog.mode === "edit"}
+                    className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""} />
                 </Field>
               </div>
 
               <Field>
                 <FieldLabel>Table Group</FieldLabel>
-                <Select value={form.table_group_id} onValueChange={handleGroupChange}>
+                <Select
+                  value={form.table_group_id}
+                  onValueChange={handleGroupChange}
+                  disabled={dialog.mode === "edit" && form.table_group_id !== "__none__"}
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select group…" />
                   </SelectTrigger>
@@ -294,6 +300,11 @@ export default function RestaurantTable() {
                     ))}
                   </SelectContent>
                 </Select>
+                {dialog.mode === "edit" && form.table_group_id !== "__none__" && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Group cannot be changed after assignment.
+                  </p>
+                )}
               </Field>
 
               <Field>

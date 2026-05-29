@@ -43,7 +43,6 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
-  useSidebar,
 } from "@/components/ui/sidebar";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -363,22 +362,12 @@ function AppSidebar(props) {
   );
 }
 
-// Collapses sidebar automatically when entering billing.
-function SidebarAutoCollapse({ isBilling }) {
-  const { setOpen } = useSidebar();
-  useEffect(() => {
-    if (isBilling) setOpen(false);
-  }, [isBilling]); // eslint-disable-line react-hooks/exhaustive-deps
-  return null;
-}
-
 export default function AppShell() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { auth, refreshPermissions } = useAuth();
   const isRestaurant = auth?.application?.id === APP_ID.restaurant;
   const current = flatRoutes.find((r) => r.path === pathname);
-  const isBilling = pathname.startsWith("/billing");
 
   // Refresh permissions from DB on every mount so stale localStorage
   // sessions pick up any changes made in User Access without re-login.
@@ -388,8 +377,7 @@ export default function AppShell() {
 
   return (
     <TooltipProvider>
-      <SidebarProvider defaultOpen={!isBilling} className="h-svh overflow-hidden">
-        <SidebarAutoCollapse isBilling={isBilling} />
+      <SidebarProvider defaultOpen={true} className="h-svh overflow-hidden">
         <AppSidebar />
         <SidebarInset>
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
@@ -408,7 +396,7 @@ export default function AppShell() {
                   <Button
                     size="sm"
                     className="h-8 gap-1.5 px-3 text-xs"
-                    onClick={() => navigate("/billing")}
+                    onClick={() => navigate("/billing", { state: { newOrder: Date.now() } })}
                   >
                     <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
                     New Order

@@ -1,4 +1,5 @@
-import { Component } from "react";
+import { Component, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { BillingProvider, useBillingContext } from "./bill/state/billing-context";
 import { BILLING_VIEW } from "./bill/constants/billing";
 import { useReservationAutoExpiry } from "./bill/hooks/use-billing-queries";
@@ -44,7 +45,15 @@ export default function BillingPage() {
 }
 
 function BillingScreen() {
-  const { view } = useBillingContext();
+  const { view, clearSession } = useBillingContext();
+  const location = useLocation();
+
+  // Reset to table selection whenever the "New Order" navbar button is clicked,
+  // even if the user is already on the billing screen.
+  useEffect(() => {
+    if (location.state?.newOrder) clearSession();
+  }, [location.state?.newOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-expire no-show reservations and keep floor data live in all views
   useReservationAutoExpiry();
 

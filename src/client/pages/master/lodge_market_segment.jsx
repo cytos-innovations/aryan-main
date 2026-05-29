@@ -202,8 +202,9 @@ export default function LodgeMarketSegment() {
                   type="number"
                   value={form.code}
                   onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                  placeholder="Leave blank to auto-generate"
-                  disabled={dialog.mode === "edit"}
+                  placeholder={dialog.mode === "create" ? "Auto-generated" : ""}
+                  readOnly={dialog.mode === "edit"}
+                  className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""}
                 />
               </Field>
               <Field>

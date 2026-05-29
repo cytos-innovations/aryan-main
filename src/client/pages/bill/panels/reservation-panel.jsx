@@ -6,8 +6,9 @@ import {
   Search01Icon,
   UserGroupIcon,
   Clock01Icon,
-  TableIcon,
+  TableRoundIcon,
   UserAccountIcon,
+  SmartPhone01Icon,
   Cancel01Icon,
   CheckmarkCircle01Icon,
   AlertCircleIcon,
@@ -349,9 +350,10 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
     if (!form.reservationTime)      errs.reservationTime = "Time is required";
     const gc = parseInt(form.guestCount, 10);
     if (!gc || gc < 1 || gc > 999) errs.guestCount = "Must be between 1 and 999";
-    if (form.customerMobile.trim()) {
-      const digits = form.customerMobile.replace(/\D/g, "");
-      if (digits.length < 7 || digits.length > 15) errs.customerMobile = "Must be 7–15 digits";
+    if (!form.customerMobile.trim()) {
+      errs.customerMobile = "Mobile number is required";
+    } else if (form.customerMobile.replace(/\D/g, "").length !== 10) {
+      errs.customerMobile = "Must be exactly 10 digits";
     }
     return errs;
   }
@@ -392,7 +394,7 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b bg-card">
         <span className="font-semibold text-sm">New Reservation</span>
-        <Button variant="ghost" size="icon-sm" onClick={onClose} disabled={pending}>
+        <Button variant="outline" size="icon-sm" onClick={onClose} disabled={pending} title="Close">
           <HugeiconsIcon icon={Cancel01Icon} size={16} strokeWidth={2} />
         </Button>
       </div>
@@ -421,12 +423,13 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
             </Field>
 
             <Field>
-              <FieldLabel>Mobile <OptLabel /></FieldLabel>
+              <FieldLabel>Mobile <span className="text-destructive">*</span></FieldLabel>
               <Input
                 value={form.customerMobile}
-                onChange={(e) => set("customerMobile", e.target.value)}
-                placeholder="+91 98765 43210"
-                maxLength={20}
+                onChange={(e) => set("customerMobile", e.target.value.replace(/\D/g, ""))}
+                placeholder="10-digit mobile number"
+                maxLength={10}
+                inputMode="numeric"
                 className={cn(errors.customerMobile && "border-destructive focus-visible:ring-destructive/30")}
               />
               {errors.customerMobile && <FieldError>{errors.customerMobile}</FieldError>}
@@ -602,9 +605,10 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
     if (!form.reservationTime)      errs.reservationTime = "Time is required";
     const gc = parseInt(form.guestCount, 10);
     if (!gc || gc < 1 || gc > 999) errs.guestCount = "Must be between 1 and 999";
-    if (form.customerMobile.trim()) {
-      const digits = form.customerMobile.replace(/\D/g, "");
-      if (digits.length < 7 || digits.length > 15) errs.customerMobile = "Must be 7–15 digits";
+    if (!form.customerMobile.trim()) {
+      errs.customerMobile = "Mobile number is required";
+    } else if (form.customerMobile.replace(/\D/g, "").length !== 10) {
+      errs.customerMobile = "Must be exactly 10 digits";
     }
     return errs;
   }
@@ -639,7 +643,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
           <HugeiconsIcon icon={PencilEdit01Icon} size={14} strokeWidth={2} className="text-muted-foreground" />
           <span className="font-semibold text-sm">Edit Reservation</span>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={onClose} disabled={pending}>
+        <Button variant="outline" size="icon-sm" onClick={onClose} disabled={pending} title="Close">
           <HugeiconsIcon icon={Cancel01Icon} size={16} strokeWidth={2} />
         </Button>
       </div>
@@ -662,12 +666,13 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
               {errors.customerName && <FieldError>{errors.customerName}</FieldError>}
             </Field>
             <Field>
-              <FieldLabel>Mobile <OptLabel /></FieldLabel>
+              <FieldLabel>Mobile <span className="text-destructive">*</span></FieldLabel>
               <Input
                 value={form.customerMobile}
-                onChange={(e) => set("customerMobile", e.target.value)}
-                placeholder="+91 98765 43210"
-                maxLength={20}
+                onChange={(e) => set("customerMobile", e.target.value.replace(/\D/g, ""))}
+                placeholder="10-digit mobile number"
+                maxLength={10}
+                inputMode="numeric"
                 className={cn(errors.customerMobile && "border-destructive focus-visible:ring-destructive/30")}
               />
               {errors.customerMobile && <FieldError>{errors.customerMobile}</FieldError>}
@@ -817,7 +822,7 @@ function BillViewDialog({ reservation, onClose }) {
           {reservation.table_name && (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
-                <HugeiconsIcon icon={TableIcon} size={11} strokeWidth={2} />
+                <HugeiconsIcon icon={TableRoundIcon} size={11} strokeWidth={2} />
                 Table
               </div>
               <span className="font-medium text-sm">{reservation.table_name}</span>
@@ -915,13 +920,13 @@ function ReservationCard({ res, onStatusChange, onCancel, onEdit, onViewBill }) 
         </div>
         {res.table_name && (
           <div className="flex items-center gap-1">
-            <HugeiconsIcon icon={TableIcon} size={11} strokeWidth={2} />
+            <HugeiconsIcon icon={TableRoundIcon} size={11} strokeWidth={2} />
             <span>{res.table_name}</span>
           </div>
         )}
         {res.customer_mobile && (
           <div className="flex items-center gap-1">
-            <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} />
+            <HugeiconsIcon icon={SmartPhone01Icon} size={11} strokeWidth={2} />
             <span>{res.customer_mobile}</span>
           </div>
         )}
@@ -965,7 +970,7 @@ function ReservationCard({ res, onStatusChange, onCancel, onEdit, onViewBill }) 
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 w-7 shrink-0 text-muted-foreground/50 hover:text-primary hover:bg-primary/10"
+            className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
             onClick={() => onEdit?.(res)}
             title="Edit reservation"
           >
@@ -974,7 +979,7 @@ function ReservationCard({ res, onStatusChange, onCancel, onEdit, onViewBill }) 
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 w-7 shrink-0 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10"
+            className="h-7 w-7 shrink-0 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
             onClick={() => onCancel(res)}
             title="Cancel reservation"
           >
@@ -1229,17 +1234,17 @@ export default function ReservationPanel({ open, onOpenChange }) {
           className="w-full sm:max-w-md p-0 flex flex-col gap-0"
         >
           {/* Panel header */}
-          <SheetHeader className="shrink-0 px-4 py-3 border-b flex-row items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <HugeiconsIcon icon={Calendar01Icon} size={16} strokeWidth={2} className="text-blue-500" />
-              <SheetTitle className="text-sm font-semibold">Reservations</SheetTitle>
+          <SheetHeader className="shrink-0 border-b flex-row items-center justify-between gap-2 pl-4 pr-3 py-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <HugeiconsIcon icon={Calendar01Icon} size={16} strokeWidth={2} className="text-blue-500 shrink-0" />
+              <SheetTitle className="text-sm font-semibold truncate">Reservations</SheetTitle>
               {reservations.length > 0 && (
-                <span className="rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 px-2 py-0.5 text-[10px] font-semibold">
+                <span className="shrink-0 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 px-2 py-0.5 text-[10px] font-semibold">
                   {reservations.length}
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1">
+            <div className="shrink-0 flex items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -1265,9 +1270,10 @@ export default function ReservationPanel({ open, onOpenChange }) {
               </Button>
               <Separator orientation="vertical" className="h-4 mx-1" />
               <Button
-                variant="ghost"
+                variant="outline"
                 size="icon-sm"
                 onClick={() => onOpenChange(false)}
+                title="Close"
               >
                 <HugeiconsIcon icon={Cancel01Icon} size={16} strokeWidth={2} />
               </Button>
