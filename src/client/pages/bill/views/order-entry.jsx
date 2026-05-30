@@ -47,16 +47,20 @@ import {
   useAddOrderItem,
   useCancelOrderSession,
   useUpdateSessionInfo,
+  useOrderItems,
+  useBillSummary,
+  useSettleBill,
 } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
-import { ORDER_TYPE, ORDER_TYPE_LABELS, BILLING_VIEW, BQK } from "../constants/billing";
-import { selectItemRate, getReservationPhase } from "../utils/billing-calc";
+import { ORDER_TYPE, ORDER_TYPE_LABELS, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
+import { selectItemRate, getReservationPhase, calcBillTotals } from "../utils/billing-calc";
 
 import MenuLeftPanel   from "../panels/menu-left";
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
+import BottomActionBar from "../panels/bottom-action-bar";
 
-// ─── Helpers ──────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────
 
 function toUtcDate(since) {
   if (!since) return null;
@@ -89,7 +93,7 @@ function useNow() {
   return now;
 }
 
-// ─── Session status config ────────────────────────────────────────
+// ─── Session status config ────────────────────────────────────
 
 const SESSION_STATUS_CFG = {
   OPEN:         { label: "Open",         cls: "bg-amber-100  text-amber-700  dark:bg-amber-900/50  dark:text-amber-300"  },
@@ -103,7 +107,7 @@ const ORDER_TYPE_CFG = {
   PICKUP:   { label: "Pickup",   cls: "bg-sky-100    text-sky-700    dark:bg-sky-900/50    dark:text-sky-300"    },
 };
 
-// ─── Edit Session Dialog ──────────────────────────────────────────
+// ─── Edit Session Dialog ──────────────────────────────────────
 
 function EditSessionDialog({ session, sessionId, open, onOpenChange }) {
   const [form, setForm] = useState({ orderType: ORDER_TYPE.DINE_IN, covers: "1", customerName: "" });
@@ -178,7 +182,7 @@ function EditSessionDialog({ session, sessionId, open, onOpenChange }) {
   );
 }
 
-// ─── Session header bar ───────────────────────────────────────────
+// ─── Session header bar ───────────────────────────────────────
 
 function SessionHeader({ session, isDraft, selectedTableName, onBack, onEdit }) {
   const now        = useNow();
@@ -231,7 +235,7 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, onEdit }) 
 
         <div className="flex-1" />
 
-        {/* Timer — only when session exists */}
+        {/* Timer */}
         {!isDraft && elapsed && openedTime && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <HugeiconsIcon icon={Clock01Icon} size={11} strokeWidth={2} />
@@ -239,7 +243,7 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, onEdit }) 
           </div>
         )}
 
-        {/* Edit — only for existing sessions */}
+        {/* Edit */}
         {!isDraft && (
           <Button
             variant="ghost"
@@ -257,7 +261,7 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, onEdit }) 
   );
 }
 
-// ─── Error / recovery ─────────────────────────────────────────────
+// ─── Error / recovery ─────────────────────────────────────────
 
 function SessionError({ message, onBack }) {
   return (
@@ -275,7 +279,7 @@ function SessionError({ message, onBack }) {
   );
 }
 
-// ─── Main workspace ───────────────────────────────────────────────
+// ─── Main workspace ───────────────────────────────────────────
 
 export default function OrderEntryView() {
   const {
@@ -293,27 +297,33 @@ export default function OrderEntryView() {
     setDraftConfig,
     clearSession,
     setView,
+    paymentEntries,
   } = useBillingContext();
 
   const qc  = useQueryClient();
   const now = useNow();
 
-  const [editOpen,   setEditOpen]   = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const [addingId,   setAddingId]   = useState(null);
-  const [isKotting,  setIsKotting]  = useState(false);
+  const [editOpen,        setEditOpen]        = useState(false);
+  const [cancelOpen,      setCancelOpen]      = useState(false);
+  const [addingId,        setAddingId]        = useState(null);
+  const [isKotting,       setIsKotting]       = useState(false);
+  const [discountPercent, setDiscountPercent] = useState(0);
 
-  // true = no DB session yet; user is browsing/adding items locally
   const isDraft = !activeSessionId;
 
+  // ── Queries ───────────────────────────────────────────────
   const sessionQuery = useSessionDetail(activeSessionId);
   const menuQuery    = useMenuForBilling();
   const floorQuery   = useFloorView();
   const cancelMut    = useCancelOrderSession();
   const addItemMut   = useAddOrderItem(activeSessionId);
 
-  // Reservation guard: true when selected table is within 10 min of its reservation time.
-  // Uses cached floor view (refetches every 30 s) + 60 s now-tick for reactivity.
+  // Lifted from OrderRightPanel
+  const itemsQuery   = useOrderItems(activeSessionId);
+  const billSummary  = useBillSummary(activeSessionId);
+  const settleBillMut = useSettleBill(activeSessionId);
+
+  // Reservation guard
   const isNearReservation = useMemo(() => {
     if (!selectedTableId) return false;
     const table = (floorQuery.data ?? []).find((t) => t.id === selectedTableId);
@@ -321,10 +331,24 @@ export default function OrderEntryView() {
     return getReservationPhase(table, now) === "NEAR";
   }, [floorQuery.data, selectedTableId, now]);
 
-  const session         = sessionQuery.data;
-  const menu            = menuQuery.data ?? [];
-  const isMenuLoading   = menuQuery.isLoading;
-  const applicableRate  = isDraft ? draftApplicableRate : (session?.applicable_rate ?? 1);
+  const session        = sessionQuery.data;
+  const menu           = menuQuery.data ?? [];
+  const isMenuLoading  = menuQuery.isLoading;
+  const applicableRate = isDraft ? draftApplicableRate : (session?.applicable_rate ?? 1);
+
+  // Resolved items (draft uses context, session uses DB query)
+  const items          = isDraft ? (draftItems ?? []) : (itemsQuery.data ?? []);
+  const isLoadingItems = !isDraft && itemsQuery.isLoading;
+  const billId         = billSummary.data?.bill_id ?? null;
+
+  // Net amount calculation (needed by BottomActionBar + passed to right panel)
+  const totals    = useMemo(() => calcBillTotals(items), [items]);
+  const billDisc  = Math.round((totals.finalAmount * (Number(discountPercent) || 0)) / 100 * 100) / 100;
+  const afterDisc = Math.round((totals.finalAmount - billDisc) * 100) / 100;
+  const roundOff  = Math.round(afterDisc) - afterDisc;
+  const netAmount = afterDisc + roundOff;
+
+  // ── Actions ───────────────────────────────────────────────
 
   function handleBack() {
     clearSession();
@@ -333,7 +357,6 @@ export default function OrderEntryView() {
 
   function handleConfirmCancel() {
     if (isDraft) {
-      // Nothing was written to DB — just discard
       setCancelOpen(false);
       clearSession();
       setView(BILLING_VIEW.TABLE_SELECT);
@@ -354,7 +377,6 @@ export default function OrderEntryView() {
 
   function handleAddItem(menuItem) {
     if (isDraft) {
-      // Store in context — no DB call
       const rate = selectItemRate(menuItem, applicableRate);
       addDraftItem(menuItem, rate);
       pushRecentId(menuItem.id);
@@ -371,6 +393,19 @@ export default function OrderEntryView() {
     );
   }
 
+  function handleSettle(entries) {
+    if (!billId || !entries.length) return;
+    const isPartPayment = entries.length > 1;
+    const paymentType   = isPartPayment ? PAYMENT_TYPE.PART : entries[0].payment_mode;
+    const paymentAmount = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const referenceNo   = isPartPayment ? null : (entries[0]?.reference_no ?? null);
+    const partPayments  = isPartPayment ? entries : [];
+    settleBillMut.mutate(
+      { sessionId: activeSessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount: 0 },
+      { onSuccess: clearSession },
+    );
+  }
+
   // KOT for draft mode: create session → add items → generate KOT → back to floor
   async function handleKotDraft() {
     if (draftItems.length === 0) {
@@ -382,7 +417,6 @@ export default function OrderEntryView() {
       return;
     }
 
-    // Look up the table's reservation — attach only when guest has been marked ARRIVED
     const tableData      = (floorQuery.data ?? []).find((t) => t.id === selectedTableId);
     const resPhase       = tableData ? getReservationPhase(tableData, now) : null;
     const reservationId  = resPhase === "ARRIVED" ? (tableData?.reservation_id ?? null)   : null;
@@ -400,7 +434,6 @@ export default function OrderEntryView() {
         customerName:  draftCustomerName ?? null,
       });
 
-      // Add all draft items in parallel
       await Promise.all(draftItems.map((item) =>
         billingService.addOrderItem({
           sessionId,
@@ -410,10 +443,8 @@ export default function OrderEntryView() {
         }),
       ));
 
-      // Generate KOT
       await billingService.generateKot(sessionId, null);
 
-      // Refresh floor view so the table turns amber immediately
       qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
       qc.invalidateQueries({ queryKey: BQK.TABLES });
       qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
@@ -427,13 +458,12 @@ export default function OrderEntryView() {
     }
   }
 
-  // Guard: if no table is selected at all, go back to floor
+  // Guards
   useEffect(() => {
     if (!selectedTableId && !activeSessionId) handleBack();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTableId, activeSessionId]);
 
-  // Auto-recover if existing session disappears
   useEffect(() => {
     if (!isDraft && sessionQuery.isError && !sessionQuery.isFetching) {
       toast.error("Session could not be loaded. Returning to floor view.");
@@ -464,7 +494,7 @@ export default function OrderEntryView() {
         onEdit={() => setEditOpen(true)}
       />
 
-      {/* ── 3-panel body ── */}
+      {/* ── Main body: left nav + center+right workspace ── */}
       <div className="flex flex-1 overflow-hidden min-h-0">
 
         {/* LEFT — category / group nav */}
@@ -472,38 +502,64 @@ export default function OrderEntryView() {
           <MenuLeftPanel menu={menu} isLoading={isMenuLoading} />
         </div>
 
-        {/* CENTER — item grid */}
-        <div className="flex-1 overflow-hidden bg-background h-full">
-          <MenuCenterPanel
-            menu={menu}
-            isLoading={isMenuLoading}
-            onAddItem={handleAddItem}
-            applicableRate={applicableRate}
-            addingId={addingId}
-          />
-        </div>
+        {/* CENTER + RIGHT + BOTTOM ACTION BAR */}
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
 
-        {/* RIGHT — order panel */}
-        <div className="shrink-0 w-100 xl:w-115 border-l overflow-hidden h-full">
-          <OrderRightPanel
-            session={session}
+          {/* Top panels: center (menu) + right (order) */}
+          <div className="flex flex-1 overflow-hidden min-h-0">
+
+            {/* CENTER — item grid */}
+            <div className="flex-1 overflow-hidden bg-background h-full">
+              <MenuCenterPanel
+                menu={menu}
+                isLoading={isMenuLoading}
+                onAddItem={handleAddItem}
+                applicableRate={applicableRate}
+                addingId={addingId}
+              />
+            </div>
+
+            {/* RIGHT — order panel */}
+            <div className="shrink-0 w-100 xl:w-115 border-l overflow-hidden h-full">
+              <OrderRightPanel
+                session={session}
+                sessionId={activeSessionId}
+                isDraft={isDraft}
+                draftOrderType={draftOrderType}
+                draftCovers={draftCovers}
+                onSetDraftConfig={setDraftConfig}
+                items={items}
+                isLoadingItems={isLoadingItems}
+                discountPercent={discountPercent}
+                netAmount={netAmount}
+                handleSettle={handleSettle}
+                isSettling={settleBillMut.isPending}
+                billId={billId}
+              />
+            </div>
+          </div>
+
+          {/* BOTTOM ACTION BAR — spans center + right */}
+          <BottomActionBar
             sessionId={activeSessionId}
+            session={session}
+            items={items}
             isDraft={isDraft}
-            draftItems={draftItems}
-            draftOrderType={draftOrderType}
-            draftCovers={draftCovers}
-            onSetDraftConfig={setDraftConfig}
-            onUpdateDraftQty={updateDraftQty}
-            onRemoveDraftItem={removeDraftItem}
-            onKotDraft={handleKotDraft}
             isKotting={isKotting}
             isNearReservation={isNearReservation}
-            onCancelSession={() => setCancelOpen(true)}
+            netAmount={netAmount}
+            billId={billId}
+            isSettling={settleBillMut.isPending}
+            onSettle={handleSettle}
+            onKotDraft={handleKotDraft}
+            onCancel={() => setCancelOpen(true)}
+            discountPercent={discountPercent}
+            onDiscountChange={setDiscountPercent}
           />
         </div>
       </div>
 
-      {/* ── Edit dialog (existing sessions only) ── */}
+      {/* ── Edit dialog ── */}
       {!isDraft && (
         <EditSessionDialog
           session={session}

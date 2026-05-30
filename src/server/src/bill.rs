@@ -1996,7 +1996,8 @@ pub async fn get_reservations(
     let date_clause = match filter.as_deref() {
         Some("TODAY")    => "AND rm.reservation_date = CURRENT_DATE",
         Some("UPCOMING") => "AND rm.reservation_date > CURRENT_DATE",
-        _                => "AND rm.reservation_date >= CURRENT_DATE",
+        // Default: show last 30 days + all future (frontend does client-side date filtering)
+        _                => "AND rm.reservation_date >= CURRENT_DATE - INTERVAL '30 days'",
     };
 
     let sql = format!(
@@ -2369,7 +2370,6 @@ pub async fn expire_no_show_reservations(
         "UPDATE reservation_master
          SET    reservation_status = 'NO_SHOW', updated_at = NOW()
          WHERE  reservation_status = 'RESERVED'
-           AND  reservation_date   = CURRENT_DATE
            AND  is_active          = 1
            AND  (reservation_date::date + reservation_time::time) + INTERVAL '15 minutes' < NOW()",
     )
@@ -2379,14 +2379,14 @@ pub async fn expire_no_show_reservations(
 
     let expired = result.rows_affected();
 
+    // Release tables whose RESERVED status was left by a now-expired reservation
     sqlx::query(
         "UPDATE restaurant_table rt
          SET    current_status = 'AVAILABLE'
          FROM   reservation_master rm
-         WHERE  rm.table_id             = rt.id
-           AND  rm.reservation_status   = 'NO_SHOW'
-           AND  rm.reservation_date     = CURRENT_DATE
-           AND  rt.current_status       = 'RESERVED'
+         WHERE  rm.table_id                  = rt.id
+           AND  rm.reservation_status        = 'NO_SHOW'
+           AND  rt.current_status            = 'RESERVED'
            AND  rt.current_order_session_id IS NULL",
     )
     .execute(&mut *tx)

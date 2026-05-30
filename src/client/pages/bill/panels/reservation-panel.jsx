@@ -91,9 +91,17 @@ const RES_STATUS_CFG = {
 
 // ─── Date helpers ─────────────────────────────────────────────
 
+// Returns YYYY-MM-DD in the browser's LOCAL timezone (not UTC).
+// Using toISOString() would give the UTC date which is wrong for IST and
+// other timezones that are hours ahead of UTC.
+function getTodayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function isToday(dateStr) {
   if (!dateStr) return false;
-  return dateStr === new Date().toISOString().slice(0, 10);
+  return dateStr === getTodayStr();
 }
 
 function fmtDate(dateStr) {
@@ -108,10 +116,6 @@ function fmtTime(timeStr) {
   const hour = parseInt(h, 10);
   const ampm = hour >= 12 ? "PM" : "AM";
   return `${hour % 12 || 12}:${m} ${ampm}`;
-}
-
-function getTodayStr() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 // ─── Form helper UI ───────────────────────────────────────────
@@ -1061,9 +1065,10 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
 
   const filtered = useMemo(() => {
     let list = reservations;
+    const todayStr = getTodayStr();
 
-    if (dateFilter === "TODAY")    list = list.filter((r) => isToday(r.reservation_date));
-    else if (dateFilter === "UPCOMING") list = list.filter((r) => !isToday(r.reservation_date));
+    if (dateFilter === "TODAY")         list = list.filter((r) => r.reservation_date === todayStr);
+    else if (dateFilter === "UPCOMING") list = list.filter((r) => r.reservation_date > todayStr);
 
     if (statusFilter !== "ALL") list = list.filter((r) => r.reservation_status === statusFilter);
 
@@ -1080,13 +1085,15 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
     return list;
   }, [reservations, search, statusFilter, dateFilter]);
 
-  const { today, upcoming } = useMemo(() => {
-    const t = [], u = [];
+  const { past, today, upcoming } = useMemo(() => {
+    const p = [], t = [], u = [];
+    const todayStr = getTodayStr();
     for (const r of filtered) {
-      if (isToday(r.reservation_date)) t.push(r);
+      if (r.reservation_date < todayStr) p.push(r);
+      else if (r.reservation_date === todayStr) t.push(r);
       else u.push(r);
     }
-    return { today: t, upcoming: u };
+    return { past: p, today: t, upcoming: u };
   }, [filtered]);
 
   if (isLoading) {
@@ -1185,6 +1192,20 @@ function ReservationList({ reservations, isLoading, onStatusChange, onCancel, on
                   <div className="flex-1 h-px bg-border" />
                 </div>
                 {upcoming.map((r) => (
+                  <ReservationCard key={r.id} res={r} onStatusChange={onStatusChange} onCancel={onCancel} onEdit={onEdit} onViewBill={onViewBill} />
+                ))}
+              </div>
+            )}
+            {past.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-widest">
+                    Past
+                  </span>
+                  <span className="text-[11px] text-muted-foreground/40">({past.length})</span>
+                  <div className="flex-1 h-px bg-border/60" />
+                </div>
+                {[...past].reverse().map((r) => (
                   <ReservationCard key={r.id} res={r} onStatusChange={onStatusChange} onCancel={onCancel} onEdit={onEdit} onViewBill={onViewBill} />
                 ))}
               </div>

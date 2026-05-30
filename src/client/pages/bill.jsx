@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { BillingProvider, useBillingContext } from "./bill/state/billing-context";
 import { BILLING_VIEW } from "./bill/constants/billing";
 import { useReservationAutoExpiry } from "./bill/hooks/use-billing-queries";
+import { useReservationReminder } from "./bill/hooks/use-reservation-reminder";
 import TableSelectView from "./bill/views/table-select";
 import OrderEntryView from "./bill/views/order-entry";
 
@@ -56,6 +57,9 @@ function BillingScreen() {
 
   // Auto-expire no-show reservations and keep floor data live in all views
   useReservationAutoExpiry();
+
+  // Chime reminders for upcoming reservations (reads settings from localStorage)
+  useReservationReminder();
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">

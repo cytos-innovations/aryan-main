@@ -1,12 +1,10 @@
 import { useMemo, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { toast } from "sonner";
 import {
   Add01Icon,
   MinusSignIcon,
   Delete01Icon,
   ChefHatIcon,
-  ReceiptIndianRupeeIcon,
   UserAccountIcon,
   UserGroupIcon,
   PercentIcon,
@@ -17,13 +15,9 @@ import {
   QrCodeIcon,
   Wallet01Icon,
   MinusPlusIcon,
-  PrinterIcon,
-  Hold01Icon,
   StickyNote01Icon,
   Cancel01Icon,
-  SendingOrderIcon,
   Discount01Icon,
-  AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -31,25 +25,19 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBillingContext } from "../state/billing-context";
 import {
-  useOrderItems,
   useUpdateOrderItemQty,
   useCancelOrderItem,
-  useGenerateKot,
-  useGenerateBill,
-  useSettleBill,
-  useBillSummary,
   useUpdateSessionInfo,
 } from "../hooks/use-billing-queries";
 import {
   ORDER_TYPE,
-  ORDER_TYPE_LABELS,
   PAYMENT_TYPE,
   PAYMENT_TYPE_LABELS,
 } from "../constants/billing";
 import { calcBillTotals, calcTaxBreakdown, fmtAmount } from "../utils/billing-calc";
 import { FoodTypeDot } from "./menu-center";
 
-// ─── KOT status config ────────────────────────────────────────────
+// ─── KOT status config ────────────────────────────────────────
 
 const KOT_CFG = {
   PENDING:   { dot: "bg-amber-400",   label: "Pending"   },
@@ -69,7 +57,7 @@ function KotDot({ status }) {
   );
 }
 
-// ─── Order item row ───────────────────────────────────────────────
+// ─── Order item row ───────────────────────────────────────────
 
 function OrderItemRow({ item, sessionId, isDraft }) {
   const updateQty  = useUpdateOrderItemQty(sessionId);
@@ -166,7 +154,7 @@ function OrderItemRow({ item, sessionId, isDraft }) {
   );
 }
 
-// ─── Order items area ─────────────────────────────────────────────
+// ─── Order items area ─────────────────────────────────────────
 
 function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
   if (isLoading) {
@@ -206,9 +194,9 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
   );
 }
 
-// ─── Bill totals section ──────────────────────────────────────────
+// ─── Bill totals section ──────────────────────────────────────
 
-function BillTotals({ items, discountPercent, onDiscountChange }) {
+function BillTotals({ items, discountPercent }) {
   const [taxExpanded, setTaxExpanded] = useState(false);
 
   const totals = useMemo(() => calcBillTotals(items ?? []), [items]);
@@ -236,7 +224,7 @@ function BillTotals({ items, discountPercent, onDiscountChange }) {
 
   return (
     <div className="shrink-0 border-t bg-card">
-      <div className="px-4 py-3 space-y-2">
+      <div className="px-4 py-2.5 space-y-1.5">
         {liquorTotal > 0 && (
           <>
             <TotalsRow label="Food" value={foodTotal} />
@@ -283,41 +271,28 @@ function BillTotals({ items, discountPercent, onDiscountChange }) {
           </>
         )}
 
-        {/* Bill-level discount */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 text-[11px] text-muted-foreground min-w-0 flex-1">
-            <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-            <span>Discount</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <Input
-              type="number"
-              min="0"
-              max="100"
-              step="0.5"
-              value={discountPercent}
-              onChange={(e) => onDiscountChange(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
-              className="h-6 w-14 text-xs text-right tabular-nums px-1.5 py-0"
-            />
-            <HugeiconsIcon icon={PercentIcon} size={10} strokeWidth={2} className="text-muted-foreground" />
-          </div>
-          {billDiscountAmt > 0 && (
-            <span className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+        {/* Bill discount — read-only row; input lives in the bottom panel */}
+        {billDiscountAmt > 0 && (
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+              Discount ({discountPercent}%)
+            </span>
+            <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
               -₹{fmtAmount(billDiscountAmt)}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {roundOff !== 0 && (
           <TotalsRow label="Round Off" value={roundOff} small />
         )}
       </div>
 
-      {/* Net total */}
-      <div className="px-4 py-2.5 bg-primary/5 dark:bg-primary/10 border-t flex items-center justify-between">
-        <span className="text-sm font-bold">Total</span>
-        <span className="text-lg font-bold tabular-nums tracking-tight">
+      {/* Compact net total */}
+      <div className="px-4 py-2 bg-muted/30 border-t flex items-center justify-between">
+        <span className="text-xs font-semibold text-muted-foreground">Net Total</span>
+        <span className="text-sm font-bold tabular-nums tracking-tight">
           ₹{fmtAmount(netAmount)}
         </span>
       </div>
@@ -336,7 +311,7 @@ function TotalsRow({ label, value, accent, small }) {
   );
 }
 
-// ─── Payment section (only shown when bill is printed) ────────────
+// ─── Payment section (only shown when bill is printed) ────────
 
 const PAYMENT_MODES = [
   { key: PAYMENT_TYPE.CASH, icon: CashIcon,       label: "Cash"  },
@@ -476,7 +451,7 @@ function PaymentSection({ netAmount, isClosed, onSettle, isSettling }) {
   );
 }
 
-// ─── Session top bar ──────────────────────────────────────────────
+// ─── Session top bar ──────────────────────────────────────────
 
 function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCovers, onSetDraftConfig }) {
   const updateInfo = useUpdateSessionInfo(sessionId);
@@ -484,12 +459,6 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
   const currentOrderType = isDraft ? draftOrderType : session?.order_type;
   const currentCovers    = isDraft ? draftCovers    : (session?.covers ?? 1);
   const isClosed         = !isDraft && session?.session_status === "BILL_PRINTED";
-
-  function setOrderType(ot) {
-    if (isDraft) { onSetDraftConfig({ orderType: ot }); return; }
-    if (!session || session.order_type === ot) return;
-    updateInfo.mutate({ sessionId, orderType: ot, covers: session.covers, customerName: session.customer_name ?? null });
-  }
 
   function adjustCovers(delta) {
     if (isDraft) { onSetDraftConfig({ covers: Math.max(1, currentCovers + delta) }); return; }
@@ -504,26 +473,6 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
 
   return (
     <div className="shrink-0 border-b bg-card">
-      {/* Order type tabs */}
-      <div className="flex border-b">
-        {Object.entries(ORDER_TYPE_LABELS).map(([k, lbl]) => (
-          <button
-            key={k}
-            type="button"
-            disabled={isClosed}
-            onClick={() => setOrderType(k)}
-            className={[
-              "flex-1 py-2 text-[11px] font-semibold transition-colors",
-              currentOrderType === k
-                ? "bg-primary/10 text-primary border-b-2 border-primary"
-                : "text-muted-foreground hover:bg-muted disabled:opacity-50",
-            ].join(" ")}
-          >
-            {lbl}
-          </button>
-        ))}
-      </div>
-
       {/* Session meta row */}
       <div className="flex items-center gap-2.5 px-4 py-2 text-xs text-muted-foreground flex-wrap">
         {/* Covers */}
@@ -552,7 +501,7 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
           </div>
         )}
 
-        {/* Waiter (existing sessions only) */}
+        {/* Waiter */}
         {!isDraft && session?.waiter_name && (
           <div className="flex items-center gap-1 min-w-0">
             <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} />
@@ -560,7 +509,7 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
           </div>
         )}
 
-        {/* Customer (existing sessions only) */}
+        {/* Customer */}
         {!isDraft && session?.customer_name && (
           <div className="flex items-center gap-1 min-w-0">
             <span className="truncate max-w-90px text-foreground font-medium">
@@ -578,205 +527,20 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
   );
 }
 
-// ─── Action buttons ───────────────────────────────────────────────
-
-function ActionButtons({
-  sessionId, session, items, netAmount,
-  billId, onSettle, isSettling,
-  onCancel,
-  isDraft, onKotDraft, isKotting,
-  isNearReservation,
-}) {
-  const { clearSession, paymentEntries } = useBillingContext();
-  const generateKot  = useGenerateKot(sessionId);
-  const generateBill = useGenerateBill(sessionId);
-
-  const activeItems = (items ?? []).filter((i) => i.item_status === "ACTIVE");
-  const pendingKot  = activeItems.filter((i) => i.kot_status === "PENDING").length;
-  const hasItems    = activeItems.length > 0;
-  const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED";
-  const isKotSent   = !isDraft && session?.session_status === "KOT_SENT";
-
-  // Draft: any item present enables KOT; existing: pending items required
-  const canKot    = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
-  const canBill   = !isDraft && hasItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
-  const canSettle = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
-
-  const kotPending = isDraft ? isKotting : generateKot.isPending;
-
-  function handleKot() {
-    // Block KOT when table has an active reservation within 10 minutes
-    if (isNearReservation) {
-      toast.error("This table has an upcoming reservation. KOT cannot be created before reservation time.");
-      return;
-    }
-    if (isDraft) { onKotDraft(); return; }
-    generateKot.mutate({}, { onSuccess: clearSession });
-  }
-
-  function handleBill() {
-    generateBill.mutate(undefined, { onSuccess: clearSession });
-  }
-
-  function handleSettle() {
-    const enteredTotal = paymentEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-    const useEntries = paymentEntries.length > 0
-      ? paymentEntries
-      : [{ payment_mode: PAYMENT_TYPE.CASH, amount: enteredTotal > 0 ? enteredTotal : (netAmount ?? 0), reference_no: null }];
-    onSettle(useEntries);
-  }
-
-  const kotTitle = isNearReservation
-    ? "KOT blocked — table has an upcoming reservation"
-    : isDraft
-      ? (activeItems.length === 0 ? "Add items first" : "Send KOT")
-      : (pendingKot > 0 ? `Send ${pendingKot} pending item${pendingKot > 1 ? "s" : ""}` : "No pending items");
-
-  return (
-    <>
-      {/* Reservation warning banner */}
-      {isNearReservation && (
-        <div className="shrink-0 mx-3 mt-2.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/80 dark:bg-blue-950/30 px-3 py-2 flex items-start gap-2">
-          <HugeiconsIcon icon={AlertCircleIcon} size={13} strokeWidth={2} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-blue-700 dark:text-blue-300 leading-snug">
-            Table reserved soon — KOT &amp; session creation are blocked until reservation time.
-          </p>
-        </div>
-      )}
-
-      <div className="shrink-0 border-t bg-card px-3 py-2.5 grid grid-cols-3 gap-2">
-        {/* Row 1 */}
-        <Button
-          type="button"
-          size="sm"
-          className="h-9 flex-col gap-0.5 text-[11px] font-semibold bg-amber-500 hover:bg-amber-600 text-white border-0 col-span-1"
-          disabled={!canKot || kotPending}
-          onClick={handleKot}
-          title={kotTitle}
-        >
-          <HugeiconsIcon icon={SendingOrderIcon} size={14} strokeWidth={2} />
-          {kotPending ? "Sending…" : `KOT${!isDraft && pendingKot > 0 ? ` (${pendingKot})` : ""}`}
-        </Button>
-
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-9 flex-col gap-0.5 text-[11px]"
-          disabled={!canKot || kotPending}
-          onClick={handleKot}
-          title="KOT + Print"
-        >
-          <HugeiconsIcon icon={PrinterIcon} size={13} strokeWidth={2} />
-          KOT+P
-        </Button>
-
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-9 flex-col gap-0.5 text-[11px] text-muted-foreground"
-          disabled={isDraft}
-          title="Hold order"
-        >
-          <HugeiconsIcon icon={Hold01Icon} size={13} strokeWidth={2} />
-          Hold
-        </Button>
-
-        {/* Row 2 */}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-9 flex-col gap-0.5 text-[11px]"
-          disabled={!canBill || generateBill.isPending}
-          onClick={handleBill}
-          title="Generate bill"
-        >
-          <HugeiconsIcon icon={ReceiptIndianRupeeIcon} size={13} strokeWidth={2} />
-          Bill
-        </Button>
-
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-9 flex-col gap-0.5 text-[11px]"
-          disabled={!canBill || generateBill.isPending}
-          onClick={handleBill}
-          title="Bill + Print"
-        >
-          <HugeiconsIcon icon={PrinterIcon} size={13} strokeWidth={2} />
-          Bill+P
-        </Button>
-
-        <Button
-          type="button"
-          size="sm"
-          className="h-9 flex-col gap-0.5 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white border-0"
-          disabled={!canSettle}
-          onClick={handleSettle}
-          title={!isClosed ? "Generate bill first" : "Settle payment"}
-        >
-          <HugeiconsIcon icon={CashIcon} size={14} strokeWidth={2} />
-          Settle
-        </Button>
-      </div>
-
-      {/* Cancel link */}
-      <div className="shrink-0 px-3 pb-2.5 flex justify-center">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-[10px] text-muted-foreground/50 hover:text-destructive transition-colors"
-        >
-          {isDraft ? "Discard Draft" : "Cancel Order"}
-        </button>
-      </div>
-    </>
-  );
-}
-
-// ─── Main right panel ─────────────────────────────────────────────
+// ─── Main right panel ─────────────────────────────────────────
 
 export default function OrderRightPanel({
   session, sessionId,
-  isDraft, draftItems, draftOrderType, draftCovers,
-  onSetDraftConfig, onKotDraft, isKotting,
-  isNearReservation,
-  onCancelSession,
+  isDraft, draftOrderType, draftCovers,
+  onSetDraftConfig,
+  // Lifted from OrderEntryView:
+  items, isLoadingItems,
+  discountPercent,
+  netAmount,
+  handleSettle, isSettling,
+  billId,
 }) {
-  const [discountPercent, setDiscountPercent] = useState(0);
-  const { clearSession } = useBillingContext();
-
-  const itemsQuery  = useOrderItems(sessionId);
-  const billSummary = useBillSummary(sessionId);
-  const settleBill  = useSettleBill(sessionId);
-
-  // In draft mode, use context items; otherwise DB query items
-  const items  = isDraft ? (draftItems ?? []) : (itemsQuery.data ?? []);
-  const billId = billSummary.data?.bill_id ?? null;
-
-  const totals    = useMemo(() => calcBillTotals(items), [items]);
-  const billDisc  = Math.round((totals.finalAmount * (Number(discountPercent) || 0)) / 100 * 100) / 100;
-  const afterDisc = Math.round((totals.finalAmount - billDisc) * 100) / 100;
-  const roundOff  = Math.round(afterDisc) - afterDisc;
-  const netAmount = afterDisc + roundOff;
-
   const isClosed = !isDraft && session?.session_status === "BILL_PRINTED";
-
-  function handleSettle(entries) {
-    if (!billId || !entries.length) return;
-    const isPartPayment = entries.length > 1;
-    const paymentType   = isPartPayment ? PAYMENT_TYPE.PART : entries[0].payment_mode;
-    const paymentAmount = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-    const referenceNo   = isPartPayment ? null : (entries[0]?.reference_no ?? null);
-    const partPayments  = isPartPayment ? entries : [];
-    settleBill.mutate(
-      { sessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount: 0 },
-      { onSuccess: clearSession },
-    );
-  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-card">
@@ -795,7 +559,7 @@ export default function OrderRightPanel({
         <OrderItemsArea
           sessionId={sessionId}
           items={items}
-          isLoading={!isDraft && itemsQuery.isLoading}
+          isLoading={isLoadingItems}
           isDraft={isDraft}
         />
       </div>
@@ -804,7 +568,6 @@ export default function OrderRightPanel({
       <BillTotals
         items={items}
         discountPercent={discountPercent}
-        onDiscountChange={setDiscountPercent}
       />
 
       {/* Payment — only shown once bill is printed */}
@@ -813,25 +576,9 @@ export default function OrderRightPanel({
           netAmount={netAmount}
           isClosed={isClosed}
           onSettle={handleSettle}
-          isSettling={settleBill.isPending}
+          isSettling={isSettling}
         />
       )}
-
-      {/* Action buttons */}
-      <ActionButtons
-        sessionId={sessionId}
-        session={session}
-        items={items}
-        netAmount={netAmount}
-        billId={billId}
-        onSettle={handleSettle}
-        isSettling={settleBill.isPending}
-        onCancel={onCancelSession}
-        isDraft={isDraft}
-        onKotDraft={onKotDraft}
-        isKotting={isKotting}
-        isNearReservation={isNearReservation}
-      />
     </div>
   );
 }

@@ -146,6 +146,22 @@ CREATE TABLE MenuCard (
     updated_by INTEGER REFERENCES users(id)
 );
 
+CREATE TABLE menu_recipe (
+    id INTEGER PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    menu_id BIGINT NOT NULL REFERENCES MenuCard(id) ON DELETE CASCADE,
+    ingredient_name VARCHAR(255) NOT NULL,
+    quantity NUMERIC(10,2) NOT NULL,
+    unit VARCHAR(20) NOT NULL,
+
+    -- Standard Audit & Status Columns
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
 CREATE TABLE food_type (
     id INTEGER PRIMARY KEY,
     code BIGSERIAL UNIQUE,

@@ -490,6 +490,9 @@ export function useReservationAutoExpiry() {
     if (now - lastCallRef.current < 55_000) return;
 
     const hasExpirable = floorData.some((t) => {
+      // Table is RESERVED in DB but has no today-reservation overlay → past-date stale lock
+      if (t.current_status === "RESERVED" && !t.reservation_id) return true;
+
       if (!t.reservation_id || t.reservation_status !== "RESERVED" || !t.reservation_time) return false;
       const [h, m] = t.reservation_time.split(":").map(Number);
       if (isNaN(h) || isNaN(m)) return false;

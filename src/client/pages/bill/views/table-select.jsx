@@ -11,6 +11,7 @@ import {
   UserAccountIcon,
   TableIcon,
   UserGroupIcon,
+  HotelBellIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 
@@ -18,11 +19,31 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import { useBillingContext } from "../state/billing-context";
 import { useFloorView } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
 import { minsUntilReservation, getReservationPhase } from "../utils/billing-calc";
+import {
+  getReminderSettings,
+  saveReminderSettings,
+  playReminderChime,
+} from "../hooks/use-reservation-reminder";
 import ReservationPanel from "../panels/reservation-panel";
 
 // ─── Status helpers ──────────────────────────────────────────────
@@ -307,6 +328,114 @@ function StatPill({ count, label, colorClass }) {
   );
 }
 
+// ─── Reminder Settings Dialog ────────────────────────────────────────
+
+const MINUTE_OPTIONS = [
+  { value: "5",  label: "5 minutes" },
+  { value: "10", label: "10 minutes" },
+  { value: "15", label: "15 minutes" },
+  { value: "20", label: "20 minutes" },
+  { value: "30", label: "30 minutes" },
+  { value: "45", label: "45 minutes" },
+  { value: "60", label: "1 hour" },
+];
+
+function ReminderSettingsDialog({ open, onOpenChange }) {
+  const [cfg, setCfg] = useState(() => getReminderSettings());
+
+  function handleSave() {
+    saveReminderSettings(cfg);
+    toast.success("Reminder settings saved");
+    onOpenChange(false);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm p-0 gap-0 overflow-hidden">
+        <DialogHeader className="px-5 pt-5 pb-3 border-b">
+          <div className="flex items-center gap-2">
+            <HugeiconsIcon icon={HotelBellIcon} size={16} strokeWidth={2} className="text-primary shrink-0" />
+            <DialogTitle className="text-sm font-semibold">Reservation Reminders</DialogTitle>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+            A gentle 3-note bell chime plays before upcoming reservations. The tone
+            uses inharmonic overtones — sounds like a real restaurant bell, not a
+            delivery-app alert.
+          </p>
+        </DialogHeader>
+
+        <div className="px-5 py-4 space-y-5">
+          {/* Enable / disable */}
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label htmlFor="reminder-toggle" className="text-sm font-medium">
+                Enable reminders
+              </Label>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Play chime for upcoming reservations
+              </p>
+            </div>
+            <Switch
+              id="reminder-toggle"
+              checked={cfg.enabled}
+              onCheckedChange={(v) => setCfg((s) => ({ ...s, enabled: v }))}
+            />
+          </div>
+
+          {/* How early */}
+          <div className={cfg.enabled ? "" : "opacity-40 pointer-events-none"}>
+            <Label className="text-sm font-medium">Remind me before</Label>
+            <p className="text-[11px] text-muted-foreground mt-0.5 mb-2">
+              How far ahead to play the alert
+            </p>
+            <Select
+              value={String(cfg.minutesBefore)}
+              onValueChange={(v) => setCfg((s) => ({ ...s, minutesBefore: parseInt(v, 10) }))}
+            >
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MINUTE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value} className="text-sm">
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Preview */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full h-8 gap-1.5 text-xs"
+            onClick={playReminderChime}
+          >
+            <HugeiconsIcon icon={HotelBellIcon} size={13} strokeWidth={2} />
+            Preview Chime
+          </Button>
+        </div>
+
+        <div className="px-5 pb-5 flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button type="button" className="flex-1" onClick={handleSave}>
+            Save
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main View ────────────────────────────────────────────────────
 
 export default function TableSelectView() {
@@ -314,6 +443,7 @@ export default function TableSelectView() {
   const { setSession } = useBillingContext();
   const [search, setSearch] = useState("");
   const [reservationOpen, setReservationOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
   const searchRef = useRef(null);
 
   // Auto-focus search on mount
@@ -474,6 +604,17 @@ export default function TableSelectView() {
           Add Table
         </Button>
 
+        {/* Reminder settings */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => setReminderOpen(true)}
+          title="Reservation reminder settings"
+        >
+          <HugeiconsIcon icon={HotelBellIcon} size={15} strokeWidth={2} />
+        </Button>
+
         <Separator orientation="vertical" className="h-5 mx-1" />
 
         {/* Stats */}
@@ -595,6 +736,10 @@ export default function TableSelectView() {
     <ReservationPanel
       open={reservationOpen}
       onOpenChange={setReservationOpen}
+    />
+    <ReminderSettingsDialog
+      open={reminderOpen}
+      onOpenChange={setReminderOpen}
     />
     </>
   );
