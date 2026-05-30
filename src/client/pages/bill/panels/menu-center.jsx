@@ -23,13 +23,27 @@ function getRecentIds() {
   catch { return []; }
 }
 
+// ─── Food type normaliser ─────────────────────────────────────────
+// food_type comes from the user-defined food_type master (free text),
+// so we normalise before matching to handle "Non Veg", "Non-Veg", etc.
+
+export function normalizeFoodType(type) {
+  if (!type) return null;
+  const t = type.toUpperCase().replace(/[\s\-]+/g, "_").replace(/_+/g, "_").trim();
+  if (t === "NON_VEG" || t === "NONVEG") return "NON_VEG";
+  if (t === "VEGAN")                      return "VEGAN";
+  if (t === "VEG")                        return "VEG";
+  if (t === "EGG" || t === "EGGS")        return "EGG";
+  return t;
+}
+
 // ─── Food type indicator (Indian packaging standard) ──────────────
 
 export function FoodTypeDot({ type, size = 10 }) {
   if (!type) return null;
   const s = size;
   const cx = s / 2;
-  switch (type.toUpperCase()) {
+  switch (normalizeFoodType(type)) {
     case "VEG":
       return (
         <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className="shrink-0" aria-label="Veg">
@@ -68,6 +82,28 @@ export function FoodTypeDot({ type, size = 10 }) {
   }
 }
 
+// ─── Food type legend ─────────────────────────────────────────────
+
+const FOOD_TYPE_LEGEND = [
+  { type: "VEG",     label: "Veg" },
+  { type: "NON_VEG", label: "Non-Veg" },
+  { type: "EGG",     label: "Egg" },
+  { type: "VEGAN",   label: "Vegan" },
+];
+
+function FoodTypeLegend() {
+  return (
+    <div className="shrink-0 flex items-center gap-3 px-2.5 py-1 border-b bg-card/60">
+      {FOOD_TYPE_LEGEND.map(({ type, label }) => (
+        <div key={type} className="flex items-center gap-1">
+          <FoodTypeDot type={type} size={10} />
+          <span className="text-[10px] text-muted-foreground leading-none">{label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Menu Item Card ───────────────────────────────────────────────
 
 function MenuItemCard({ item, applicableRate, onClick, isAdding }) {
@@ -92,10 +128,10 @@ function MenuItemCard({ item, applicableRate, onClick, isAdding }) {
       {item.food_type && (
         <div className={[
           "absolute top-0 left-0 bottom-0 w-0.5",
-          item.food_type === "VEG"     ? "bg-green-500" :
-          item.food_type === "NON_VEG" ? "bg-red-600"   :
-          item.food_type === "EGG"     ? "bg-yellow-500" :
-          item.food_type === "VEGAN"   ? "bg-green-600"  : "bg-transparent",
+          normalizeFoodType(item.food_type) === "VEG"     ? "bg-green-500"  :
+          normalizeFoodType(item.food_type) === "NON_VEG" ? "bg-red-600"    :
+          normalizeFoodType(item.food_type) === "EGG"     ? "bg-yellow-500" :
+          normalizeFoodType(item.food_type) === "VEGAN"   ? "bg-green-600"  : "bg-transparent",
         ].join(" ")} />
       )}
 
@@ -240,6 +276,9 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
           )}
         </div>
       </div>
+
+      {/* ── Food type legend ── */}
+      <FoodTypeLegend />
 
       {/* ── Items grid ── */}
       <div className="flex-1 overflow-y-auto p-2">

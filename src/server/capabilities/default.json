@@ -8,6 +8,12 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "sql:default"
+    "sql:default",
+    "core:window:allow-set-closable",
+    "core:window:allow-set-maximizable",
+    "core:window:allow-set-minimizable",
+    "core:window:allow-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-is-minimized"
   ]
 }

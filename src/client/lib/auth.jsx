@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const STORAGE_KEY = "pos-app:auth";
 const AuthContext = createContext(null);
@@ -28,6 +29,49 @@ export function AuthProvider({ children }) {
     if (auth) localStorage.setItem(STORAGE_KEY, JSON.stringify(auth));
     else localStorage.removeItem(STORAGE_KEY);
   }, [auth]);
+
+  // When logged in: only allow minimize. When logged out: restore all buttons.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    if (auth) {
+      win.setClosable(false).catch(() => {});
+      win.setMaximizable(false).catch(() => {});
+      win.setMinimizable(true).catch(() => {});
+    } else {
+      win.setClosable(true).catch(() => {});
+      win.setMaximizable(true).catch(() => {});
+      win.setMinimizable(true).catch(() => {});
+    }
+  }, [auth]);
+
+  // Re-maximize when restored from taskbar.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let unlistenResize, unlistenFocus;
+
+    async function ensureMaximized() {
+      try {
+        const isMax = await win.isMaximized();
+        if (!isMax) await win.maximize();
+      } catch {}
+    }
+
+    // onResized fires whenever Windows changes the window size (including restore)
+    win.onResized(ensureMaximized).then((fn) => { unlistenResize = fn; });
+
+    // onFocusChanged with delay covers cases where resize fires before state settles
+    win.onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        setTimeout(ensureMaximized, 50);
+        setTimeout(ensureMaximized, 300);
+      }
+    }).then((fn) => { unlistenFocus = fn; });
+
+    return () => {
+      unlistenResize?.();
+      unlistenFocus?.();
+    };
+  }, []);
 
   const login = useCallback(async (username, password, applicationId) => {
     const result = await invoke("login", {
