@@ -27,6 +27,7 @@ pub struct MenuGroupSimple {
     pub name: String,
     pub category_id: Option<i32>,
     pub category_name: Option<String>,
+    pub multiple_recipe: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -137,7 +138,7 @@ pub async fn get_all_menu_groups(
     let pool = acquire_pool(&state.pool, &app).await?;
 
     let rows = sqlx::query(
-        "SELECT mg.id, mg.code, mg.name, mg.category_id, mc.name AS category_name \
+        "SELECT mg.id, mg.code, mg.name, mg.category_id, mc.name AS category_name, mg.multiple_recipe \
          FROM menu_group mg \
          LEFT JOIN menu_category mc ON mc.id = mg.category_id \
          WHERE mg.is_active = TRUE ORDER BY mg.name ASC",
@@ -147,11 +148,12 @@ pub async fn get_all_menu_groups(
     .map_err(|e| format!("Query failed: {e}"))?;
 
     Ok(rows.iter().map(|r| MenuGroupSimple {
-        id:            r.try_get("id").unwrap_or(0),
-        code:          r.try_get("code").unwrap_or(0),
-        name:          r.try_get("name").unwrap_or_default(),
-        category_id:   r.try_get("category_id").ok().flatten(),
-        category_name: r.try_get("category_name").ok().flatten(),
+        id:              r.try_get("id").unwrap_or(0),
+        code:            r.try_get("code").unwrap_or(0),
+        name:            r.try_get("name").unwrap_or_default(),
+        category_id:     r.try_get("category_id").ok().flatten(),
+        category_name:   r.try_get("category_name").ok().flatten(),
+        multiple_recipe: r.try_get("multiple_recipe").ok().flatten(),
     }).collect())
 }
 

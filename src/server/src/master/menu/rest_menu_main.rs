@@ -1,6 +1,6 @@
 use crate::{acquire_pool, AppState};
 use crate::utility::query::QueryState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 // ─────────────────────────────────────────────────────────────
@@ -35,6 +35,30 @@ pub struct MenuCardRow {
 pub struct PagedMenuCards {
     pub data: Vec<MenuCardRow>,
     pub total: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MenuRecipeRow {
+    pub id: i32,
+    pub menu_id: i32,
+    pub ingredient_name: String,
+    pub quantity: f64,
+    pub unit_id: Option<i32>,
+    pub unit_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnitSimple {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecipeInput {
+    pub ingredient_name: String,
+    pub quantity: f64,
+    pub unit_id: Option<i32>,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -172,7 +196,7 @@ pub async fn create_menu_card(
     consume_quantity: f64,
     excise_rate: f64,
     comments: Option<String>,
-) -> Result<(), String> {
+) -> Result<i32, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".to_string());
@@ -201,14 +225,15 @@ pub async fn create_menu_card(
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    if let Some(c) = code.filter(|&c| c > 0) {
-        sqlx::query(
+    let new_id: i32 = if let Some(c) = code.filter(|&c| c > 0) {
+        sqlx::query_scalar(
             "INSERT INTO menu_card \
              (code, name, menu_group_id, food_type_id, item_barcode, menu_alias, \
               kitchen_section_id, liquor_group_id, \
               rate_1, rate_2, rate_3, rate_4, rate_5, \
               consume_quantity, excise_rate, comments) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+             RETURNING id",
         )
         .bind(c)
         .bind(&name)
@@ -226,17 +251,18 @@ pub async fn create_menu_card(
         .bind(consume_quantity)
         .bind(excise_rate)
         .bind(cmts)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
-        .map_err(map_err)?;
+        .map_err(map_err)?
     } else {
-        sqlx::query(
+        sqlx::query_scalar(
             "INSERT INTO menu_card \
              (name, menu_group_id, food_type_id, item_barcode, menu_alias, \
               kitchen_section_id, liquor_group_id, \
               rate_1, rate_2, rate_3, rate_4, rate_5, \
               consume_quantity, excise_rate, comments) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             RETURNING id",
         )
         .bind(&name)
         .bind(menu_group_id)
@@ -253,12 +279,12 @@ pub async fn create_menu_card(
         .bind(consume_quantity)
         .bind(excise_rate)
         .bind(cmts)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
-        .map_err(map_err)?;
-    }
+        .map_err(map_err)?
+    };
 
-    Ok(())
+    Ok(new_id)
 }
 
 #[tauri::command]
@@ -371,6 +397,98 @@ pub async fn delete_menu_card(
         .execute(&pool)
         .await
         .map_err(|e| format!("Failed to delete menu card: {e}"))?;
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Recipe commands
+// ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_all_units_for_recipe(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<UnitSimple>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, name FROM units WHERE is_active = 1 ORDER BY name ASC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch units: {e}"))?;
+
+    Ok(rows.iter().map(|r| UnitSimple {
+        id:   r.try_get("id").unwrap_or(0),
+        name: r.try_get("name").unwrap_or_default(),
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn get_menu_recipes(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    menu_id: i32,
+) -> Result<Vec<MenuRecipeRow>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT mr.id, mr.menu_id, mr.ingredient_name, \
+                CAST(mr.quantity AS FLOAT8) AS quantity, \
+                mr.unit_id, u.name AS unit_name \
+         FROM menu_recipe mr \
+         LEFT JOIN units u ON u.id = mr.unit_id \
+         WHERE mr.menu_id = $1 \
+         ORDER BY mr.id ASC",
+    )
+    .bind(menu_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch recipes: {e}"))?;
+
+    Ok(rows.iter().map(|r| MenuRecipeRow {
+        id:              r.try_get("id").unwrap_or(0),
+        menu_id:         r.try_get("menu_id").unwrap_or(0),
+        ingredient_name: r.try_get("ingredient_name").unwrap_or_default(),
+        quantity:        r.try_get::<f64, _>("quantity").unwrap_or(0.0),
+        unit_id:         r.try_get("unit_id").ok().flatten(),
+        unit_name:       r.try_get("unit_name").ok().flatten(),
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn save_menu_recipes(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    menu_id: i32,
+    recipes: Vec<RecipeInput>,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    sqlx::query("DELETE FROM menu_recipe WHERE menu_id = $1")
+        .bind(menu_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Failed to clear recipes: {e}"))?;
+
+    for r in &recipes {
+        let name = r.ingredient_name.trim().to_string();
+        if name.is_empty() || r.quantity <= 0.0 {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO menu_recipe (menu_id, ingredient_name, quantity, unit_id) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(menu_id)
+        .bind(&name)
+        .bind(r.quantity)
+        .bind(r.unit_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Failed to insert recipe row: {e}"))?;
+    }
 
     Ok(())
 }

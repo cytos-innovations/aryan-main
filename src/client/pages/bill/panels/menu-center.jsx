@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Search01Icon, Add01Icon, ChefHatIcon } from "@hugeicons/core-free-icons";
 import { Input } from "@/components/ui/input";
@@ -193,6 +193,12 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
   const [search, setSearch] = useState("");
   const searchRef = useRef(null);
 
+  // Auto-focus search bar whenever the panel mounts (new order / table open)
+  useEffect(() => {
+    const t = setTimeout(() => searchRef.current?.focus(), 80);
+    return () => clearTimeout(t);
+  }, []);
+
   // Read recents once on mount; don't re-sort during the session to prevent
   // card positions shifting under the user's finger between taps.
   // pushRecentId() still writes to localStorage so the next session sees updates.
@@ -250,17 +256,31 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
           />
           <Input
             ref={searchRef}
+            data-pos-search
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              e.preventDefault(); // never let Enter propagate or trigger form submission
-              // Single match → add immediately and clear search (POS shortcut)
-              if (filteredItems.length === 1) {
-                onAddItem(filteredItems[0]);
-                setSearch("");
+              if (e.key === "Tab" && !e.shiftKey) {
+                // Forward Tab: jump to the first enabled POS action button
+                e.preventDefault();
+                for (const action of ["kotprint", "billprint", "settle"]) {
+                  const el = document.querySelector(`[data-pos-action="${action}"]`);
+                  if (el && !el.disabled) { el.focus(); return; }
+                }
+                return;
               }
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const q = search.trim();
+              if (!q) return;
+              // Priority 1: exact item code match (e.g. user types "1" → code "1")
+              const byCode = menu.find(
+                (i) => String(i.code ?? "").toLowerCase() === q.toLowerCase(),
+              );
+              if (byCode) { onAddItem(byCode); setSearch(""); return; }
+              // Priority 2: single filtered result
+              if (filteredItems.length === 1) { onAddItem(filteredItems[0]); setSearch(""); }
             }}
             placeholder="Search item name or code…"
             className="h-7 pl-7 text-xs"

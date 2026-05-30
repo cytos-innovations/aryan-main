@@ -37,6 +37,7 @@ use master::menu::rest_menu_group::{
 };
 use master::menu::rest_menu_main::{
     create_menu_card, delete_menu_card, get_menu_cards, toggle_menu_card_active, update_menu_card,
+    get_all_units_for_recipe, get_menu_recipes, save_menu_recipes,
 };
 use master::menu::rest_kitchen_section::{
     get_kitchen_section_list, create_kitchen_section, update_kitchen_section,
@@ -941,6 +942,19 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by INTEGER
         )"#,
+        r#"CREATE TABLE IF NOT EXISTS menu_recipe (
+            id              SERIAL PRIMARY KEY,
+            code            BIGSERIAL UNIQUE,
+            menu_id         INTEGER NOT NULL REFERENCES menu_card(id) ON DELETE CASCADE,
+            ingredient_name VARCHAR(255) NOT NULL,
+            quantity        NUMERIC(10,2) NOT NULL DEFAULT 0,
+            unit_id         INTEGER REFERENCES units(id),
+            is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER
+        )"#,
         r#"CREATE TABLE IF NOT EXISTS item_group (
             id                SERIAL PRIMARY KEY,
             code              BIGSERIAL UNIQUE,
@@ -1654,6 +1668,10 @@ pub fn run() {
             update_menu_card,
             toggle_menu_card_active,
             delete_menu_card,
+            // Menu card — recipe
+            get_all_units_for_recipe,
+            get_menu_recipes,
+            save_menu_recipes,
             // Kitchen sections (shared lookup)
             get_kitchen_sections,
             // Kitchen sections (master screen)

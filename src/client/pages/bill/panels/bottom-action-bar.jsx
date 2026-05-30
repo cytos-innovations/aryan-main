@@ -44,7 +44,28 @@ function KbdBadge({ children }) {
 
 // ─── Generic action button: icon + label + shortcut ───────────
 
-function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", variant = "outline" }) {
+// Tab-chain order for POS keyboard navigation
+const POS_ACTIONS = ["kotprint", "billprint", "settle"];
+
+function focusPosAction(after) {
+  const start = after ? POS_ACTIONS.indexOf(after) + 1 : 0;
+  for (let i = start; i < POS_ACTIONS.length; i++) {
+    const el = document.querySelector(`[data-pos-action="${POS_ACTIONS[i]}"]`);
+    if (el && !el.disabled) { el.focus(); return; }
+  }
+  // Wrap back to search
+  document.querySelector("[data-pos-search]")?.focus();
+}
+
+function makePosTabHandler(current) {
+  return (e) => {
+    if (e.key !== "Tab" || e.shiftKey) return;
+    e.preventDefault();
+    focusPosAction(current);
+  };
+}
+
+function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", variant = "outline", ...rest }) {
   return (
     <Button
       type="button"
@@ -53,6 +74,7 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
       onClick={onClick}
       disabled={disabled}
       className={`h-auto py-1.5 px-2 flex-1 flex flex-col items-center gap-0.5 min-w-0 text-xs ${className}`}
+      {...rest}
     >
       <HugeiconsIcon icon={icon} size={14} strokeWidth={2} />
       <span className="text-[10px] leading-none font-medium whitespace-nowrap">{label}</span>
@@ -150,6 +172,8 @@ function BillingModePanel({
             shortcut="F1"
             onClick={handleKot}
             disabled={!canKot || kotPending}
+            data-pos-action="kotprint"
+            onKeyDown={makePosTabHandler("kotprint")}
           />
           <ActionBtn
             icon={ReceiptIndianRupeeIcon}
@@ -164,6 +188,8 @@ function BillingModePanel({
             shortcut="*"
             onClick={handleBill}
             disabled={!canBill || generateBill.isPending}
+            data-pos-action="billprint"
+            onKeyDown={makePosTabHandler("billprint")}
           />
           <ActionBtn
             icon={CashIcon}
@@ -173,6 +199,8 @@ function BillingModePanel({
             disabled={!canSettle}
             variant="default"
             className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 disabled:opacity-50"
+            data-pos-action="settle"
+            onKeyDown={makePosTabHandler("settle")}
           />
         </div>
 
@@ -220,7 +248,7 @@ function BillingModePanel({
 
 function DiscountModePanel({ discountPercent, onDiscountChange, onBack }) {
   return (
-    <div className="flex items-center gap-3 px-3 py-3 min-h-[82px]">
+    <div className="flex items-center gap-3 px-3 py-3 min-h-20.5">
       <Button
         type="button"
         variant="ghost"
