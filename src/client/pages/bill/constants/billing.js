@@ -110,6 +110,11 @@ export const BQK = {
   BILL_SUMMARY:    (sessionId) => ["billing-bill-summary", sessionId],
   KOT_LIST:        (sessionId) => ["billing-kot-list", sessionId],
   RESERVATIONS:    ["billing-reservations"],
+  SETTLED_BILLS:   (params) => ["billing-settled-bills", params],
+  BILL_REPRINT:    (billId)  => ["billing-bill-reprint", billId],
+  PAYMENT_METHODS: ["billing-payment-methods"],
+  EMPLOYEES:       ["billing-employees"],
+  CUSTOMER_SEARCH: (q) => ["billing-customer-search", q],
 };
 
 // ─────────────────────────────────────────────────────────────

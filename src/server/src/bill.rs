@@ -179,6 +179,9 @@ pub struct SessionDetail {
     pub customer_id:      Option<i32>,
     pub customer_name:    Option<String>,
     pub customer_mobile:  Option<String>,
+    pub customer_address: Option<String>,
+    pub is_home_delivery: bool,
+    pub is_takeaway_enabled: bool,
     pub running_total:    f64,
     pub item_count:       i64,
     pub pending_kot:      i64,
@@ -760,6 +763,9 @@ pub async fn get_session_detail(
                 os.customer_id,
                 COALESCE(ci.customer_name, os.customer_name) AS customer_name,
                 COALESCE(ci.mobile_no1,    os.customer_mobile) AS customer_mobile,
+                os.delivery_address,
+                (COALESCE(tg.is_home_delivery, 'N')    = 'Y') AS is_home_delivery,
+                (COALESCE(tg.is_takeaway_enabled, 'N') = 'Y') AS is_takeaway_enabled,
                 COALESCE((
                   SELECT SUM(oi.final_amount)
                   FROM   order_item oi
@@ -818,6 +824,9 @@ pub async fn get_session_detail(
         customer_id:      row.try_get("customer_id").ok().flatten(),
         customer_name:    row.try_get("customer_name").ok().flatten(),
         customer_mobile:  row.try_get("customer_mobile").ok().flatten(),
+        customer_address: row.try_get("customer_address").ok().flatten(),
+        is_home_delivery: row.try_get("is_home_delivery").unwrap_or(false),
+        is_takeaway_enabled: row.try_get("is_takeaway_enabled").unwrap_or(false),
         running_total:    row.try_get::<f64, _>("running_total").unwrap_or(0.0),
         item_count:       row.try_get("item_count").unwrap_or(0),
         pending_kot:      row.try_get("pending_kot").unwrap_or(0),
@@ -1610,6 +1619,36 @@ pub async fn generate_bill(
     Ok(bill_id)
 }
 
+// ── Payment methods (mapped from day_book master) ─────────────
+
+#[derive(Debug, Serialize)]
+pub struct PaymentMethodOption {
+    pub id:   i32,
+    pub name: String,
+}
+
+#[tauri::command]
+pub async fn get_payment_methods(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<PaymentMethodOption>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, name FROM day_book
+         WHERE  is_active = 1 AND name IS NOT NULL
+         ORDER  BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load payment methods: {e}"))?;
+
+    Ok(rows.iter().map(|r| PaymentMethodOption {
+        id:   r.try_get("id").unwrap_or(0),
+        name: r.try_get("name").unwrap_or_default(),
+    }).collect())
+}
+
 #[tauri::command]
 pub async fn settle_bill(
     app:            tauri::AppHandle,
@@ -1621,8 +1660,30 @@ pub async fn settle_bill(
     reference_no:   Option<String>,
     part_payments:  Vec<PartPaymentInput>,
     write_off_amount: f64,
+    customer_name:    Option<String>,
+    customer_mobile:  Option<String>,
+    customer_address: Option<String>,
 ) -> Result<(), String> {
     let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Persist customer snapshot on the session (delivery / takeaway captures)
+    if customer_name.is_some() || customer_mobile.is_some() || customer_address.is_some() {
+        sqlx::query(
+            "UPDATE order_session
+             SET    customer_name    = COALESCE($2, customer_name),
+                    customer_mobile  = COALESCE($3, customer_mobile),
+                    delivery_address = COALESCE($4, delivery_address),
+                    updated_at       = NOW()
+             WHERE  id = $1",
+        )
+        .bind(session_id)
+        .bind(customer_name.as_deref().filter(|s| !s.trim().is_empty()))
+        .bind(customer_mobile.as_deref().filter(|s| !s.trim().is_empty()))
+        .bind(customer_address.as_deref().filter(|s| !s.trim().is_empty()))
+        .execute(&pool)
+        .await
+        .ok();
+    }
 
     // Get net_amount and table_id
     let bill_row = sqlx::query(
@@ -1671,7 +1732,7 @@ pub async fn settle_bill(
     // Determine settlement type
     let total_paid   = round2(payment_amount);
     let pending      = round2((net_amount - total_paid - write_off_amount).max(0.0));
-    let is_due       = payment_type == "DUE" || pending > 0.5;
+    let is_due       = payment_type.eq_ignore_ascii_case("DUE") || pending > 0.5;
     let settlement_type = if write_off_amount > 0.0 { "WRITE_OFF" }
                           else if is_due            { "DUE" }
                           else                      { "FULL" };
@@ -1833,6 +1894,7 @@ pub struct ReservationRow {
 #[derive(Debug, Serialize)]
 pub struct EmployeeForBilling {
     pub id:   i32,
+    pub code: Option<i64>,
     pub name: String,
 }
 
@@ -2406,7 +2468,7 @@ pub async fn get_employees_for_billing(
     let pool = acquire_pool(&state.pool, &app).await?;
 
     let rows = sqlx::query(
-        "SELECT id, name FROM employee_information ORDER BY name",
+        "SELECT id, code, name FROM employee_information ORDER BY name",
     )
     .fetch_all(&pool)
     .await
@@ -2414,8 +2476,131 @@ pub async fn get_employees_for_billing(
 
     Ok(rows.iter().map(|r| EmployeeForBilling {
         id:   r.try_get("id").unwrap_or(0),
+        code: r.try_get("code").ok().flatten(),
         name: r.try_get("name").unwrap_or_default(),
     }).collect())
+}
+
+// ── Customer lookup / quick-create / session party assignment ──
+
+#[derive(Debug, Serialize)]
+pub struct CustomerOption {
+    pub id:      i32,
+    pub code:    Option<i64>,
+    pub name:    Option<String>,
+    pub mobile:  Option<String>,
+    pub email:   Option<String>,
+    pub address: Option<String>,
+}
+
+fn map_customer_option(r: &sqlx::postgres::PgRow) -> CustomerOption {
+    CustomerOption {
+        id:      r.try_get("id").unwrap_or(0),
+        code:    r.try_get("code").ok().flatten(),
+        name:    r.try_get("customer_name").ok().flatten(),
+        mobile:  r.try_get("mobile_no1").ok().flatten(),
+        email:   r.try_get("email_id").ok().flatten(),
+        address: r.try_get("address_line1").ok().flatten(),
+    }
+}
+
+/// Search customers by name, mobile, or code (for the billing party picker).
+#[tauri::command]
+pub async fn search_customers(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    query: String,
+) -> Result<Vec<CustomerOption>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let q = query.trim();
+    let pattern = format!("%{}%", q);
+
+    let rows = sqlx::query(
+        "SELECT id, code, customer_name, mobile_no1, email_id, address_line1
+         FROM   customer_information
+         WHERE  is_active = 1
+           AND  ($1 = '' OR customer_name ILIKE $2
+                        OR mobile_no1 ILIKE $2
+                        OR CAST(code AS TEXT) = $1)
+         ORDER  BY customer_name
+         LIMIT  20",
+    )
+    .bind(q)
+    .bind(&pattern)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search customers: {e}"))?;
+
+    Ok(rows.iter().map(map_customer_option).collect())
+}
+
+/// Quick-create a customer (name + mobile + email + address) from the billing
+/// screen. The new row lands in customer_information so it shows in the master.
+#[tauri::command]
+pub async fn quick_create_customer(
+    app:     tauri::AppHandle,
+    state:   tauri::State<'_, AppState>,
+    name:    String,
+    mobile:  Option<String>,
+    email:   Option<String>,
+    address: Option<String>,
+) -> Result<CustomerOption, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Customer name is required".into());
+    }
+
+    let row = sqlx::query(
+        "INSERT INTO customer_information
+            (customer_name, mobile_no1, email_id, address_line1, is_active)
+         VALUES ($1, $2, $3, $4, 1)
+         RETURNING id, code, customer_name, mobile_no1, email_id, address_line1",
+    )
+    .bind(name)
+    .bind(mobile.as_deref().filter(|s| !s.trim().is_empty()))
+    .bind(email.as_deref().filter(|s| !s.trim().is_empty()))
+    .bind(address.as_deref().filter(|s| !s.trim().is_empty()))
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to create customer: {e}"))?;
+
+    Ok(map_customer_option(&row))
+}
+
+/// Assign / update customer and waiter on an existing order session.
+#[tauri::command]
+pub async fn update_session_party(
+    app:             tauri::AppHandle,
+    state:           tauri::State<'_, AppState>,
+    session_id:      i32,
+    customer_id:     Option<i32>,
+    customer_name:   Option<String>,
+    customer_mobile: Option<String>,
+    waiter_id:       Option<i32>,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    sqlx::query(
+        "UPDATE order_session
+         SET    customer_id     = COALESCE($2, customer_id),
+                customer_name   = COALESCE($3, customer_name),
+                customer_mobile = COALESCE($4, customer_mobile),
+                waiter_id       = COALESCE($5, waiter_id),
+                updated_at      = NOW()
+         WHERE  id = $1
+           AND  session_status IN ('OPEN', 'KOT_SENT')",
+    )
+    .bind(session_id)
+    .bind(customer_id)
+    .bind(customer_name.as_deref().filter(|s| !s.trim().is_empty()))
+    .bind(customer_mobile.as_deref().filter(|s| !s.trim().is_empty()))
+    .bind(waiter_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to update session party: {e}"))?;
+
+    Ok(())
 }
 
 // ── Restaurant dashboard ───────────────────────────────────────
@@ -2567,5 +2752,287 @@ pub async fn get_restaurant_dashboard(
         hourly_sales,
         active_sessions,
         todays_reservations,
+    })
+}
+
+// ─────────────────────────────────────────────────────────────
+// Bill Reprint — structs + commands
+// ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct BillReprintRow {
+    pub id:               i32,
+    pub bill_no:          Option<String>,
+    pub order_session_id: i32,
+    pub order_no:         Option<String>,
+    pub table_name:       Option<String>,
+    pub order_type:       Option<String>,
+    pub customer_name:    Option<String>,
+    pub customer_mobile:  Option<String>,
+    pub gross_amount:     f64,
+    pub discount_amount:  f64,
+    pub tax_amount:       f64,
+    pub net_amount:       f64,
+    pub paid_amount:      f64,
+    pub bill_status:      String,
+    pub settled_at:       Option<String>,
+    pub created_at:       Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BillReprintItem {
+    pub id:              i32,
+    pub item_name:       String,
+    pub quantity:        f64,
+    pub rate:            f64,
+    pub gross_amount:    f64,
+    pub discount_amount: f64,
+    pub tax_amount:      f64,
+    pub final_amount:    f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BillReprintTax {
+    pub tax_name:       String,
+    pub tax_percentage: f64,
+    pub taxable_amount: f64,
+    pub tax_amount:     f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BillReprintPayment {
+    pub payment_type:   String,
+    pub payment_amount: f64,
+    pub reference_no:   Option<String>,
+    pub created_at:     Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BillReprintDetail {
+    pub id:              i32,
+    pub bill_no:         Option<String>,
+    pub order_no:        Option<String>,
+    pub table_name:      Option<String>,
+    pub order_type:      Option<String>,
+    pub customer_name:   Option<String>,
+    pub customer_mobile: Option<String>,
+    pub gross_amount:    f64,
+    pub discount_amount: f64,
+    pub taxable_amount:  f64,
+    pub tax_amount:      f64,
+    pub round_off:       f64,
+    pub net_amount:      f64,
+    pub paid_amount:     f64,
+    pub bill_status:     String,
+    pub settled_at:      Option<String>,
+    pub created_at:      Option<String>,
+    pub items:           Vec<BillReprintItem>,
+    pub tax_details:     Vec<BillReprintTax>,
+    pub payments:        Vec<BillReprintPayment>,
+}
+
+/// Search settled bills (PAID or DUE status).
+/// `search`    — optional: bill_no, order_no, bill id, customer name/mobile
+/// `date_from` — optional: YYYY-MM-DD lower bound on settled_at / created_at
+/// `date_to`   — optional: YYYY-MM-DD upper bound
+#[tauri::command]
+pub async fn search_settled_bills(
+    app:       tauri::AppHandle,
+    state:     tauri::State<'_, AppState>,
+    search:    Option<String>,
+    date_from: Option<String>,
+    date_to:   Option<String>,
+) -> Result<Vec<BillReprintRow>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let search_val: Option<String> = search
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let rows = sqlx::query(
+        "SELECT bm.id,
+                bm.bill_no,
+                bm.order_session_id,
+                os.order_no,
+                rt.table_name,
+                os.order_type,
+                COALESCE(os.customer_name, ci.customer_name)  AS customer_name,
+                COALESCE(os.customer_mobile, ci.mobile_no1)   AS customer_mobile,
+                bm.gross_amount::float8,
+                bm.discount_amount::float8,
+                bm.tax_amount::float8,
+                bm.net_amount::float8,
+                bm.paid_amount::float8,
+                bm.bill_status,
+                to_char(bm.settled_at,  'YYYY-MM-DD HH24:MI:SS') AS settled_at,
+                to_char(bm.created_at,  'YYYY-MM-DD HH24:MI:SS') AS created_at
+         FROM   bill_master bm
+         JOIN   order_session os  ON os.id = bm.order_session_id
+         LEFT JOIN restaurant_table      rt ON rt.id = os.table_id
+         LEFT JOIN customer_information  ci ON ci.id = bm.customer_id
+         WHERE  (bm.bill_status IN ('PAID', 'DUE') OR os.session_status = 'SETTLED')
+           AND  ($1::text IS NULL OR (
+                    LOWER(bm.bill_no)                               = LOWER($1)
+                 OR CAST(bm.id AS TEXT)                             = $1
+                 OR COALESCE(os.customer_name, ci.customer_name)    ILIKE $1 || '%'
+                 OR COALESCE(os.customer_mobile, ci.mobile_no1)     = $1
+                ))
+           AND  ($2::text IS NULL
+                 OR COALESCE(bm.settled_at, bm.created_at)
+                    >= TO_TIMESTAMP($2, 'YYYY-MM-DD'))
+           AND  ($3::text IS NULL
+                 OR COALESCE(bm.settled_at, bm.created_at)
+                    < TO_TIMESTAMP($3, 'YYYY-MM-DD') + INTERVAL '1 day')
+         ORDER  BY COALESCE(bm.settled_at, bm.created_at) DESC
+         LIMIT  200",
+    )
+    .bind(search_val)
+    .bind(date_from.as_deref())
+    .bind(date_to.as_deref())
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search settled bills: {e}"))?;
+
+    Ok(rows.iter().map(|r| BillReprintRow {
+        id:               r.try_get("id").unwrap_or(0),
+        bill_no:          r.try_get("bill_no").ok().flatten(),
+        order_session_id: r.try_get("order_session_id").unwrap_or(0),
+        order_no:         r.try_get("order_no").ok().flatten(),
+        table_name:       r.try_get("table_name").ok().flatten(),
+        order_type:       r.try_get("order_type").ok().flatten(),
+        customer_name:    r.try_get("customer_name").ok().flatten(),
+        customer_mobile:  r.try_get("customer_mobile").ok().flatten(),
+        gross_amount:     r.try_get("gross_amount").unwrap_or(0.0),
+        discount_amount:  r.try_get("discount_amount").unwrap_or(0.0),
+        tax_amount:       r.try_get("tax_amount").unwrap_or(0.0),
+        net_amount:       r.try_get("net_amount").unwrap_or(0.0),
+        paid_amount:      r.try_get("paid_amount").unwrap_or(0.0),
+        bill_status:      r.try_get("bill_status").unwrap_or_else(|_| "PAID".to_string()),
+        settled_at:       r.try_get("settled_at").ok().flatten(),
+        created_at:       r.try_get("created_at").ok().flatten(),
+    }).collect())
+}
+
+/// Full bill detail for reprint: header + items + tax breakdown + payments.
+#[tauri::command]
+pub async fn get_bill_for_reprint(
+    app:    tauri::AppHandle,
+    state:  tauri::State<'_, AppState>,
+    bill_id: i32,
+) -> Result<BillReprintDetail, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // ── Header ────────────────────────────────────────────────
+    let hdr = sqlx::query(
+        "SELECT bm.id, bm.bill_no,
+                os.order_no, rt.table_name, os.order_type,
+                COALESCE(os.customer_name, ci.customer_name)  AS customer_name,
+                COALESCE(os.customer_mobile, ci.mobile_no1)   AS customer_mobile,
+                bm.gross_amount::float8, bm.discount_amount::float8,
+                bm.taxable_amount::float8, bm.tax_amount::float8,
+                bm.round_off::float8, bm.net_amount::float8, bm.paid_amount::float8,
+                bm.bill_status,
+                to_char(bm.settled_at, 'YYYY-MM-DD HH24:MI:SS') AS settled_at,
+                to_char(bm.created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at
+         FROM   bill_master bm
+         JOIN   order_session os  ON os.id = bm.order_session_id
+         LEFT JOIN restaurant_table     rt ON rt.id = os.table_id
+         LEFT JOIN customer_information ci ON ci.id = bm.customer_id
+         WHERE  bm.id = $1",
+    )
+    .bind(bill_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Bill not found: {e}"))?;
+
+    // ── Items ─────────────────────────────────────────────────
+    let item_rows = sqlx::query(
+        "SELECT id, item_name,
+                quantity::float8, rate::float8,
+                gross_amount::float8, discount_amount::float8,
+                tax_amount::float8, final_amount::float8
+         FROM   bill_item
+         WHERE  bill_id = $1 AND is_active = 1
+         ORDER  BY id",
+    )
+    .bind(bill_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load bill items: {e}"))?;
+
+    let items: Vec<BillReprintItem> = item_rows.iter().map(|r| BillReprintItem {
+        id:              r.try_get("id").unwrap_or(0),
+        item_name:       r.try_get("item_name").unwrap_or_default(),
+        quantity:        r.try_get("quantity").unwrap_or(0.0),
+        rate:            r.try_get("rate").unwrap_or(0.0),
+        gross_amount:    r.try_get("gross_amount").unwrap_or(0.0),
+        discount_amount: r.try_get("discount_amount").unwrap_or(0.0),
+        tax_amount:      r.try_get("tax_amount").unwrap_or(0.0),
+        final_amount:    r.try_get("final_amount").unwrap_or(0.0),
+    }).collect();
+
+    // ── Tax details ───────────────────────────────────────────
+    let tax_rows = sqlx::query(
+        "SELECT tax_name,
+                tax_percentage::float8, taxable_amount::float8, tax_amount::float8
+         FROM   bill_tax_detail
+         WHERE  bill_id = $1 AND is_active = 1
+         ORDER  BY id",
+    )
+    .bind(bill_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load tax details: {e}"))?;
+
+    let tax_details: Vec<BillReprintTax> = tax_rows.iter().map(|r| BillReprintTax {
+        tax_name:       r.try_get("tax_name").unwrap_or_default(),
+        tax_percentage: r.try_get("tax_percentage").unwrap_or(0.0),
+        taxable_amount: r.try_get("taxable_amount").unwrap_or(0.0),
+        tax_amount:     r.try_get("tax_amount").unwrap_or(0.0),
+    }).collect();
+
+    // ── Payments ──────────────────────────────────────────────
+    let pay_rows = sqlx::query(
+        "SELECT payment_type, payment_amount::float8, reference_no,
+                to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at
+         FROM   payment_master
+         WHERE  bill_id = $1 AND is_active = 1
+         ORDER  BY id",
+    )
+    .bind(bill_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load payments: {e}"))?;
+
+    let payments: Vec<BillReprintPayment> = pay_rows.iter().map(|r| BillReprintPayment {
+        payment_type:   r.try_get("payment_type").unwrap_or_else(|_| "CASH".to_string()),
+        payment_amount: r.try_get("payment_amount").unwrap_or(0.0),
+        reference_no:   r.try_get("reference_no").ok().flatten(),
+        created_at:     r.try_get("created_at").ok().flatten(),
+    }).collect();
+
+    Ok(BillReprintDetail {
+        id:              hdr.try_get("id").unwrap_or(0),
+        bill_no:         hdr.try_get("bill_no").ok().flatten(),
+        order_no:        hdr.try_get("order_no").ok().flatten(),
+        table_name:      hdr.try_get("table_name").ok().flatten(),
+        order_type:      hdr.try_get("order_type").ok().flatten(),
+        customer_name:   hdr.try_get("customer_name").ok().flatten(),
+        customer_mobile: hdr.try_get("customer_mobile").ok().flatten(),
+        gross_amount:    hdr.try_get("gross_amount").unwrap_or(0.0),
+        discount_amount: hdr.try_get("discount_amount").unwrap_or(0.0),
+        taxable_amount:  hdr.try_get("taxable_amount").unwrap_or(0.0),
+        tax_amount:      hdr.try_get("tax_amount").unwrap_or(0.0),
+        round_off:       hdr.try_get("round_off").unwrap_or(0.0),
+        net_amount:      hdr.try_get("net_amount").unwrap_or(0.0),
+        paid_amount:     hdr.try_get("paid_amount").unwrap_or(0.0),
+        bill_status:     hdr.try_get("bill_status").unwrap_or_else(|_| "PAID".to_string()),
+        settled_at:      hdr.try_get("settled_at").ok().flatten(),
+        created_at:      hdr.try_get("created_at").ok().flatten(),
+        items,
+        tax_details,
+        payments,
     })
 }

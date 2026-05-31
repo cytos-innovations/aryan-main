@@ -261,6 +261,9 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
+              // POS action keys: prevent typing into search bar, let them bubble to BottomActionBar
+              if (e.key === "*" || e.key === "/") { e.preventDefault(); return; }
+
               if (e.key === "Tab" && !e.shiftKey) {
                 // Forward Tab: jump to the first enabled POS action button
                 e.preventDefault();

@@ -59,6 +59,7 @@ import MenuLeftPanel   from "../panels/menu-left";
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
 import BottomActionBar from "../panels/bottom-action-bar";
+import SettleDialog    from "../panels/settle-dialog";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -291,6 +292,8 @@ export default function OrderEntryView() {
     draftCovers,
     draftApplicableRate,
     draftCustomerName,
+    draftCustomerId,
+    draftWaiterId,
     addDraftItem,
     updateDraftQty,
     removeDraftItem,
@@ -305,6 +308,7 @@ export default function OrderEntryView() {
 
   const [editOpen,        setEditOpen]        = useState(false);
   const [cancelOpen,      setCancelOpen]      = useState(false);
+  const [settleOpen,      setSettleOpen]      = useState(false);
   const [addingId,        setAddingId]        = useState(null);
   const [isKotting,       setIsKotting]       = useState(false);
   const [discountPercent, setDiscountPercent] = useState(0);
@@ -393,7 +397,7 @@ export default function OrderEntryView() {
     );
   }
 
-  function handleSettle(entries) {
+  function handleSettle(entries, customer, writeOffAmount = 0) {
     if (!billId || !entries.length) return;
     const isPartPayment = entries.length > 1;
     const paymentType   = isPartPayment ? PAYMENT_TYPE.PART : entries[0].payment_mode;
@@ -401,7 +405,13 @@ export default function OrderEntryView() {
     const referenceNo   = isPartPayment ? null : (entries[0]?.reference_no ?? null);
     const partPayments  = isPartPayment ? entries : [];
     settleBillMut.mutate(
-      { sessionId: activeSessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount: 0 },
+      {
+        sessionId: activeSessionId, billId, paymentType, paymentAmount,
+        referenceNo, partPayments, writeOffAmount: writeOffAmount ?? 0,
+        customerName:    customer?.name    ?? null,
+        customerMobile:  customer?.mobile  ?? null,
+        customerAddress: customer?.address ?? null,
+      },
       { onSuccess: clearSession },
     );
   }
@@ -428,8 +438,9 @@ export default function OrderEntryView() {
         tableId:       selectedTableId ?? null,
         orderType:     draftOrderType,
         covers:        draftCovers,
-        customerId:    null,
-        waiterId:      reservWaiterId,
+        customerId:    draftCustomerId ?? null,
+        // Manually assigned waiter takes priority over reservation's preferred waiter
+        waiterId:      draftWaiterId ?? reservWaiterId,
         reservationId,
         customerName:  draftCustomerName ?? null,
       });
@@ -531,10 +542,6 @@ export default function OrderEntryView() {
                 items={items}
                 isLoadingItems={isLoadingItems}
                 discountPercent={discountPercent}
-                netAmount={netAmount}
-                handleSettle={handleSettle}
-                isSettling={settleBillMut.isPending}
-                billId={billId}
               />
             </div>
           </div>
@@ -550,7 +557,8 @@ export default function OrderEntryView() {
             netAmount={netAmount}
             billId={billId}
             isSettling={settleBillMut.isPending}
-            onSettle={handleSettle}
+            onRequestSettle={() => setSettleOpen(true)}
+            settleDialogOpen={settleOpen}
             onKotDraft={handleKotDraft}
             onCancel={() => setCancelOpen(true)}
             discountPercent={discountPercent}
@@ -558,6 +566,18 @@ export default function OrderEntryView() {
           />
         </div>
       </div>
+
+      {/* ── Settle dialog ── */}
+      {!isDraft && (
+        <SettleDialog
+          open={settleOpen}
+          onOpenChange={setSettleOpen}
+          session={session}
+          netAmount={netAmount}
+          onSettle={handleSettle}
+          isSettling={settleBillMut.isPending}
+        />
+      )}
 
       {/* ── Edit dialog ── */}
       {!isDraft && (

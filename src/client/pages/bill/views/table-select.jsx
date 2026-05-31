@@ -12,6 +12,7 @@ import {
   TableIcon,
   UserGroupIcon,
   HotelBellIcon,
+  PrinterIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 
@@ -438,12 +439,12 @@ function ReminderSettingsDialog({ open, onOpenChange }) {
 
 // ─── Main View ────────────────────────────────────────────────────
 
-export default function TableSelectView() {
+export default function TableSelectView({ onOpenReprint }) {
   const navigate = useNavigate();
   const { setSession } = useBillingContext();
-  const [search, setSearch] = useState("");
+  const [search,          setSearch]          = useState("");
   const [reservationOpen, setReservationOpen] = useState(false);
-  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderOpen,    setReminderOpen]    = useState(false);
   const searchRef = useRef(null);
 
   // Auto-focus search on mount
@@ -588,10 +589,13 @@ export default function TableSelectView() {
           variant="outline"
           size="sm"
           className="h-8 gap-1.5 text-xs"
-          onClick={handlePickup}
+          onClick={onOpenReprint}
         >
-          <HugeiconsIcon icon={ShoppingBag01Icon} size={14} strokeWidth={2} />
-          Pickup
+          <HugeiconsIcon icon={PrinterIcon} size={14} strokeWidth={2} />
+          Bill Reprint
+          <span className="ml-0.5 text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">
+            PgUp
+          </span>
         </Button>
 
         <Button
@@ -737,6 +741,7 @@ export default function TableSelectView() {
       open={reservationOpen}
       onOpenChange={setReservationOpen}
     />
+
     <ReminderSettingsDialog
       open={reminderOpen}
       onOpenChange={setReminderOpen}

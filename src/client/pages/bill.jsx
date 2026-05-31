@@ -1,11 +1,12 @@
-import { Component, useEffect } from "react";
+import { Component, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { BillingProvider, useBillingContext } from "./bill/state/billing-context";
 import { BILLING_VIEW } from "./bill/constants/billing";
 import { useReservationAutoExpiry } from "./bill/hooks/use-billing-queries";
 import { useReservationReminder } from "./bill/hooks/use-reservation-reminder";
-import TableSelectView from "./bill/views/table-select";
-import OrderEntryView from "./bill/views/order-entry";
+import TableSelectView  from "./bill/views/table-select";
+import OrderEntryView   from "./bill/views/order-entry";
+import BillReprintSheet from "./bill/panels/bill-reprint-sheet";
 
 class BillingErrorBoundary extends Component {
   constructor(props) {
@@ -48,6 +49,7 @@ export default function BillingPage() {
 function BillingScreen() {
   const { view, clearSession } = useBillingContext();
   const location = useLocation();
+  const [reprintOpen, setReprintOpen] = useState(false);
 
   // Reset to table selection whenever the "New Order" navbar button is clicked,
   // even if the user is already on the billing screen.
@@ -61,9 +63,20 @@ function BillingScreen() {
   // Chime reminders for upcoming reservations (reads settings from localStorage)
   useReservationReminder();
 
+  // Global PageUp → open Bill Reprint (works from any billing view, any focus state)
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "PageUp") { e.preventDefault(); setReprintOpen((v) => !v); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
-      {view === BILLING_VIEW.TABLE_SELECT && <TableSelectView />}
+      {view === BILLING_VIEW.TABLE_SELECT && (
+        <TableSelectView onOpenReprint={() => setReprintOpen(true)} />
+      )}
       {view === BILLING_VIEW.ORDER_ENTRY  && <OrderEntryView />}
       {view === BILLING_VIEW.BILL_PREVIEW && (
         <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
@@ -75,6 +88,9 @@ function BillingScreen() {
           Payment — coming next phase
         </div>
       )}
+
+      {/* Global reprint sheet — available from any billing view */}
+      <BillReprintSheet open={reprintOpen} onOpenChange={setReprintOpen} />
     </div>
   );
 }

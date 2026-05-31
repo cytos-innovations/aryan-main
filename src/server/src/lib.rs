@@ -37,7 +37,7 @@ use master::menu::rest_menu_group::{
 };
 use master::menu::rest_menu_main::{
     create_menu_card, delete_menu_card, get_menu_cards, toggle_menu_card_active, update_menu_card,
-    get_all_units_for_recipe, get_menu_recipes, save_menu_recipes,
+    get_all_units_for_recipe, get_menu_recipes, save_menu_recipes, search_ingredient_items,
 };
 use master::menu::rest_kitchen_section::{
     get_kitchen_section_list, create_kitchen_section, update_kitchen_section,
@@ -173,6 +173,7 @@ use bill::{
     get_bill_summary,
     generate_bill,
     settle_bill,
+    get_payment_methods,
     // Reservations
     get_reservations,
     get_reservation_by_id,
@@ -182,6 +183,13 @@ use bill::{
     cancel_reservation,
     expire_no_show_reservations,
     get_employees_for_billing,
+    // Bill reprint
+    search_settled_bills,
+    get_bill_for_reprint,
+    // Customer / waiter party
+    search_customers,
+    quick_create_customer,
+    update_session_party,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -450,6 +458,10 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     ] {
         sqlx::query(col_sql).execute(pool).await.ok();
     }
+
+    // ── Migrate order_session: add delivery address (captured at settle) ──
+    sqlx::query("ALTER TABLE order_session ADD COLUMN IF NOT EXISTS delivery_address TEXT")
+        .execute(pool).await.ok();
 
     let stmts = [
         // Core auth tables
@@ -1673,6 +1685,7 @@ pub fn run() {
             get_all_units_for_recipe,
             get_menu_recipes,
             save_menu_recipes,
+            search_ingredient_items,
             // Kitchen sections (shared lookup)
             get_kitchen_sections,
             // Kitchen sections (master screen)
@@ -1876,6 +1889,7 @@ pub fn run() {
             get_bill_summary,
             generate_bill,
             settle_bill,
+            get_payment_methods,
             // Billing — reservations
             get_reservations,
             get_reservation_by_id,
@@ -1885,6 +1899,13 @@ pub fn run() {
             cancel_reservation,
             expire_no_show_reservations,
             get_employees_for_billing,
+            // Bill reprint
+            search_settled_bills,
+            get_bill_for_reprint,
+            // Customer / waiter party
+            search_customers,
+            quick_create_customer,
+            update_session_party,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

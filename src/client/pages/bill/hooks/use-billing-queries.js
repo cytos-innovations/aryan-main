@@ -530,3 +530,71 @@ export function useReservationAutoExpiry() {
     return () => clearInterval(id);
   }, []);
 }
+
+// ─────────────────────────────────────────────────────────────
+// Bill Reprint hooks
+// ─────────────────────────────────────────────────────────────
+
+/** Search settled bills. params = { search, dateFrom, dateTo } */
+export function useSettledBills(params) {
+  return useQuery({
+    queryKey: BQK.SETTLED_BILLS(params),
+    queryFn:  () => billingService.searchSettledBills(params),
+    staleTime: 10_000,
+    enabled:  !!params,
+  });
+}
+
+/** Full bill detail for reprint (header + items + tax + payments). */
+export function useBillForReprint(billId) {
+  return useQuery({
+    queryKey: BQK.BILL_REPRINT(billId),
+    queryFn:  () => billingService.getBillForReprint(billId),
+    staleTime: 60_000,
+    enabled:  !!billId,
+  });
+}
+
+/** Active payment methods (day_book master). Cached long — rarely changes. */
+export function usePaymentMethods() {
+  return useQuery({
+    queryKey:  BQK.PAYMENT_METHODS,
+    queryFn:   billingService.getPaymentMethods,
+    staleTime: 300_000,
+  });
+}
+
+/** Search customers by name/mobile (party picker). Enabled only when querying. */
+export function useSearchCustomers(query, enabled = true) {
+  return useQuery({
+    queryKey:  BQK.CUSTOMER_SEARCH(query ?? ""),
+    queryFn:   () => billingService.searchCustomers(query ?? ""),
+    staleTime: 10_000,
+    enabled,
+  });
+}
+
+/** Quick-create a customer from the billing screen. */
+export function useQuickCreateCustomer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.quickCreateCustomer,
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ["billing-customer-search"] });
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+/** Assign / update customer + waiter on an existing session. */
+export function useUpdateSessionParty(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.updateSessionParty,
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}

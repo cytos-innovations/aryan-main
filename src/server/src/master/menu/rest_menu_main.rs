@@ -405,6 +405,37 @@ pub async fn delete_menu_card(
 // Recipe commands
 // ─────────────────────────────────────────────────────────────
 
+#[derive(Debug, Serialize)]
+pub struct IngredientSuggestion {
+    pub id: i32,
+    pub name: String,
+}
+
+#[tauri::command]
+pub async fn search_ingredient_items(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    query: String,
+) -> Result<Vec<IngredientSuggestion>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let pattern = format!("%{}%", query.trim());
+
+    let rows = sqlx::query(
+        "SELECT id, name FROM item_name \
+         WHERE name ILIKE $1 AND is_active = 1 \
+         ORDER BY name ASC LIMIT 20",
+    )
+    .bind(&pattern)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search ingredients: {e}"))?;
+
+    Ok(rows.iter().map(|r| IngredientSuggestion {
+        id:   r.try_get("id").unwrap_or(0),
+        name: r.try_get("name").unwrap_or_default(),
+    }).collect())
+}
+
 #[tauri::command]
 pub async fn get_all_units_for_recipe(
     app: tauri::AppHandle,

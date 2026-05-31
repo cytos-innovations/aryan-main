@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -40,6 +40,66 @@ const EMPTY = {
   excise_rate: "0",
   comments: "",
 };
+
+function IngredientInput({ value, onChange, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!value.trim()) { setSuggestions([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const results = await invoke("search_ingredient_items", { query: value });
+        setSuggestions(results);
+        setOpen(results.length > 0);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [value]);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <Input
+        placeholder={placeholder}
+        value={value}
+        maxLength={255}
+        onChange={(e) => { onChange(e.target.value); }}
+        onFocus={() => { if (suggestions.length > 0) setOpen(true); }}
+        autoComplete="off"
+      />
+      {open && suggestions.length > 0 && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-md border bg-popover shadow-md">
+          {suggestions.map((s) => (
+            <div
+              key={s.id}
+              className="px-3 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(s.name);
+                setOpen(false);
+              }}
+            >
+              {s.name}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function MenuCardPage() {
   const queryClient = useQueryClient();
@@ -711,11 +771,10 @@ export default function MenuCardPage() {
                     </div>
                     {recipeRows.map((row, idx) => (
                       <div key={idx} className="grid grid-cols-[1fr_90px_140px_32px] gap-2 items-center">
-                        <Input
+                        <IngredientInput
                           placeholder="Ingredient name"
                           value={row.ingredient_name}
-                          maxLength={255}
-                          onChange={(e) => updateRecipeRow(idx, "ingredient_name", e.target.value)}
+                          onChange={(v) => updateRecipeRow(idx, "ingredient_name", v)}
                         />
                         <Input
                           type="number"

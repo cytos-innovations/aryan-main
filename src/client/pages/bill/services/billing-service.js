@@ -102,16 +102,23 @@ export const billingService = {
    * @param {Array<{payment_mode,amount,reference_no}>} params.partPayments
    * @param {number} params.writeOffAmount
    */
-  settleBill: ({ sessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount }) =>
+  settleBill: ({ sessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount, customerName, customerMobile, customerAddress }) =>
     invoke("settle_bill", {
       sessionId,
       billId,
       paymentType,
       paymentAmount,
-      referenceNo:    referenceNo    ?? null,
-      partPayments:   partPayments   ?? [],
-      writeOffAmount: writeOffAmount ?? 0,
+      referenceNo:     referenceNo     ?? null,
+      partPayments:    partPayments    ?? [],
+      writeOffAmount:  writeOffAmount  ?? 0,
+      customerName:    customerName    ?? null,
+      customerMobile:  customerMobile  ?? null,
+      customerAddress: customerAddress ?? null,
     }),
+
+  /** Active payment methods mapped from the day_book master */
+  getPaymentMethods: () =>
+    invoke("get_payment_methods"),
 
   // ── Reservations ──────────────────────────────────────────────
 
@@ -155,6 +162,31 @@ export const billingService = {
   getEmployeesForBilling: () =>
     invoke("get_employees_for_billing"),
 
+  // ── Customer / waiter party ──────────────────────────────────
+
+  /** Search customers by name/mobile for the billing party picker */
+  searchCustomers: (query) =>
+    invoke("search_customers", { query: query ?? "" }),
+
+  /** Quick-create a customer (lands in customer_information master) */
+  quickCreateCustomer: ({ name, mobile, email, address }) =>
+    invoke("quick_create_customer", {
+      name,
+      mobile:  mobile  ?? null,
+      email:   email   ?? null,
+      address: address ?? null,
+    }),
+
+  /** Assign / update customer + waiter on an existing session */
+  updateSessionParty: ({ sessionId, customerId, customerName, customerMobile, waiterId }) =>
+    invoke("update_session_party", {
+      sessionId,
+      customerId:     customerId     ?? null,
+      customerName:   customerName   ?? null,
+      customerMobile: customerMobile ?? null,
+      waiterId:       waiterId       ?? null,
+    }),
+
   updateReservationStatus: (reservationId, status) =>
     invoke("update_reservation_status", { reservationId, status }),
 
@@ -163,4 +195,18 @@ export const billingService = {
 
   expireNoShowReservations: () =>
     invoke("expire_no_show_reservations"),
+
+  // ── Bill Reprint ──────────────────────────────────────────────
+
+  /** Search settled bills. search/dateFrom/dateTo are all optional. */
+  searchSettledBills: ({ search, dateFrom, dateTo } = {}) =>
+    invoke("search_settled_bills", {
+      search:   search   ?? null,
+      dateFrom: dateFrom ?? null,
+      dateTo:   dateTo   ?? null,
+    }),
+
+  /** Full bill detail (header + items + tax + payments) for reprint. */
+  getBillForReprint: (billId) =>
+    invoke("get_bill_for_reprint", { billId }),
 };

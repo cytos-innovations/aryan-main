@@ -5,22 +5,14 @@ import {
   MinusSignIcon,
   Delete01Icon,
   ChefHatIcon,
-  UserAccountIcon,
   UserGroupIcon,
   PercentIcon,
   ArrowDown01Icon,
   ArrowUp01Icon,
-  CashIcon,
-  CreditCardIcon,
-  QrCodeIcon,
-  Wallet01Icon,
-  MinusPlusIcon,
   StickyNote01Icon,
-  Cancel01Icon,
   Discount01Icon,
 } from "@hugeicons/core-free-icons";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBillingContext } from "../state/billing-context";
@@ -28,14 +20,12 @@ import {
   useUpdateOrderItemQty,
   useCancelOrderItem,
   useUpdateSessionInfo,
+  useUpdateSessionParty,
 } from "../hooks/use-billing-queries";
-import {
-  ORDER_TYPE,
-  PAYMENT_TYPE,
-  PAYMENT_TYPE_LABELS,
-} from "../constants/billing";
+import { ORDER_TYPE } from "../constants/billing";
 import { calcBillTotals, calcTaxBreakdown, fmtAmount } from "../utils/billing-calc";
 import { FoodTypeDot } from "./menu-center";
+import { CustomerPicker, WaiterPicker } from "./party-pickers";
 
 // ─── KOT status config ────────────────────────────────────────
 
@@ -311,154 +301,24 @@ function TotalsRow({ label, value, accent, small }) {
   );
 }
 
-// ─── Payment section (only shown when bill is printed) ────────
-
-const PAYMENT_MODES = [
-  { key: PAYMENT_TYPE.CASH, icon: CashIcon,       label: "Cash"  },
-  { key: PAYMENT_TYPE.CARD, icon: CreditCardIcon,  label: "Card"  },
-  { key: PAYMENT_TYPE.UPI,  icon: QrCodeIcon,      label: "UPI"   },
-  { key: PAYMENT_TYPE.DUE,  icon: Wallet01Icon,    label: "Due"   },
-  { key: PAYMENT_TYPE.PART, icon: MinusPlusIcon,   label: "Split" },
-];
-
-function PaymentSection({ netAmount, isClosed, onSettle, isSettling }) {
-  const {
-    paymentEntries,
-    addPaymentEntry,
-    removePaymentEntry,
-    setPaymentEntries,
-  } = useBillingContext();
-
-  const [mode, setMode]     = useState(PAYMENT_TYPE.CASH);
-  const [amount, setAmount] = useState("");
-  const [ref, setRef]       = useState("");
-
-  const totalPaid = paymentEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const balance   = Math.round((netAmount - totalPaid) * 100) / 100;
-
-  const isSettle = isClosed && mode !== PAYMENT_TYPE.PART;
-
-  function handleAddEntry() {
-    const amt = Number(amount);
-    if (!amt || amt <= 0) return;
-
-    if (mode === PAYMENT_TYPE.PART) {
-      addPaymentEntry({ payment_mode: PAYMENT_TYPE.CASH, amount: amt, reference_no: ref || null });
-      setAmount(""); setRef("");
-    } else {
-      const entry = { payment_mode: mode, amount: amt, reference_no: ref || null };
-      setPaymentEntries([entry]);
-      setAmount(""); setRef("");
-      if (isClosed && onSettle) onSettle([entry]);
-    }
-  }
-
-  const needsRef = mode === PAYMENT_TYPE.CARD || mode === PAYMENT_TYPE.UPI;
-
-  return (
-    <div className="shrink-0 border-t bg-card">
-      {/* Mode tabs */}
-      <div className="flex border-b">
-        {PAYMENT_MODES.map(({ key, icon, label }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => { setMode(key); setAmount(""); setRef(""); }}
-            className={[
-              "flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] font-medium transition-colors",
-              mode === key
-                ? "bg-primary/10 text-primary border-b-2 border-primary"
-                : "text-muted-foreground hover:bg-muted",
-            ].join(" ")}
-          >
-            <HugeiconsIcon icon={icon} size={14} strokeWidth={mode === key ? 2.5 : 2} />
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Amount entry */}
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="flex gap-1.5">
-          <div className="relative flex-1">
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">₹</span>
-            <Input
-              type="number"
-              placeholder={balance > 0 ? fmtAmount(balance) : "0.00"}
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              onFocus={() => !amount && balance > 0 && setAmount(fmtAmount(balance))}
-              onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
-              className="h-8 pl-5 text-sm font-mono"
-            />
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            className={`h-8 px-3 text-xs shrink-0${isSettle ? " bg-emerald-600 hover:bg-emerald-700 text-white border-0" : ""}`}
-            onClick={handleAddEntry}
-            disabled={!amount || Number(amount) <= 0 || isSettling}
-          >
-            {isSettle ? "Settle" : "Set"}
-          </Button>
-        </div>
-
-        {needsRef && (
-          <Input
-            placeholder="Reference / UTR no."
-            value={ref}
-            onChange={(e) => setRef(e.target.value)}
-            className="h-7 text-xs"
-          />
-        )}
-
-        {mode === PAYMENT_TYPE.PART && paymentEntries.length > 0 && (
-          <div className="space-y-0.5 max-h-24 overflow-y-auto">
-            {paymentEntries.map((entry, i) => (
-              <div key={i} className="flex items-center justify-between text-xs bg-muted/50 rounded px-2 py-1">
-                <span className="text-muted-foreground">{PAYMENT_TYPE_LABELS[entry.payment_mode] ?? entry.payment_mode}</span>
-                <div className="flex items-center gap-2">
-                  <span className="tabular-nums font-medium">₹{fmtAmount(entry.amount)}</span>
-                  <button
-                    type="button"
-                    onClick={() => removePaymentEntry(i)}
-                    className="text-muted-foreground/50 hover:text-destructive transition-colors"
-                  >
-                    <HugeiconsIcon icon={Cancel01Icon} size={10} strokeWidth={2} />
-                  </button>
-                </div>
-              </div>
-            ))}
-            <div className="flex justify-between text-[11px] font-medium text-muted-foreground px-1">
-              <span>Balance</span>
-              <span className={balance > 0.01 ? "text-destructive" : "text-emerald-600"}>
-                ₹{fmtAmount(Math.max(0, balance))}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {!isClosed && mode !== PAYMENT_TYPE.PART && paymentEntries.length > 0 && (
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>Entered: ₹{fmtAmount(paymentEntries[0]?.amount ?? 0)}</span>
-            <span className={balance > 0.01 ? "text-destructive" : "text-emerald-600"}>
-              {balance > 0.01 ? `Short ₹${fmtAmount(balance)}` : `Change ₹${fmtAmount(Math.abs(balance))}`}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ─── Session top bar ──────────────────────────────────────────
 
 function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCovers, onSetDraftConfig }) {
-  const updateInfo = useUpdateSessionInfo(sessionId);
+  const updateInfo  = useUpdateSessionInfo(sessionId);
+  const updateParty = useUpdateSessionParty(sessionId);
+  const {
+    draftCustomerId, draftCustomerName, draftCustomerMobile, draftWaiterName,
+  } = useBillingContext();
 
   const currentOrderType = isDraft ? draftOrderType : session?.order_type;
   const currentCovers    = isDraft ? draftCovers    : (session?.covers ?? 1);
   const isClosed         = !isDraft && session?.session_status === "BILL_PRINTED";
+
+  // Resolve current party values (draft vs DB session)
+  const customerId     = isDraft ? draftCustomerId     : session?.customer_id;
+  const customerName   = isDraft ? draftCustomerName   : session?.customer_name;
+  const customerMobile = isDraft ? draftCustomerMobile : session?.customer_mobile;
+  const waiterName     = isDraft ? draftWaiterName     : session?.waiter_name;
 
   function adjustCovers(delta) {
     if (isDraft) { onSetDraftConfig({ covers: Math.max(1, currentCovers + delta) }); return; }
@@ -467,59 +327,66 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
     updateInfo.mutate({ sessionId, orderType: session.order_type, covers: next, customerName: session.customer_name ?? null });
   }
 
+  function handleSelectCustomer(c) {
+    if (isDraft) {
+      onSetDraftConfig({ customerId: c.id, customerName: c.name, customerMobile: c.mobile });
+    } else {
+      updateParty.mutate({ sessionId, customerId: c.id, customerName: c.name, customerMobile: c.mobile });
+    }
+  }
+
+  function handleSelectWaiter(w) {
+    if (isDraft) {
+      onSetDraftConfig({ waiterId: w.id, waiterName: w.name });
+    } else {
+      updateParty.mutate({ sessionId, waiterId: w.id });
+    }
+  }
+
   if (!isDraft && !session) {
     return <div className="shrink-0 border-b px-3 py-2"><Skeleton className="h-8 w-full rounded-md" /></div>;
   }
 
   return (
     <div className="shrink-0 border-b bg-card">
-      {/* Session meta row */}
-      <div className="flex items-center gap-2.5 px-4 py-2 text-xs text-muted-foreground flex-wrap">
-        {/* Covers */}
+      {/* Party + covers row */}
+      <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
+        <CustomerPicker
+          customerId={customerId}
+          customerName={customerName}
+          customerMobile={customerMobile}
+          disabled={isClosed}
+          onSelect={handleSelectCustomer}
+        />
+        <WaiterPicker
+          waiterName={waiterName}
+          disabled={isClosed}
+          onSelect={handleSelectWaiter}
+        />
+
+        {/* Covers — DINE_IN only */}
         {currentOrderType === ORDER_TYPE.DINE_IN && (
-          <div className="flex items-center gap-1">
-            <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
+          <div className="flex items-center gap-1 ml-auto">
+            <HugeiconsIcon icon={UserGroupIcon} size={13} strokeWidth={2} className="text-muted-foreground" />
             <button
               type="button"
               onClick={() => adjustCovers(-1)}
               disabled={isClosed || currentCovers <= 1}
-              className="h-4 w-4 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30"
+              className="h-5 w-5 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30"
             >
-              <HugeiconsIcon icon={MinusSignIcon} size={7} strokeWidth={2.5} />
+              <HugeiconsIcon icon={MinusSignIcon} size={8} strokeWidth={2.5} />
             </button>
-            <span className="w-4 text-center font-mono font-medium tabular-nums">
+            <span className="w-5 text-center text-xs font-mono font-medium tabular-nums">
               {currentCovers}
             </span>
             <button
               type="button"
               onClick={() => adjustCovers(1)}
               disabled={isClosed}
-              className="h-4 w-4 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30"
+              className="h-5 w-5 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30"
             >
-              <HugeiconsIcon icon={Add01Icon} size={7} strokeWidth={2.5} />
+              <HugeiconsIcon icon={Add01Icon} size={8} strokeWidth={2.5} />
             </button>
-          </div>
-        )}
-
-        {/* Waiter */}
-        {!isDraft && session?.waiter_name && (
-          <div className="flex items-center gap-1 min-w-0">
-            <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} />
-            <span className="truncate max-w-80px">{session.waiter_name}</span>
-          </div>
-        )}
-
-        {/* Customer */}
-        {!isDraft && session?.customer_name && (
-          <div className="flex items-center gap-1 min-w-0">
-            <span className="truncate max-w-90px text-foreground font-medium">
-              {session.customer_name}
-            </span>
-            {session.customer_mobile && (
-              <span className="text-muted-foreground/60 text-[10px]">
-                {session.customer_mobile}
-              </span>
-            )}
           </div>
         )}
       </div>
@@ -536,12 +403,7 @@ export default function OrderRightPanel({
   // Lifted from OrderEntryView:
   items, isLoadingItems,
   discountPercent,
-  netAmount,
-  handleSettle, isSettling,
-  billId,
 }) {
-  const isClosed = !isDraft && session?.session_status === "BILL_PRINTED";
-
   return (
     <div className="flex flex-col h-full overflow-hidden bg-card">
       {/* Session type + meta bar */}
@@ -569,16 +431,6 @@ export default function OrderRightPanel({
         items={items}
         discountPercent={discountPercent}
       />
-
-      {/* Payment — only shown once bill is printed */}
-      {!isDraft && (
-        <PaymentSection
-          netAmount={netAmount}
-          isClosed={isClosed}
-          onSettle={handleSettle}
-          isSettling={isSettling}
-        />
-      )}
     </div>
   );
 }

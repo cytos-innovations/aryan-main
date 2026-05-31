@@ -25,6 +25,10 @@ const initialState = {
   draftCovers:         2,
   draftApplicableRate: 1,
   draftCustomerName:   null,  // pre-filled from reservation when guest has arrived
+  draftCustomerId:     null,  // selected from customer picker
+  draftCustomerMobile: null,
+  draftWaiterId:       null,  // assigned waiter
+  draftWaiterName:     null,
 };
 
 const BillingContext = createContext(null);
@@ -45,6 +49,10 @@ function billingReducer(state, action) {
         draftCovers:         action.payload.draftCovers     ?? 2,
         draftApplicableRate: action.payload.applicableRate  ?? 1,
         draftCustomerName:   action.payload.draftCustomerName ?? null,
+        draftCustomerId:     null,
+        draftCustomerMobile: null,
+        draftWaiterId:       null,
+        draftWaiterName:     null,
       };
 
     case "SET_VIEW":
@@ -124,8 +132,13 @@ function billingReducer(state, action) {
     case "SET_DRAFT_CONFIG":
       return {
         ...state,
-        ...(action.payload.orderType !== undefined ? { draftOrderType: action.payload.orderType } : {}),
-        ...(action.payload.covers   !== undefined ? { draftCovers:    action.payload.covers    } : {}),
+        ...(action.payload.orderType      !== undefined ? { draftOrderType:      action.payload.orderType }      : {}),
+        ...(action.payload.covers         !== undefined ? { draftCovers:         action.payload.covers }         : {}),
+        ...(action.payload.customerId     !== undefined ? { draftCustomerId:     action.payload.customerId }     : {}),
+        ...(action.payload.customerName   !== undefined ? { draftCustomerName:   action.payload.customerName }   : {}),
+        ...(action.payload.customerMobile !== undefined ? { draftCustomerMobile: action.payload.customerMobile } : {}),
+        ...(action.payload.waiterId       !== undefined ? { draftWaiterId:       action.payload.waiterId }       : {}),
+        ...(action.payload.waiterName     !== undefined ? { draftWaiterName:     action.payload.waiterName }     : {}),
       };
 
     case "CLEAR_SESSION":
