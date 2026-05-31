@@ -2371,7 +2371,7 @@ pub async fn expire_no_show_reservations(
          SET    reservation_status = 'NO_SHOW', updated_at = NOW()
          WHERE  reservation_status = 'RESERVED'
            AND  is_active          = 1
-           AND  (reservation_date::date + reservation_time::time) + INTERVAL '15 minutes' < NOW()",
+           AND  (reservation_date::date + reservation_time::time) + INTERVAL '15 minutes' < LOCALTIMESTAMP",
     )
     .execute(&mut *tx)
     .await
@@ -2416,4 +2416,156 @@ pub async fn get_employees_for_billing(
         id:   r.try_get("id").unwrap_or(0),
         name: r.try_get("name").unwrap_or_default(),
     }).collect())
+}
+
+// ── Restaurant dashboard ───────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct TableGroupStat {
+    pub group_name:   Option<String>,
+    pub total:        i64,
+    pub available:    i64,
+    pub occupied:     i64,
+    pub bill_printed: i64,
+    pub reserved:     i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SalesToday {
+    pub food_sales:     f64,
+    pub beverage_sales: f64,
+    pub total_sales:    f64,
+    pub total_bills:    i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HourlySale {
+    pub hour:        i32,
+    pub food_sales:  f64,
+    pub bev_sales:   f64,
+    pub total_sales: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RestaurantDashboard {
+    pub table_groups:        Vec<TableGroupStat>,
+    pub sales_today:         SalesToday,
+    pub hourly_sales:        Vec<HourlySale>,
+    pub active_sessions:     i64,
+    pub todays_reservations: i64,
+}
+
+#[tauri::command]
+pub async fn get_restaurant_dashboard(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<RestaurantDashboard, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Table occupancy grouped by section
+    let group_rows = sqlx::query(
+        "SELECT tg.name AS group_name,
+                COUNT(rt.id)::bigint AS total,
+                COUNT(CASE WHEN COALESCE(rt.current_status, 'AVAILABLE') = 'AVAILABLE' THEN 1 END)::bigint AS available,
+                COUNT(CASE WHEN rt.current_status = 'OCCUPIED'
+                            AND COALESCE(os.session_status, '') != 'BILL_PRINTED' THEN 1 END)::bigint AS occupied,
+                COUNT(CASE WHEN rt.current_status = 'OCCUPIED'
+                            AND os.session_status = 'BILL_PRINTED' THEN 1 END)::bigint AS bill_printed,
+                COUNT(CASE WHEN rt.current_status = 'RESERVED' THEN 1 END)::bigint AS reserved
+         FROM   restaurant_table rt
+         LEFT JOIN table_group tg ON tg.id = rt.table_group_id
+         LEFT JOIN order_session os
+               ON os.id = rt.current_order_session_id
+              AND os.session_status IN ('OPEN', 'KOT_SENT', 'BILL_PRINTED')
+         WHERE  rt.is_active = TRUE
+         GROUP  BY tg.id, tg.name
+         ORDER  BY tg.name NULLS LAST",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load table stats: {e}"))?;
+
+    let table_groups = group_rows.iter().map(|r| TableGroupStat {
+        group_name:   r.try_get("group_name").ok().flatten(),
+        total:        r.try_get("total").unwrap_or(0),
+        available:    r.try_get("available").unwrap_or(0),
+        occupied:     r.try_get("occupied").unwrap_or(0),
+        bill_printed: r.try_get("bill_printed").unwrap_or(0),
+        reserved:     r.try_get("reserved").unwrap_or(0),
+    }).collect();
+
+    // Today's settled bill totals
+    let sales_row = sqlx::query(
+        "SELECT COALESCE(SUM(food_amount),   0)::float8 AS food_sales,
+                COALESCE(SUM(liquor_amount), 0)::float8 AS beverage_sales,
+                COALESCE(SUM(net_amount),    0)::float8 AS total_sales,
+                COUNT(*)::bigint                         AS total_bills
+         FROM   bill_master
+         WHERE  bill_status = 'PAID'
+           AND  DATE(settled_at) = CURRENT_DATE
+           AND  is_active = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to load sales data: {e}"))?;
+
+    let sales_today = SalesToday {
+        food_sales:     sales_row.try_get("food_sales").unwrap_or(0.0),
+        beverage_sales: sales_row.try_get("beverage_sales").unwrap_or(0.0),
+        total_sales:    sales_row.try_get("total_sales").unwrap_or(0.0),
+        total_bills:    sales_row.try_get("total_bills").unwrap_or(0),
+    };
+
+    // Hourly sales breakdown for today
+    let hourly_rows = sqlx::query(
+        "SELECT EXTRACT(HOUR FROM settled_at)::integer AS hour,
+                COALESCE(SUM(food_amount),   0)::float8 AS food_sales,
+                COALESCE(SUM(liquor_amount), 0)::float8 AS bev_sales,
+                COALESCE(SUM(net_amount),    0)::float8 AS total_sales
+         FROM   bill_master
+         WHERE  bill_status = 'PAID'
+           AND  DATE(settled_at) = CURRENT_DATE
+           AND  is_active = 1
+         GROUP  BY EXTRACT(HOUR FROM settled_at)
+         ORDER  BY hour",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load hourly sales: {e}"))?;
+
+    let hourly_sales = hourly_rows.iter().map(|r| HourlySale {
+        hour:        r.try_get("hour").unwrap_or(0),
+        food_sales:  r.try_get("food_sales").unwrap_or(0.0),
+        bev_sales:   r.try_get("bev_sales").unwrap_or(0.0),
+        total_sales: r.try_get("total_sales").unwrap_or(0.0),
+    }).collect();
+
+    // Live active sessions
+    let active_sessions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM order_session
+         WHERE  session_status IN ('OPEN', 'KOT_SENT', 'BILL_PRINTED')
+           AND  is_active = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
+
+    // Today's pending reservations
+    let todays_reservations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM reservation_master
+         WHERE  reservation_date = CURRENT_DATE
+           AND  reservation_status IN ('RESERVED', 'ARRIVED')
+           AND  is_active = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
+
+    Ok(RestaurantDashboard {
+        table_groups,
+        sales_today,
+        hourly_sales,
+        active_sessions,
+        todays_reservations,
+    })
 }

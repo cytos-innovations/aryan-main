@@ -154,6 +154,7 @@ use bill::{
     get_menu_for_billing,
     get_active_sessions,
     get_floor_view,
+    get_restaurant_dashboard,
     // Session lifecycle
     open_order_session,
     get_order_session,
@@ -1856,6 +1857,7 @@ pub fn run() {
             get_menu_for_billing,
             get_active_sessions,
             get_floor_view,
+            get_restaurant_dashboard,
             // Billing — session lifecycle
             open_order_session,
             get_order_session,
