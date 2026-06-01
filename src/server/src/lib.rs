@@ -190,6 +190,10 @@ use bill::{
     search_customers,
     quick_create_customer,
     update_session_party,
+    // KOT messages / item modifiers
+    search_kot_messages,
+    add_order_item_modifier,
+    clear_order_item_modifiers,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -1906,6 +1910,10 @@ pub fn run() {
             search_customers,
             quick_create_customer,
             update_session_party,
+            // KOT messages / item modifiers
+            search_kot_messages,
+            add_order_item_modifier,
+            clear_order_item_modifiers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

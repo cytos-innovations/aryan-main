@@ -85,6 +85,7 @@ pub struct OrderItemRow {
     pub kot_status:           String,
     pub item_status:          String,
     pub special_instruction:  Option<String>,
+    pub kot_messages:         Option<String>,
     pub ordered_at:           Option<String>,
 }
 
@@ -902,7 +903,11 @@ pub async fn get_order_items(
                 oi.kitchen_section_id,
                 (mc.liquor_group_id IS NOT NULL) AS is_liquor,
                 oi.kot_status, oi.item_status,
-                oi.special_instruction, oi.ordered_at
+                oi.special_instruction,
+                (SELECT string_agg(oim.modifier_name, ', ' ORDER BY oim.id)
+                 FROM   order_item_modifier oim
+                 WHERE  oim.order_item_id = oi.id AND oim.is_active = 1) AS kot_messages,
+                oi.ordered_at
          FROM   order_item oi
          LEFT JOIN food_type ft  ON ft.id  = oi.food_type_id
          LEFT JOIN menu_card mc  ON mc.id  = oi.menu_id
@@ -937,6 +942,7 @@ pub async fn get_order_items(
         kot_status:           r.try_get("kot_status").unwrap_or_else(|_| "PENDING".to_string()),
         item_status:          r.try_get("item_status").unwrap_or_else(|_| "ACTIVE".to_string()),
         special_instruction:  r.try_get("special_instruction").ok().flatten(),
+        kot_messages:         r.try_get("kot_messages").ok().flatten(),
         ordered_at:           r.try_get::<Option<chrono::NaiveDateTime>, _>("ordered_at")
                                .ok().flatten()
                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
@@ -2599,6 +2605,96 @@ pub async fn update_session_party(
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to update session party: {e}"))?;
+
+    Ok(())
+}
+
+// ── KOT messages (master) + order item modifiers ──────────────
+
+#[derive(Debug, Serialize)]
+pub struct KotMessageOption {
+    pub id:      i32,
+    pub code:    Option<i64>,
+    pub message: String,
+}
+
+/// Search KOT messages by text or code (for the per-item KOT message picker).
+#[tauri::command]
+pub async fn search_kot_messages(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    query: String,
+) -> Result<Vec<KotMessageOption>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let q = query.trim();
+    let pattern = format!("%{}%", q);
+
+    let rows = sqlx::query(
+        "SELECT id, code, kot_message
+         FROM   kot_message
+         WHERE  is_active = TRUE
+           AND  ($1 = '' OR kot_message ILIKE $2 OR CAST(code AS TEXT) = $1)
+         ORDER  BY kot_message
+         LIMIT  20",
+    )
+    .bind(q)
+    .bind(&pattern)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to search KOT messages: {e}"))?;
+
+    Ok(rows.iter().map(|r| KotMessageOption {
+        id:      r.try_get("id").unwrap_or(0),
+        code:    r.try_get("code").ok().flatten(),
+        message: r.try_get("kot_message").unwrap_or_default(),
+    }).collect())
+}
+
+/// Attach a KOT message to an order item (stored in order_item_modifier).
+#[tauri::command]
+pub async fn add_order_item_modifier(
+    app:           tauri::AppHandle,
+    state:         tauri::State<'_, AppState>,
+    order_item_id: i32,
+    modifier_name: String,
+) -> Result<i32, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let name = modifier_name.trim();
+    if name.is_empty() {
+        return Err("Message is required".into());
+    }
+
+    let id: i32 = sqlx::query_scalar(
+        "INSERT INTO order_item_modifier (order_item_id, modifier_name, modifier_rate, is_active)
+         VALUES ($1, $2, 0, 1)
+         RETURNING id",
+    )
+    .bind(order_item_id)
+    .bind(name)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to add KOT message: {e}"))?;
+
+    Ok(id)
+}
+
+/// Remove all KOT messages from an order item (clear before re-setting).
+#[tauri::command]
+pub async fn clear_order_item_modifiers(
+    app:           tauri::AppHandle,
+    state:         tauri::State<'_, AppState>,
+    order_item_id: i32,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    sqlx::query(
+        "UPDATE order_item_modifier SET is_active = 0, updated_at = NOW()
+         WHERE  order_item_id = $1 AND is_active = 1",
+    )
+    .bind(order_item_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to clear KOT messages: {e}"))?;
 
     Ok(())
 }

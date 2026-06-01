@@ -1,10 +1,136 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Search01Icon, Add01Icon, ChefHatIcon } from "@hugeicons/core-free-icons";
+import { Search01Icon, Add01Icon, ChefHatIcon, ArrowDown01Icon, Clock01Icon } from "@hugeicons/core-free-icons";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useBillingContext } from "../state/billing-context";
 import { selectItemRate } from "../utils/billing-calc";
+
+// ─── Category → group tree (derived from flat menu array) ─────────
+
+function buildMenuTree(menu) {
+  const catMap = new Map();
+  for (const item of menu) {
+    const catId   = item.category_id   ?? "__none__";
+    const catName = item.category_name ?? "Other";
+    if (!catMap.has(catId)) {
+      catMap.set(catId, { id: catId, name: catName, groups: new Map() });
+    }
+    const cat = catMap.get(catId);
+    if (item.group_id) {
+      cat.groups.set(item.group_id, { id: item.group_id, name: item.group_name ?? "General" });
+    }
+  }
+  return [...catMap.values()].map((c) => ({ ...c, groups: [...c.groups.values()] }));
+}
+
+// ─── Category chip bar (replaces the old left nav) ────────────────
+
+function chipClass(active) {
+  return [
+    "flex items-center gap-1 h-7 px-3 rounded-full text-xs font-medium whitespace-nowrap transition-colors shrink-0 border",
+    active
+      ? "bg-primary text-primary-foreground border-primary"
+      : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+  ].join(" ");
+}
+
+function CategoryChips({ menu }) {
+  const {
+    selectedMenuCategoryId,
+    selectedMenuGroupId,
+    selectMenuCategory,
+    selectMenuGroup,
+  } = useBillingContext();
+
+  const categories = useMemo(() => buildMenuTree(menu), [menu]);
+  const [openCat, setOpenCat] = useState(null);
+
+  const isRecent = !selectedMenuCategoryId && !selectedMenuGroupId;
+
+  return (
+    <div className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 border-b overflow-x-auto">
+      {/* Recent */}
+      <button
+        type="button"
+        className={chipClass(isRecent)}
+        onClick={() => { selectMenuCategory(null); selectMenuGroup(null); setOpenCat(null); }}
+      >
+        <HugeiconsIcon icon={Clock01Icon} size={12} strokeWidth={2} />
+        Recent
+      </button>
+
+      {categories.map((cat) => {
+        const active     = selectedMenuCategoryId === cat.id;
+        const hasGroups  = cat.groups.length > 0;
+
+        if (!hasGroups) {
+          return (
+            <button
+              key={cat.id}
+              type="button"
+              className={chipClass(active)}
+              onClick={() => { selectMenuCategory(cat.id); selectMenuGroup(null); setOpenCat(null); }}
+            >
+              {cat.name}
+            </button>
+          );
+        }
+
+        return (
+          <Popover key={cat.id} open={openCat === cat.id} onOpenChange={(o) => setOpenCat(o ? cat.id : null)}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={chipClass(active)}
+                onMouseEnter={() => setOpenCat(cat.id)}
+                onClick={() => { selectMenuCategory(cat.id); selectMenuGroup(null); }}
+              >
+                {cat.name}
+                <HugeiconsIcon icon={ArrowDown01Icon} size={11} strokeWidth={2} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              className="w-48 p-1"
+              onMouseLeave={() => setOpenCat(null)}
+            >
+              <button
+                type="button"
+                onClick={() => { selectMenuCategory(cat.id); selectMenuGroup(null); setOpenCat(null); }}
+                className={[
+                  "w-full text-left px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors",
+                  active && !selectedMenuGroupId ? "bg-primary/10 text-primary" : "hover:bg-muted",
+                ].join(" ")}
+              >
+                All {cat.name}
+              </button>
+              <div className="my-1 border-t" />
+              {cat.groups.map((grp) => (
+                <button
+                  key={grp.id}
+                  type="button"
+                  onClick={() => { selectMenuGroup(grp.id); setOpenCat(null); }}
+                  className={[
+                    "w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-colors",
+                    selectedMenuGroupId === grp.id ? "bg-primary/15 text-primary font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ].join(" ")}
+                >
+                  {grp.name}
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
+        );
+      })}
+    </div>
+  );
+}
 
 // ─── Recent item IDs (localStorage) ──────────────────────────────
 
@@ -178,7 +304,7 @@ function SectionLabel({ children }) {
 
 function CenterSkeleton() {
   return (
-    <div className="p-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <div className="p-2 grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
       {Array.from({ length: 24 }).map((_, i) => (
         <Skeleton key={i} className="h-72px rounded-lg" />
       ))}
@@ -300,6 +426,9 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
         </div>
       </div>
 
+      {/* ── Category chip bar ── */}
+      <CategoryChips menu={menu} />
+
       {/* ── Food type legend ── */}
       <FoodTypeLegend />
 
@@ -313,8 +442,8 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {showRecents && <SectionLabel>Quick Access</SectionLabel>}
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
+            {showRecents && <SectionLabel>Recent</SectionLabel>}
             {displayItems.map((item) => (
               <MenuItemCard
                 key={item.id}

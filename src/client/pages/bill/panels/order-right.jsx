@@ -11,6 +11,7 @@ import {
   ArrowUp01Icon,
   StickyNote01Icon,
   Discount01Icon,
+  Comment01Icon,
 } from "@hugeicons/core-free-icons";
 
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ import { ORDER_TYPE } from "../constants/billing";
 import { calcBillTotals, calcTaxBreakdown, fmtAmount } from "../utils/billing-calc";
 import { FoodTypeDot } from "./menu-center";
 import { CustomerPicker, WaiterPicker } from "./party-pickers";
+import KotMessagePicker from "./kot-message-picker";
 
 // ─── KOT status config ────────────────────────────────────────
 
@@ -52,11 +54,28 @@ function KotDot({ status }) {
 function OrderItemRow({ item, sessionId, isDraft }) {
   const updateQty  = useUpdateOrderItemQty(sessionId);
   const cancelItem = useCancelOrderItem(sessionId);
-  const { updateDraftQty, removeDraftItem } = useBillingContext();
+  const {
+    updateDraftQty, removeDraftItem,
+    setDraftItemKotMsg, setPendingItemKotMsg, pendingItemKotMsgs,
+  } = useBillingContext();
 
   if (item.item_status === "CANCELLED") return null;
 
   const canEdit = isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE");
+
+  // KOT message resolution (all UI-only until KOT is punched):
+  //  • draft items         → stored on the draft item
+  //  • existing pending     → local pending map overrides the DB value
+  //  • already-saved (DB)   → kot_messages aggregate
+  const hasPending = !isDraft && Object.prototype.hasOwnProperty.call(pendingItemKotMsgs, item.id);
+  const kotMessage = isDraft
+    ? (item.kot_message ?? null)
+    : (hasPending ? pendingItemKotMsgs[item.id] : (item.kot_messages ?? null));
+
+  function handleKotMsg(message) {
+    if (isDraft) setDraftItemKotMsg(item.menu_id, message);
+    else setPendingItemKotMsg(item.id, message);  // UI only — persisted on KOT
+  }
 
   function handleDecrement() {
     if (isDraft) updateDraftQty(item.menu_id, item.quantity - 1);
@@ -119,17 +138,34 @@ function OrderItemRow({ item, sessionId, isDraft }) {
           ₹{fmtAmount(item.final_amount)}
         </span>
 
-        {/* Remove */}
-        <button
-          type="button"
-          onClick={handleRemove}
-          disabled={delDisabled}
-          className="h-5 w-5 shrink-0 rounded flex items-center justify-center text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 disabled:!opacity-0! transition-all"
-          title="Remove item"
-        >
-          <HugeiconsIcon icon={Delete01Icon} size={10} strokeWidth={2} />
-        </button>
+        {/* KOT message + Remove */}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <KotMessagePicker
+            value={kotMessage}
+            disabled={!canEdit}
+            onSelect={handleKotMsg}
+          />
+          <button
+            type="button"
+            onClick={handleRemove}
+            disabled={delDisabled}
+            className="h-5 w-5 shrink-0 rounded flex items-center justify-center text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 disabled:!opacity-0! transition-all"
+            title="Remove item"
+          >
+            <HugeiconsIcon icon={Delete01Icon} size={10} strokeWidth={2} />
+          </button>
+        </div>
       </div>
+
+      {/* KOT message */}
+      {kotMessage && (
+        <div className="flex items-start gap-1 px-3 pb-1.5 -mt-0.5">
+          <HugeiconsIcon icon={Comment01Icon} size={9} strokeWidth={2} className="text-primary/60 mt-0.5 shrink-0" />
+          <p className="text-[10px] text-primary/80 font-medium leading-snug">
+            {kotMessage}
+          </p>
+        </div>
+      )}
 
       {/* Special instruction */}
       {item.special_instruction && (
@@ -175,7 +211,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
         <span className="flex-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Item</span>
         <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 w-20 text-center">Qty</span>
         <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 w-14 text-right">Amt</span>
-        <span className="w-5" />
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 w-11 text-center">Msg</span>
       </div>
       {activeItems.map((item) => (
         <OrderItemRow key={item.id} item={item} sessionId={sessionId} isDraft={isDraft} />

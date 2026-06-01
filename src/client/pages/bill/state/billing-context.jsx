@@ -29,6 +29,10 @@ const initialState = {
   draftCustomerMobile: null,
   draftWaiterId:       null,  // assigned waiter
   draftWaiterName:     null,
+
+  // KOT messages for existing-session PENDING items, held in UI until KOT punch.
+  // Keyed by order_item_id → message string (null = cleared).
+  pendingItemKotMsgs:  {},
 };
 
 const BillingContext = createContext(null);
@@ -104,6 +108,7 @@ function billingReducer(state, action) {
           food_type_id:        menuItem.food_type_id ?? null,
           is_liquor:           menuItem.is_liquor ?? false,
           special_instruction: null,
+          kot_message:         null,  // selected KOT message (persisted to order_item_modifier on KOT)
           kot_status:          "PENDING",
           item_status:         "ACTIVE",
           ordered_at:          null,
@@ -111,6 +116,28 @@ function billingReducer(state, action) {
         }],
       };
     }
+
+    case "SET_DRAFT_ITEM_KOT_MSG":
+      return {
+        ...state,
+        draftItems: state.draftItems.map((i) =>
+          i.menu_id === action.payload.menuId
+            ? { ...i, kot_message: action.payload.message || null }
+            : i,
+        ),
+      };
+
+    case "SET_PENDING_ITEM_KOT_MSG":
+      return {
+        ...state,
+        pendingItemKotMsgs: {
+          ...state.pendingItemKotMsgs,
+          [action.payload.orderItemId]: action.payload.message || null,
+        },
+      };
+
+    case "CLEAR_PENDING_ITEM_KOT_MSGS":
+      return { ...state, pendingItemKotMsgs: {} };
 
     case "UPDATE_DRAFT_QTY": {
       const { menuId, qty } = action.payload;
@@ -200,6 +227,18 @@ export function BillingProvider({ children }) {
     dispatch({ type: "REMOVE_DRAFT_ITEM", payload: menuId }),
   []);
 
+  const setDraftItemKotMsg = useCallback((menuId, message) =>
+    dispatch({ type: "SET_DRAFT_ITEM_KOT_MSG", payload: { menuId, message } }),
+  []);
+
+  const setPendingItemKotMsg = useCallback((orderItemId, message) =>
+    dispatch({ type: "SET_PENDING_ITEM_KOT_MSG", payload: { orderItemId, message } }),
+  []);
+
+  const clearPendingItemKotMsgs = useCallback(() =>
+    dispatch({ type: "CLEAR_PENDING_ITEM_KOT_MSGS" }),
+  []);
+
   const setDraftConfig = useCallback((cfg) =>
     dispatch({ type: "SET_DRAFT_CONFIG", payload: cfg }),
   []);
@@ -218,6 +257,9 @@ export function BillingProvider({ children }) {
       addDraftItem,
       updateDraftQty,
       removeDraftItem,
+      setDraftItemKotMsg,
+      setPendingItemKotMsg,
+      clearPendingItemKotMsgs,
       setDraftConfig,
     }}>
       {children}

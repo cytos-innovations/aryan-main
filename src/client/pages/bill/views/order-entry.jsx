@@ -55,7 +55,6 @@ import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, ORDER_TYPE_LABELS, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
 import { selectItemRate, getReservationPhase, calcBillTotals } from "../utils/billing-calc";
 
-import MenuLeftPanel   from "../panels/menu-left";
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
 import BottomActionBar from "../panels/bottom-action-bar";
@@ -445,7 +444,8 @@ export default function OrderEntryView() {
         customerName:  draftCustomerName ?? null,
       });
 
-      await Promise.all(draftItems.map((item) =>
+      // Add each item; capture the new order_item id so KOT messages can be attached
+      const newItemIds = await Promise.all(draftItems.map((item) =>
         billingService.addOrderItem({
           sessionId,
           menuId:             item.menu_id,
@@ -453,6 +453,13 @@ export default function OrderEntryView() {
           specialInstruction: item.special_instruction ?? null,
         }),
       ));
+
+      // Persist any draft KOT messages into order_item_modifier
+      await Promise.all(draftItems.map((item, idx) =>
+        item.kot_message
+          ? billingService.addOrderItemModifier(newItemIds[idx], item.kot_message)
+          : null,
+      ).filter(Boolean));
 
       await billingService.generateKot(sessionId, null);
 
@@ -505,13 +512,8 @@ export default function OrderEntryView() {
         onEdit={() => setEditOpen(true)}
       />
 
-      {/* ── Main body: left nav + center+right workspace ── */}
+      {/* ── Main body: center+right workspace ── */}
       <div className="flex flex-1 overflow-hidden min-h-0">
-
-        {/* LEFT — category / group nav */}
-        <div className="shrink-0 w-40 border-r overflow-hidden bg-sidebar h-full">
-          <MenuLeftPanel menu={menu} isLoading={isMenuLoading} />
-        </div>
 
         {/* CENTER + RIGHT + BOTTOM ACTION BAR */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -531,7 +533,7 @@ export default function OrderEntryView() {
             </div>
 
             {/* RIGHT — order panel */}
-            <div className="shrink-0 w-100 xl:w-115 border-l overflow-hidden h-full">
+            <div className="shrink-0 w-[42%] max-w-150 min-w-105 border-l overflow-hidden h-full">
               <OrderRightPanel
                 session={session}
                 sessionId={activeSessionId}

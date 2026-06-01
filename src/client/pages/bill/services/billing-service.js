@@ -187,6 +187,20 @@ export const billingService = {
       waiterId:       waiterId       ?? null,
     }),
 
+  // ── KOT messages / item modifiers ────────────────────────────
+
+  /** Search KOT messages (kot_message master) by text or code */
+  searchKotMessages: (query) =>
+    invoke("search_kot_messages", { query: query ?? "" }),
+
+  /** Attach a KOT message to an order item (order_item_modifier) */
+  addOrderItemModifier: (orderItemId, modifierName) =>
+    invoke("add_order_item_modifier", { orderItemId, modifierName }),
+
+  /** Clear all KOT messages from an order item */
+  clearOrderItemModifiers: (orderItemId) =>
+    invoke("clear_order_item_modifiers", { orderItemId }),
+
   updateReservationStatus: (reservationId, status) =>
     invoke("update_reservation_status", { reservationId, status }),
 

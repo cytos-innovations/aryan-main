@@ -13,6 +13,7 @@ import {
   UserGroupIcon,
   HotelBellIcon,
   PrinterIcon,
+  Exchange01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 
@@ -450,6 +451,19 @@ export default function TableSelectView({ onOpenReprint }) {
   // Auto-focus search on mount
   useEffect(() => { searchRef.current?.focus(); }, []);
 
+  // Table Shift — placeholder (shortcut F7)
+  const handleTableShift = useCallback(() => {
+    toast.info("Table Shift Feature Coming Soon");
+  }, []);
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "F7") { e.preventDefault(); handleTableShift(); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleTableShift]);
+
   const floorQuery = useFloorView();
   const tables = floorQuery.data ?? [];
 
@@ -595,6 +609,19 @@ export default function TableSelectView({ onOpenReprint }) {
           Bill Reprint
           <span className="ml-0.5 text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">
             PgUp
+          </span>
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 text-xs"
+          onClick={handleTableShift}
+        >
+          <HugeiconsIcon icon={Exchange01Icon} size={14} strokeWidth={2} />
+          Table Shift
+          <span className="ml-0.5 text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">
+            F7
           </span>
         </Button>
 

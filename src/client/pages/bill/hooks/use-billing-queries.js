@@ -598,3 +598,30 @@ export function useUpdateSessionParty(sessionId) {
     onError: (e) => toast.error(String(e)),
   });
 }
+
+/** Search KOT messages (kot_message master). Enabled only when querying. */
+export function useSearchKotMessages(query, enabled = true) {
+  return useQuery({
+    queryKey:  BQK.KOT_MSG_SEARCH(query ?? ""),
+    queryFn:   () => billingService.searchKotMessages(query ?? ""),
+    staleTime: 30_000,
+    enabled,
+  });
+}
+
+/** Set the KOT message on an order item (clear existing, then add). */
+export function useSetOrderItemKotMessage(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ orderItemId, message }) => {
+      await billingService.clearOrderItemModifiers(orderItemId);
+      if (message && message.trim()) {
+        await billingService.addOrderItemModifier(orderItemId, message.trim());
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}

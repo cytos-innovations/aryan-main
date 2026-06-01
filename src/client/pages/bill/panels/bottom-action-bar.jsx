@@ -11,22 +11,20 @@ import {
   PercentIcon,
   ArrowLeft01Icon,
   AlertCircleIcon,
-  MoreHorizontalCircle01Icon,
-  Refresh01Icon,
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
 import { Input }  from "@/components/ui/input";
 import { useBillingContext } from "../state/billing-context";
 import { useGenerateKot, useGenerateBill } from "../hooks/use-billing-queries";
+import { billingService } from "../services/billing-service";
 import { fmtAmount } from "../utils/billing-calc";
 
 // ─── Panel mode enum ──────────────────────────────────────────
 
 export const BOTTOM_PANEL_MODE = {
-  BILLING:     "billing",
-  DISCOUNT:    "discount",
-  TABLE_SHIFT: "tableShift",
+  BILLING:  "billing",
+  DISCOUNT: "discount",
 };
 
 // ─── Shared helpers ───────────────────────────────────────────
@@ -67,7 +65,7 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
       size="sm"
       onClick={onClick}
       disabled={disabled}
-      className={`h-auto py-1.5 px-2 flex-1 flex flex-col items-center gap-0.5 min-w-0 text-xs ${className}`}
+      className={`h-12 py-1 px-1.5 flex-1 flex flex-col items-center justify-center gap-0.5 min-w-0 ${className}`}
       {...rest}
     >
       <HugeiconsIcon icon={icon} size={14} strokeWidth={2} />
@@ -77,99 +75,74 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
   );
 }
 
-// ─── Billing mode panel (pure display) ───────────────────────
+// ─── Billing mode panel (single-row action bar) ───────────────
 
 function BillingModePanel({
   kotLabel, canKot, kotPending,
   canBill, billPending,
   canSettle,
   netAmount,
-  isDraft,
   onKot, onBill, onSettle, onSwitchMode,
 }) {
   return (
-    <div className="flex items-stretch gap-2 px-3 py-2">
-      {/* Total */}
-      <div className="flex flex-col justify-center items-start shrink-0 rounded-lg bg-muted/40 px-3 py-1 min-w-22">
-        <span className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold leading-none mb-1">
-          Total
-        </span>
-        <span className="text-lg font-bold tabular-nums tracking-tight leading-tight whitespace-nowrap">
-          ₹{fmtAmount(netAmount ?? 0)}
-        </span>
-      </div>
+    <div className="flex items-stretch gap-1.5 px-2 py-1.5">
+      <ActionBtn
+        icon={SendingOrderIcon}
+        label={kotLabel}
+        shortcut="F8"
+        onClick={onKot}
+        disabled={!canKot || kotPending}
+        variant="default"
+        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
+      />
+      <ActionBtn
+        icon={PrinterIcon}
+        label="KOT+Print"
+        shortcut="Home"
+        onClick={onKot}
+        disabled={!canKot || kotPending}
+        data-pos-action="kotprint"
+        onKeyDown={makePosTabHandler("kotprint")}
+      />
+      <ActionBtn
+        icon={ReceiptIndianRupeeIcon}
+        label="Bill"
+        shortcut="F9"
+        onClick={onBill}
+        disabled={!canBill || billPending}
+      />
+      <ActionBtn
+        icon={PrinterIcon}
+        label="Bill+Print"
+        shortcut="*"
+        onClick={onBill}
+        disabled={!canBill || billPending}
+        data-pos-action="billprint"
+        onKeyDown={makePosTabHandler("billprint")}
+      />
+      <ActionBtn
+        icon={Discount01Icon}
+        label="Discount"
+        shortcut="/"
+        onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.DISCOUNT)}
+      />
+      <ActionBtn icon={Hold01Icon} label="Hold" shortcut="F6" disabled />
 
-      <div className="w-px bg-border mx-0.5 self-stretch" />
-
-      <div className="flex-1 flex flex-col gap-1 min-w-0">
-        {/* Row 1 */}
-        <div className="flex gap-1">
-          <ActionBtn
-            icon={SendingOrderIcon}
-            label={kotLabel}
-            shortcut="F8"
-            onClick={onKot}
-            disabled={!canKot || kotPending}
-            variant="default"
-            className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
-          />
-          <ActionBtn
-            icon={PrinterIcon}
-            label="KOT+Print"
-            shortcut="Home"
-            onClick={onKot}
-            disabled={!canKot || kotPending}
-            data-pos-action="kotprint"
-            onKeyDown={makePosTabHandler("kotprint")}
-          />
-          <ActionBtn
-            icon={ReceiptIndianRupeeIcon}
-            label="Bill"
-            shortcut="F9"
-            onClick={onBill}
-            disabled={!canBill || billPending}
-          />
-          <ActionBtn
-            icon={PrinterIcon}
-            label="Bill+Print"
-            shortcut="*"
-            onClick={onBill}
-            disabled={!canBill || billPending}
-            data-pos-action="billprint"
-            onKeyDown={makePosTabHandler("billprint")}
-          />
-          <ActionBtn
-            icon={CashIcon}
-            label="Settle"
-            shortcut="F11"
-            onClick={onSettle}
-            disabled={!canSettle}
-            variant="default"
-            className="bg-emerald-600 hover:bg-emerald-700 text-white border-0 disabled:opacity-50"
-            data-pos-action="settle"
-            onKeyDown={makePosTabHandler("settle")}
-          />
-        </div>
-
-        {/* Row 2 */}
-        <div className="flex gap-1">
-          <ActionBtn
-            icon={Discount01Icon}
-            label="Discount"
-            shortcut="/"
-            onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.DISCOUNT)}
-          />
-          <ActionBtn
-            icon={Refresh01Icon}
-            label="Table Shift"
-            shortcut="F7"
-            onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.TABLE_SHIFT)}
-            disabled={isDraft}
-          />
-          <ActionBtn icon={Hold01Icon}              label="Hold" shortcut="F6" disabled />
-          <ActionBtn icon={MoreHorizontalCircle01Icon} label="More" shortcut="" disabled />
-        </div>
-      </div>
+      {/* Settle — prominent, carries the running total */}
+      <Button
+        type="button"
+        size="sm"
+        onClick={onSettle}
+        disabled={!canSettle}
+        data-pos-action="settle"
+        onKeyDown={makePosTabHandler("settle")}
+        className="h-12 py-1 px-3 flex-[1.9] flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white border-0 disabled:opacity-50"
+      >
+        <HugeiconsIcon icon={CashIcon} size={17} strokeWidth={2} />
+        <span className="text-xs font-semibold">Settle</span>
+        <span className="text-base font-bold tabular-nums tracking-tight">₹{fmtAmount(netAmount ?? 0)}</span>
+        <span className="text-[8px] font-mono px-1 py-0.5 rounded leading-none bg-white/20">F11</span>
+      </Button>
     </div>
   );
 }
@@ -217,7 +190,7 @@ export default function BottomActionBar({
   onKotDraft, onCancel,
   discountPercent, onDiscountChange,
 }) {
-  const { clearSession } = useBillingContext();
+  const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
   const generateKot  = useGenerateKot(sessionId);
   const generateBill = useGenerateBill(sessionId);
   const [panelMode, setPanelMode] = useState(BOTTOM_PANEL_MODE.BILLING);
@@ -235,15 +208,34 @@ export default function BottomActionBar({
   const kotPending = isDraft ? isKotting : generateKot.isPending;
   const kotLabel   = kotPending ? "Sending…" : (isDraft ? "KOT" : (pendingKot > 0 ? `KOT (${pendingKot})` : "KOT"));
 
+  // Persist UI-held KOT messages for existing pending items into the DB
+  async function flushPendingKotMsgs() {
+    const entries = Object.entries(pendingItemKotMsgs ?? {});
+    if (entries.length === 0) return;
+    await Promise.all(entries.map(async ([id, msg]) => {
+      const orderItemId = Number(id);
+      await billingService.clearOrderItemModifiers(orderItemId);
+      if (msg && msg.trim()) await billingService.addOrderItemModifier(orderItemId, msg.trim());
+    }));
+    clearPendingItemKotMsgs();
+  }
+
   // ── Action handlers ───────────────────────────────────────
-  const handleKot = useCallback(() => {
+  const handleKot = useCallback(async () => {
     if (isNearReservation) {
       toast.error("This table has an upcoming reservation. KOT cannot be created before reservation time.");
       return;
     }
     if (isDraft) { onKotDraft(); return; }
+    try {
+      await flushPendingKotMsgs();   // save KOT messages before sending to kitchen
+    } catch (e) {
+      toast.error(String(e));
+      return;
+    }
     generateKot.mutate({}, { onSuccess: clearSession });
-  }, [isNearReservation, isDraft, onKotDraft, generateKot, clearSession]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNearReservation, isDraft, onKotDraft, generateKot, clearSession, pendingItemKotMsgs]);
 
   const handleBill = useCallback(() => {
     generateBill.mutate(undefined, { onSuccess: clearSession });
@@ -254,13 +246,7 @@ export default function BottomActionBar({
     onRequestSettle();
   }, [onRequestSettle]);
 
-  const switchMode = useCallback((mode) => {
-    if (mode === BOTTOM_PANEL_MODE.TABLE_SHIFT) {
-      toast.info("Table Shift Feature Coming Soon");
-      return;
-    }
-    setPanelMode(mode);
-  }, []);
+  const switchMode = useCallback((mode) => setPanelMode(mode), []);
 
   // ── Ref: always holds the LATEST values without stale closure ─
   const live = useRef({});
@@ -269,7 +255,7 @@ export default function BottomActionBar({
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
-    const POS_KEYS = new Set(["Home", "F7", "F11", "/", "*"]);
+    const POS_KEYS = new Set(["Home", "F11", "/", "*"]);
 
     function onKey(e) {
       const tag = e.target.tagName;
@@ -297,9 +283,6 @@ export default function BottomActionBar({
       switch (e.key) {
         case "Home":
           if (cur.canKot && !cur.kotPending) cur.handleKot();
-          break;
-        case "F7":
-          cur.switchMode(BOTTOM_PANEL_MODE.TABLE_SHIFT);
           break;
         case "/":
           setPanelMode(BOTTOM_PANEL_MODE.DISCOUNT);
@@ -341,7 +324,6 @@ export default function BottomActionBar({
             billPending={generateBill.isPending}
             canSettle={canSettle}
             netAmount={netAmount}
-            isDraft={isDraft}
             onKot={handleKot}
             onBill={handleBill}
             onSettle={handleSettle}
