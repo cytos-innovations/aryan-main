@@ -169,6 +169,9 @@ use bill::{
     // KOT
     generate_kot,
     get_kot_list,
+    // Table shift / item transfer
+    shift_table_full,
+    transfer_order_items,
     // Bill & payment
     get_bill_summary,
     generate_bill,
@@ -190,6 +193,7 @@ use bill::{
     search_customers,
     quick_create_customer,
     update_session_party,
+    get_customer_due_by_mobile,
     // KOT messages / item modifiers
     search_kot_messages,
     add_order_item_modifier,
@@ -1889,6 +1893,9 @@ pub fn run() {
             // Billing — KOT
             generate_kot,
             get_kot_list,
+            // Billing — table shift / item transfer
+            shift_table_full,
+            transfer_order_items,
             // Billing — bill & payment
             get_bill_summary,
             generate_bill,
@@ -1910,6 +1917,7 @@ pub fn run() {
             search_customers,
             quick_create_customer,
             update_session_party,
+            get_customer_due_by_mobile,
             // KOT messages / item modifiers
             search_kot_messages,
             add_order_item_modifier,

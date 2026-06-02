@@ -84,6 +84,16 @@ export const billingService = {
   getKotList: (sessionId) =>
     invoke("get_kot_list", { sessionId }),
 
+  // ── Table shift / item transfer ───────────────────────────────
+
+  /** Move an entire session (items, KOTs, state, time) to a free table */
+  shiftTableFull: ({ sessionId, targetTableId }) =>
+    invoke("shift_table_full", { sessionId, targetTableId }),
+
+  /** Move selected order items to another table (merges or opens a session) */
+  transferOrderItems: ({ sourceSessionId, targetTableId, itemIds }) =>
+    invoke("transfer_order_items", { sourceSessionId, targetTableId, itemIds }),
+
   // ── Bill & payment ────────────────────────────────────────────
 
   getBillSummary: (sessionId) =>
@@ -167,6 +177,10 @@ export const billingService = {
   /** Search customers by name/mobile for the billing party picker */
   searchCustomers: (query) =>
     invoke("search_customers", { query: query ?? "" }),
+
+  /** Outstanding pending dues for the customer matching a mobile number */
+  getCustomerDueByMobile: (mobile) =>
+    invoke("get_customer_due_by_mobile", { mobile: mobile ?? "" }),
 
   /** Quick-create a customer (lands in customer_information master) */
   quickCreateCustomer: ({ name, mobile, email, address }) =>

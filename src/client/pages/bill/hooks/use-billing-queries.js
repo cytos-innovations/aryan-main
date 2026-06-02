@@ -330,6 +330,41 @@ export function useGenerateKot(sessionId) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Table shift / item transfer mutations
+// ─────────────────────────────────────────────────────────────
+
+export function useShiftTable() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.shiftTableFull,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
+      toast.success("Table shifted");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+export function useTransferItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.transferOrderItems,
+    onSuccess: (_destSessionId, { sourceSessionId }) => {
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sourceSessionId) });
+      qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sourceSessionId) });
+      toast.success("Items moved");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
 // Bill mutations
 // ─────────────────────────────────────────────────────────────
 

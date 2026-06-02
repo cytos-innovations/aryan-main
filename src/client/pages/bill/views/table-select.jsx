@@ -47,6 +47,7 @@ import {
   playReminderChime,
 } from "../hooks/use-reservation-reminder";
 import ReservationPanel from "../panels/reservation-panel";
+import TableShiftDialog from "../panels/table-shift-dialog";
 
 // ─── Status helpers ──────────────────────────────────────────────
 
@@ -446,14 +447,15 @@ export default function TableSelectView({ onOpenReprint }) {
   const [search,          setSearch]          = useState("");
   const [reservationOpen, setReservationOpen] = useState(false);
   const [reminderOpen,    setReminderOpen]    = useState(false);
+  const [tableShiftOpen,  setTableShiftOpen]  = useState(false);
   const searchRef = useRef(null);
 
   // Auto-focus search on mount
   useEffect(() => { searchRef.current?.focus(); }, []);
 
-  // Table Shift — placeholder (shortcut F7)
+  // Table Shift — open the shift dialog (shortcut F7)
   const handleTableShift = useCallback(() => {
-    toast.info("Table Shift Feature Coming Soon");
+    setTableShiftOpen(true);
   }, []);
 
   useEffect(() => {
@@ -772,6 +774,12 @@ export default function TableSelectView({ onOpenReprint }) {
     <ReminderSettingsDialog
       open={reminderOpen}
       onOpenChange={setReminderOpen}
+    />
+
+    <TableShiftDialog
+      open={tableShiftOpen}
+      onOpenChange={setTableShiftOpen}
+      tables={tables}
     />
     </>
   );

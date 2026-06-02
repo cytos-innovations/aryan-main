@@ -8,17 +8,15 @@ import {
   CashIcon,
   Hold01Icon,
   Discount01Icon,
-  PercentIcon,
   ArrowLeft01Icon,
   AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
-import { Input }  from "@/components/ui/input";
 import { useBillingContext } from "../state/billing-context";
 import { useGenerateKot, useGenerateBill } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
-import { fmtAmount } from "../utils/billing-calc";
+import { fmtAmount, calcBillTotals } from "../utils/billing-calc";
 
 // ─── Panel mode enum ──────────────────────────────────────────
 
@@ -149,32 +147,117 @@ function BillingModePanel({
 
 // ─── Discount mode panel ──────────────────────────────────────
 
-function DiscountModePanel({ discountPercent, onDiscountChange, onBack }) {
+const r2 = (n) => Math.round(n * 100) / 100;
+const clampPct = (p) => Math.max(0, Math.min(100, p));
+// Keep only digits and a single decimal point
+const sanitizeNum = (v) => v.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
+
+/**
+ * Bill-discount editor — compact single-row strip (matches the billing bar
+ * height). Shows total + tax, two linked inputs (% ↔ ₹), and a live discount /
+ * net readout. Save commits the percent (driving every dependent total and the
+ * Settle amount); Cancel discards the edit.
+ */
+function DiscountModePanel({ totals, discountPercent, onApply, onBack }) {
+  const base = totals.finalAmount || 0;
+
+  const [pctStr, setPctStr] = useState(() => String(Number(discountPercent) || 0));
+  const [amtStr, setAmtStr] = useState(() => String(r2((base * (Number(discountPercent) || 0)) / 100)));
+
+  function changePct(raw) {
+    const v = sanitizeNum(raw);
+    setPctStr(v);
+    const p = clampPct(Number(v) || 0);
+    setAmtStr(String(r2((base * p) / 100)));
+  }
+  function changeAmt(raw) {
+    const v = sanitizeNum(raw);
+    setAmtStr(v);
+    const a = Math.max(0, Math.min(base, Number(v) || 0));
+    setPctStr(String(base > 0 ? r2((a / base) * 100) : 0));
+  }
+
+  const pctNum      = clampPct(Number(pctStr) || 0);
+  const discountAmt = r2((base * pctNum) / 100);
+  const afterDisc   = r2(base - discountAmt);
+  const roundOff    = r2(Math.round(afterDisc) - afterDisc);
+  const net         = r2(afterDisc + roundOff);
+
+  function handleSave() { onApply(pctNum); onBack(); }
+
   return (
-    <div className="flex items-center gap-3 px-3 py-3 min-h-20.5">
-      <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 text-xs shrink-0" onClick={onBack}>
+    <div className="flex items-center gap-3 px-3 py-2.5 min-h-20.5">
+      {/* Back + title */}
+      <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 text-xs px-2 -ml-1 shrink-0" onClick={onBack}>
         <HugeiconsIcon icon={ArrowLeft01Icon} size={12} strokeWidth={2} />
         Back
       </Button>
-      <HugeiconsIcon icon={Discount01Icon} size={18} strokeWidth={2} className="text-primary shrink-0" />
-      <div>
-        <p className="text-sm font-semibold">Bill Discount</p>
-        <p className="text-[10px] text-muted-foreground leading-tight">Enter % discount for the entire bill</p>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <HugeiconsIcon icon={Discount01Icon} size={16} strokeWidth={2} className="text-primary" />
+        <span className="text-sm font-semibold">Discount</span>
       </div>
-      <div className="flex items-center gap-1.5 ml-auto">
-        <Input
-          type="number"
-          min="0" max="100" step="0.5"
-          value={discountPercent}
-          onChange={(e) => onDiscountChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); onBack(); }
-          }}
-          className="h-9 w-24 text-sm text-right tabular-nums"
-          // eslint-disable-next-line jsx-a11y/no-autofocus
-          autoFocus
-        />
-        <HugeiconsIcon icon={PercentIcon} size={14} strokeWidth={2} className="text-muted-foreground mr-2" />
+
+      {/* Inline summary */}
+      <div className="flex items-center gap-3 text-[11px] shrink-0">
+        <span className="text-muted-foreground">
+          Total <span className="text-foreground font-medium tabular-nums">₹{fmtAmount(base)}</span>
+        </span>
+        {totals.taxAmount > 0 && (
+          <span className="text-muted-foreground">
+            Tax <span className="text-foreground font-medium tabular-nums">₹{fmtAmount(totals.taxAmount)}</span>
+          </span>
+        )}
+      </div>
+
+      {/* Linked inputs */}
+      <div className="flex items-center gap-2 ml-auto shrink-0">
+        {/* Percent */}
+        <div className="flex items-center h-8 rounded-md border bg-background overflow-hidden transition-shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40">
+          <input
+            inputMode="decimal"
+            value={pctStr}
+            onChange={(e) => changePct(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
+            className="w-16 h-full bg-transparent px-2 text-sm text-right tabular-nums outline-none"
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+          />
+          <span className="h-full px-2 flex items-center text-xs font-medium text-muted-foreground border-l bg-muted/50">%</span>
+        </div>
+
+        <span className="text-muted-foreground text-xs">=</span>
+
+        {/* Amount */}
+        <div className="flex items-center h-8 rounded-md border bg-background overflow-hidden transition-shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40">
+          <span className="h-full px-2 flex items-center text-xs font-medium text-muted-foreground border-r bg-muted/50">₹</span>
+          <input
+            inputMode="decimal"
+            value={amtStr}
+            onChange={(e) => changeAmt(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
+            className="w-20 h-full bg-transparent px-2 text-sm text-right tabular-nums outline-none"
+          />
+        </div>
+      </div>
+
+      {/* Discount + Net readout */}
+      <div className="flex items-center gap-3 shrink-0 border-l pl-3">
+        <div className="text-right leading-tight">
+          <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Discount</div>
+          <div className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(discountAmt)}</div>
+        </div>
+        <div className="text-right leading-tight">
+          <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Net</div>
+          <div className="text-sm font-bold tabular-nums">₹{fmtAmount(net)}</div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 shrink-0">
+        <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" onClick={onBack}>Cancel</Button>
+        <Button type="button" size="sm" className="h-8 px-4 text-xs" onClick={handleSave}>Save</Button>
       </div>
     </div>
   );
@@ -197,6 +280,7 @@ export default function BottomActionBar({
 
   // ── Derived state ─────────────────────────────────────────
   const activeItems = (items ?? []).filter((i) => i.item_status === "ACTIVE");
+  const billTotals  = calcBillTotals(items ?? []);
   const pendingKot  = activeItems.filter((i) => i.kot_status === "PENDING").length;
   const hasItems    = activeItems.length > 0;
   const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED";
@@ -333,8 +417,9 @@ export default function BottomActionBar({
 
         {panelMode === BOTTOM_PANEL_MODE.DISCOUNT && (
           <DiscountModePanel
+            totals={billTotals}
             discountPercent={discountPercent}
-            onDiscountChange={onDiscountChange}
+            onApply={onDiscountChange}
             onBack={() => setPanelMode(BOTTOM_PANEL_MODE.BILLING)}
           />
         )}

@@ -8,6 +8,8 @@ import {
   MinusPlusIcon,
   UserAccountIcon,
   Location01Icon,
+  Clock01Icon,
+  AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
 
 import {
@@ -31,11 +33,13 @@ import { Input }     from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 
 import { usePaymentMethods } from "../hooks/use-billing-queries";
+import { billingService } from "../services/billing-service";
 import { ORDER_TYPE } from "../constants/billing";
 import { fmtAmount } from "../utils/billing-calc";
 
-// Sentinel for the permanent (hard-coded) Split option in the method dropdown
+// Sentinels for the permanent (hard-coded) options in the method dropdown
 const SPLIT_VALUE = "__SPLIT__";
+const DUE_VALUE   = "__DUE__";
 
 export default function SettleDialog({ open, onOpenChange, session, netAmount, onSettle, isSettling }) {
   const methodsQuery = usePaymentMethods();
@@ -53,6 +57,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
   const [customerAddress, setCustomerAddress] = useState("");
   const [method,          setMethod]          = useState("");
   const [amount,          setAmount]          = useState("");
+  const [duePaidNow,      setDuePaidNow]      = useState("");  // partial due: paid now
+  const [priorDue,        setPriorDue]        = useState(null); // customer's existing dues
 
   // Split builder state
   const [splitEntries, setSplitEntries] = useState([]);
@@ -63,6 +69,10 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
   const methodRef = useRef(null);
 
   const isSplit = method === SPLIT_VALUE;
+  const isDue   = method === DUE_VALUE;
+  // Name + mobile required for delivery/takeaway and for Due; address too for Due.
+  const mustCapture = requiresCustomer || isDue;
+  const mustAddress = needsAddress || isDue;
 
   // Default the method once the list loads
   useEffect(() => {
@@ -79,6 +89,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
     setCustomerMobile(session?.customer_mobile ?? "");
     setCustomerAddress(session?.customer_address ?? "");
     setAmount("");
+    setDuePaidNow("");
+    setPriorDue(null);
     setSplitEntries([]);
     setSplitAmount("");
     const first = methods[0]?.name ?? "";
@@ -92,6 +104,31 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // ── Auto-fill from an existing customer when a known mobile is typed ──
+  // Fills empty name/address only, so it never clobbers what the user typed.
+  useEffect(() => {
+    if (!open) return;
+    const mob = customerMobile.trim();
+    if (mob.length < 4) { setPriorDue(null); return; }
+    let active = true;
+    const t = setTimeout(async () => {
+      try {
+        const [results, due] = await Promise.all([
+          billingService.searchCustomers(mob),
+          billingService.getCustomerDueByMobile(mob),
+        ]);
+        if (!active) return;
+        const match = results.find((c) => (c.mobile ?? "").trim() === mob);
+        if (match) {
+          if (match.name)    setCustomerName((n) => (n.trim() ? n : match.name));
+          if (match.address) setCustomerAddress((a) => (a.trim() ? a : match.address));
+        }
+        setPriorDue(due && due.pending_total > 0 ? due : null);
+      } catch { /* lookup is best-effort */ }
+    }, 400);
+    return () => { active = false; clearTimeout(t); };
+  }, [customerMobile, open]);
+
   // ── Split maths ───────────────────────────────────────────
   const splitTotal = useMemo(
     () => splitEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0),
@@ -104,6 +141,10 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
   const enteredAmt   = amount.trim() === "" ? netAmount : (Number(amount) || 0);
   const diff         = Math.round((netAmount - enteredAmt) * 100) / 100; // >0 short, <0 change
   const isDueMethod  = /due/i.test(method);
+
+  // Partial-due maths: amount paid now (blank = nothing) and the balance due.
+  const duePaidNum   = duePaidNow.trim() === "" ? 0 : Math.max(0, Math.min(netAmount, Number(duePaidNow) || 0));
+  const dueRemaining = Math.round((netAmount - duePaidNum) * 100) / 100;
 
   function addSplit() {
     const amt = Number(splitAmount);
@@ -120,11 +161,14 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
   function handleSettle() {
     if (isSettling) return;
 
-    // Customer validation for delivery / takeaway
-    if (requiresCustomer) {
-      if (!customerName.trim()) { toast.error("Customer name is required"); nameRef.current?.focus(); return; }
+    // Customer validation — required for delivery / takeaway and for Due
+    if (mustCapture) {
+      if (!customerName.trim())   { toast.error("Customer name is required"); nameRef.current?.focus(); return; }
       if (!customerMobile.trim()) { toast.error("Mobile number is required"); return; }
-      if (needsAddress && !customerAddress.trim()) { toast.error("Delivery address is required"); return; }
+    }
+    if (mustAddress && !customerAddress.trim()) {
+      toast.error(isDue ? "Address is required for a due" : "Delivery address is required");
+      return;
     }
 
     let entries;
@@ -133,6 +177,9 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
       if (splitEntries.length < 2) { toast.error("Add at least 2 payment modes to split"); return; }
       if (!splitBalanced) { toast.error("Split amounts must match the bill total"); return; }
       entries = splitEntries;
+    } else if (isDue) {
+      // Due — customer pays `duePaidNum` now (may be 0) and the rest later.
+      entries = [{ payment_mode: "DUE", amount: duePaidNum, reference_no: null }];
     } else {
       if (!method) { toast.error("Select a payment method"); return; }
       // Blank amount → settle the full bill amount
@@ -186,12 +233,24 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
         </DialogHeader>
 
         <FieldGroup>
+          {/* ── Existing dues for this customer (matched by mobile) ── */}
+          {priorDue && priorDue.pending_total > 0 && (
+            <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50/70 dark:bg-red-950/30 px-3 py-2.5 flex items-start gap-2">
+              <HugeiconsIcon icon={AlertCircleIcon} size={14} strokeWidth={2} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+              <p className="text-xs text-red-700 dark:text-red-300 leading-snug">
+                <span className="font-semibold">{priorDue.customer_name || "This customer"}</span> already has an outstanding due of{" "}
+                <span className="font-semibold tabular-nums">₹{fmtAmount(priorDue.pending_total)}</span>
+                {priorDue.due_count > 0 && ` across ${priorDue.due_count} bill${priorDue.due_count !== 1 ? "s" : ""}`}.
+              </p>
+            </div>
+          )}
+
           {/* ── Customer — always shown; required only for delivery / takeaway ── */}
           <div className="grid grid-cols-2 gap-3">
             <Field>
               <FieldLabel>
                 Customer Name
-                {requiresCustomer
+                {mustCapture
                   ? <span className="text-destructive"> *</span>
                   : <span className="text-muted-foreground font-normal text-xs"> (optional)</span>}
               </FieldLabel>
@@ -210,7 +269,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
             <Field>
               <FieldLabel>
                 Mobile No
-                {requiresCustomer
+                {mustCapture
                   ? <span className="text-destructive"> *</span>
                   : <span className="text-muted-foreground font-normal text-xs"> (optional)</span>}
               </FieldLabel>
@@ -223,11 +282,11 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
             </Field>
           </div>
 
-          {/* Address — only for home delivery */}
-          {needsAddress && (
+          {/* Address — for home delivery and for Due */}
+          {mustAddress && (
             <Field>
               <FieldLabel>
-                Delivery Address <span className="text-destructive">*</span>
+                {isDue ? "Customer Address" : "Delivery Address"} <span className="text-destructive">*</span>
               </FieldLabel>
               <div className="relative">
                 <HugeiconsIcon icon={Location01Icon} size={13} strokeWidth={2} className="absolute left-2.5 top-2.5 text-muted-foreground pointer-events-none" />
@@ -235,7 +294,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
                   value={customerAddress}
                   maxLength={250}
                   onChange={(e) => setCustomerAddress(e.target.value)}
-                  placeholder="Full delivery address"
+                  placeholder={isDue ? "Customer address" : "Full delivery address"}
                   rows={2}
                   className="w-full rounded-md border border-input bg-transparent pl-8 pr-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
                 />
@@ -256,6 +315,13 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
                 {methods.map((m) => (
                   <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
                 ))}
+                {/* Permanent hard-coded Due option — customer pays later */}
+                <SelectItem value={DUE_VALUE}>
+                  <span className="flex items-center gap-1.5">
+                    <HugeiconsIcon icon={Clock01Icon} size={13} strokeWidth={2} />
+                    Due (Pay Later)
+                  </span>
+                </SelectItem>
                 {/* Permanent hard-coded Split option */}
                 <SelectItem value={SPLIT_VALUE}>
                   <span className="flex items-center gap-1.5">
@@ -267,8 +333,41 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
             </Select>
           </Field>
 
+          {/* ── Due — optional part-payment now, balance recorded as due ── */}
+          {isDue && (
+            <Field>
+              <FieldLabel>
+                Paid Now{" "}
+                <span className="text-muted-foreground font-normal text-xs">(optional — blank = full due)</span>
+              </FieldLabel>
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
+                <Input
+                  type="number"
+                  min="0"
+                  max={netAmount}
+                  step="0.01"
+                  value={duePaidNow}
+                  onChange={(e) => setDuePaidNow(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSettle(); } }}
+                  placeholder="0.00"
+                  className="pl-6 font-mono"
+                />
+              </div>
+              <div className="mt-1 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2.5 flex items-start gap-2">
+                <HugeiconsIcon icon={Clock01Icon} size={14} strokeWidth={2} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-700 dark:text-amber-300 leading-snug">
+                  {duePaidNum > 0
+                    ? <>Paid now <span className="font-semibold tabular-nums">₹{fmtAmount(duePaidNum)}</span> · due <span className="font-semibold tabular-nums">₹{fmtAmount(dueRemaining)}</span> recorded against the customer.</>
+                    : <>The entire <span className="font-semibold tabular-nums">₹{fmtAmount(netAmount)}</span> will be recorded as a due.</>}
+                  {" "}Name, mobile &amp; address are required.
+                </p>
+              </div>
+            </Field>
+          )}
+
           {/* ── Single payment amount ── */}
-          {!isSplit && (
+          {!isSplit && !isDue && (
             <Field>
               <FieldLabel>
                 Enter Amount{" "}
@@ -381,7 +480,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
             onClick={handleSettle}
             disabled={isSettling}
           >
-            {isSettling ? "Settling…" : "Settle"}
+            {isSettling ? "Settling…" : (isDue ? "Save as Due" : "Settle")}
             <span className="ml-1 text-[9px] font-mono opacity-70">F11</span>
           </Button>
         </DialogFooter>

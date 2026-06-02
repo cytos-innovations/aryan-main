@@ -1655,6 +1655,89 @@ pub async fn get_payment_methods(
     }).collect())
 }
 
+/// Resolve (find / update / create) the customer for a DUE settlement.
+/// Mobile number is authoritative — an existing record is matched and its
+/// name/address refreshed with anything newly entered; otherwise a new
+/// customer is created. Falls back to the session's customer, then to name.
+/// Returns the customer id the due should be tracked against.
+async fn resolve_due_customer(
+    pool:        &sqlx::PgPool,
+    existing_id: Option<i32>,
+    name:        &Option<String>,
+    mobile:      &Option<String>,
+    address:     &Option<String>,
+) -> Result<Option<i32>, String> {
+    let name_t   = name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let mobile_t = mobile.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let addr_t   = address.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    // 1. Mobile is the key — find an existing customer by it.
+    if let Some(mob) = mobile_t {
+        let found: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM customer_information
+             WHERE mobile_no1 = $1 AND is_active = 1 ORDER BY id LIMIT 1",
+        )
+        .bind(mob)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Customer lookup failed: {e}"))?;
+
+        if let Some(cid) = found {
+            // Refresh saved name / address with anything newly entered.
+            sqlx::query(
+                "UPDATE customer_information
+                 SET customer_name = COALESCE($2, customer_name),
+                     address_line1 = COALESCE($3, address_line1),
+                     updated_at    = NOW()
+                 WHERE id = $1",
+            )
+            .bind(cid).bind(name_t).bind(addr_t)
+            .execute(pool).await.ok();
+            return Ok(Some(cid));
+        }
+
+        // No match → create a fresh customer keyed on this mobile.
+        let new_id: i32 = sqlx::query_scalar(
+            "INSERT INTO customer_information (customer_name, mobile_no1, address_line1, is_active)
+             VALUES ($1, $2, $3, 1) RETURNING id",
+        )
+        .bind(name_t.unwrap_or("Walk-in"))
+        .bind(mob)
+        .bind(addr_t)
+        .fetch_one(pool).await
+        .map_err(|e| format!("Failed to create customer: {e}"))?;
+        return Ok(Some(new_id));
+    }
+
+    // 2. No mobile — fall back to the session's existing customer.
+    if let Some(cid) = existing_id {
+        sqlx::query(
+            "UPDATE customer_information
+             SET customer_name = COALESCE($2, customer_name),
+                 address_line1 = COALESCE($3, address_line1),
+                 updated_at    = NOW()
+             WHERE id = $1",
+        )
+        .bind(cid).bind(name_t).bind(addr_t)
+        .execute(pool).await.ok();
+        return Ok(Some(cid));
+    }
+
+    // 3. Last resort — create from the name alone.
+    if let Some(nm) = name_t {
+        let new_id: i32 = sqlx::query_scalar(
+            "INSERT INTO customer_information (customer_name, address_line1, is_active)
+             VALUES ($1, $2, 1) RETURNING id",
+        )
+        .bind(nm).bind(addr_t)
+        .fetch_one(pool).await
+        .map_err(|e| format!("Failed to create customer: {e}"))?;
+        return Ok(Some(new_id));
+    }
+
+    Ok(None)
+}
+
 #[tauri::command]
 pub async fn settle_bill(
     app:            tauri::AppHandle,
@@ -1693,7 +1776,7 @@ pub async fn settle_bill(
 
     // Get net_amount and table_id
     let bill_row = sqlx::query(
-        "SELECT bm.net_amount, os.table_id, os.customer_id
+        "SELECT bm.net_amount::float8 AS net_amount, os.table_id, os.customer_id
          FROM   bill_master bm
          JOIN   order_session os ON os.id = bm.order_session_id
          WHERE  bm.id = $1",
@@ -1707,15 +1790,45 @@ pub async fn settle_bill(
     let table_id:    Option<i32> = bill_row.try_get("table_id").ok().flatten();
     let customer_id: Option<i32> = bill_row.try_get("customer_id").ok().flatten();
 
-    // Insert payment_master
+    // For a DUE settlement, ensure the customer exists on record (find/update/
+    // create by mobile) and attach them to the session so the due is tracked.
+    let is_due_method = payment_type.eq_ignore_ascii_case("DUE");
+    let effective_customer_id = if is_due_method {
+        let cid = resolve_due_customer(&pool, customer_id, &customer_name, &customer_mobile, &customer_address).await?;
+        if let Some(c) = cid {
+            sqlx::query("UPDATE order_session SET customer_id = $2, updated_at = NOW() WHERE id = $1")
+                .bind(session_id).bind(c).execute(&pool).await.ok();
+        }
+        cid
+    } else {
+        customer_id
+    };
+
+    // Insert payment_master (with a human-readable remark)
+    let payment_remark = if !part_payments.is_empty() {
+        let modes = part_payments.iter()
+            .map(|p| format!("{} ₹{:.2}", p.payment_mode, p.amount))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("Split payment — {} (total ₹{:.2})", modes, payment_amount)
+    } else if is_due_method {
+        format!("Due — ₹{:.2} paid now", payment_amount)
+    } else {
+        match reference_no.as_deref().filter(|r| !r.trim().is_empty()) {
+            Some(r) => format!("{} payment ₹{:.2} (ref {})", payment_type, payment_amount, r),
+            None    => format!("{} payment ₹{:.2}", payment_type, payment_amount),
+        }
+    };
+
     let pay_id: i32 = sqlx::query_scalar(
-        "INSERT INTO payment_master (bill_id, payment_type, payment_amount, reference_no)
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO payment_master (bill_id, payment_type, payment_amount, reference_no, remarks)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(bill_id)
     .bind(&payment_type)
     .bind(payment_amount)
     .bind(reference_no.as_deref())
+    .bind(&payment_remark)
     .fetch_one(&pool)
     .await
     .map_err(|e| format!("Failed to record payment: {e}"))?;
@@ -1738,41 +1851,52 @@ pub async fn settle_bill(
     // Determine settlement type
     let total_paid   = round2(payment_amount);
     let pending      = round2((net_amount - total_paid - write_off_amount).max(0.0));
-    let is_due       = payment_type.eq_ignore_ascii_case("DUE") || pending > 0.5;
+    let is_due       = is_due_method || pending > 0.5;
     let settlement_type = if write_off_amount > 0.0 { "WRITE_OFF" }
                           else if is_due            { "DUE" }
                           else                      { "FULL" };
 
+    let settlement_remark = match settlement_type {
+        "WRITE_OFF" => format!("Write-off ₹{:.2} · paid ₹{:.2} of ₹{:.2}", write_off_amount, total_paid, net_amount),
+        "DUE"       => format!("Due ₹{:.2} pending · paid ₹{:.2} of ₹{:.2} via {}", pending, total_paid, net_amount, payment_type),
+        _           => format!("Settled in full — ₹{:.2} via {}", total_paid, payment_type),
+    };
+
     sqlx::query(
         "INSERT INTO settlement_master
-            (bill_id, settlement_type, settled_amount, pending_amount, write_off_amount)
-         VALUES ($1,$2,$3,$4,$5)",
+            (bill_id, settlement_type, settled_amount, pending_amount, write_off_amount, settlement_remarks)
+         VALUES ($1,$2,$3,$4,$5,$6)",
     )
     .bind(bill_id)
     .bind(settlement_type)
     .bind(total_paid)
     .bind(pending)
     .bind(write_off_amount)
+    .bind(&settlement_remark)
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to record settlement: {e}"))?;
 
-    // If DUE, add to customer_due_ledger
+    // If DUE, record it in customer_due_ledger with every field populated.
     if is_due {
-        if let Some(cid) = customer_id {
+        if let Some(cid) = effective_customer_id {
             sqlx::query(
                 "INSERT INTO customer_due_ledger
-                    (customer_id, bill_id, total_amount, paid_amount, pending_amount, due_status)
-                 VALUES ($1,$2,$3,$4,$5,'PENDING')",
+                    (customer_id, bill_id, total_amount, paid_amount, pending_amount,
+                     due_status, due_date, remarks, is_active)
+                 VALUES ($1,$2,$3,$4,$5,'PENDING', NOW(), $6, 1)",
             )
             .bind(cid)
             .bind(bill_id)
             .bind(net_amount)
             .bind(total_paid)
             .bind(pending)
+            .bind(format!("Due recorded at settlement of bill #{bill_id}"))
             .execute(&pool)
             .await
-            .ok();
+            .map_err(|e| format!("Failed to record due: {e}"))?;
+        } else if is_due_method {
+            return Err("Customer name and mobile are required to record a due.".into());
         }
     }
 
@@ -2574,6 +2698,61 @@ pub async fn quick_create_customer(
     Ok(map_customer_option(&row))
 }
 
+#[derive(Debug, Serialize)]
+pub struct CustomerDueSummary {
+    pub customer_id:   i32,
+    pub customer_name: Option<String>,
+    pub pending_total: f64,
+    pub due_count:     i64,
+}
+
+/// Outstanding (unpaid) dues for the customer matching a mobile number.
+/// Returns None when no customer is found. pending_total may be 0 if the
+/// customer exists but has cleared all dues.
+#[tauri::command]
+pub async fn get_customer_due_by_mobile(
+    app:    tauri::AppHandle,
+    state:  tauri::State<'_, AppState>,
+    mobile: String,
+) -> Result<Option<CustomerDueSummary>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let m = mobile.trim();
+    if m.is_empty() {
+        return Ok(None);
+    }
+
+    let cust = sqlx::query(
+        "SELECT id, customer_name FROM customer_information
+         WHERE  mobile_no1 = $1 AND is_active = 1 ORDER BY id LIMIT 1",
+    )
+    .bind(m)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Customer lookup failed: {e}"))?;
+
+    let Some(c) = cust else { return Ok(None); };
+    let customer_id:   i32            = c.try_get("id").unwrap_or(0);
+    let customer_name: Option<String> = c.try_get("customer_name").ok().flatten();
+
+    let row = sqlx::query(
+        "SELECT COALESCE(SUM(pending_amount), 0)::float8 AS pending_total,
+                COUNT(*)                                  AS due_count
+         FROM   customer_due_ledger
+         WHERE  customer_id = $1 AND due_status = 'PENDING' AND is_active = 1",
+    )
+    .bind(customer_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to load dues: {e}"))?;
+
+    Ok(Some(CustomerDueSummary {
+        customer_id,
+        customer_name,
+        pending_total: row.try_get::<f64, _>("pending_total").unwrap_or(0.0),
+        due_count:     row.try_get("due_count").unwrap_or(0),
+    }))
+}
+
 /// Assign / update customer and waiter on an existing order session.
 #[tauri::command]
 pub async fn update_session_party(
@@ -3131,4 +3310,447 @@ pub async fn get_bill_for_reprint(
         tax_details,
         payments,
     })
+}
+
+// ── Table shift / item transfer ───────────────────────────────
+
+/// Full table shift — re-point an entire session to a different table.
+///
+/// Nothing about the order itself changes: items, KOT numbers, occupied
+/// time and visual state all hang off the session, so moving the session's
+/// table pointer carries everything with it. Item prices are kept as-is
+/// (a seat change is not a re-order). Source table is freed; target table
+/// must be empty.
+#[tauri::command]
+pub async fn shift_table_full(
+    app:             tauri::AppHandle,
+    state:           tauri::State<'_, AppState>,
+    session_id:      i32,
+    target_table_id: i32,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Resolve the session: source table + status + its occupied_since
+    let src = sqlx::query(
+        "SELECT os.table_id, os.session_status, rt.occupied_since
+         FROM   order_session os
+         LEFT JOIN restaurant_table rt ON rt.id = os.table_id
+         WHERE  os.id = $1 AND os.is_active = 1",
+    )
+    .bind(session_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Session lookup failed: {e}"))?
+    .ok_or_else(|| "Session not found.".to_string())?;
+
+    let source_table_id: Option<i32> = src.try_get("table_id").ok().flatten();
+    let session_status:  String      = src.try_get("session_status").unwrap_or_default();
+    let occupied_since:  Option<chrono::NaiveDateTime> = src.try_get("occupied_since").ok().flatten();
+
+    if matches!(session_status.as_str(), "SETTLED" | "CANCELLED") {
+        return Err("This order is already closed — nothing to shift.".into());
+    }
+    if source_table_id == Some(target_table_id) {
+        return Err("Source and destination are the same table.".into());
+    }
+
+    // Target must be active and free (no live session)
+    let target = sqlx::query(
+        "SELECT table_group_id, current_order_session_id
+         FROM   restaurant_table
+         WHERE  id = $1 AND is_active = TRUE",
+    )
+    .bind(target_table_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Target table lookup failed: {e}"))?
+    .ok_or_else(|| "Destination table not found.".to_string())?;
+
+    let target_group_id: Option<i32> = target.try_get("table_group_id").ok().flatten();
+    let target_busy:     Option<i32> = target.try_get("current_order_session_id").ok().flatten();
+    if target_busy.is_some() {
+        return Err("Destination table already has a running order. Use item transfer to merge instead.".into());
+    }
+
+    let mut tx = pool.begin().await.map_err(|e| format!("Transaction start failed: {e}"))?;
+
+    // Re-point the session to the new table + group
+    sqlx::query(
+        "UPDATE order_session
+         SET    table_id = $1, table_group_id = $2, updated_at = NOW()
+         WHERE  id = $3",
+    )
+    .bind(target_table_id)
+    .bind(target_group_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to move session: {e}"))?;
+
+    // Free the source table
+    if let Some(src_id) = source_table_id {
+        sqlx::query(
+            "UPDATE restaurant_table
+             SET    current_status = 'AVAILABLE',
+                    current_order_session_id = NULL,
+                    occupied_since = NULL
+             WHERE  id = $1",
+        )
+        .bind(src_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to free source table: {e}"))?;
+    }
+
+    // Occupy the target table — copy the original occupied_since so the
+    // floor timer carries over.
+    sqlx::query(
+        "UPDATE restaurant_table
+         SET    current_status = 'OCCUPIED',
+                current_order_session_id = $1,
+                occupied_since = COALESCE($2, NOW())
+         WHERE  id = $3",
+    )
+    .bind(session_id)
+    .bind(occupied_since)
+    .bind(target_table_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to occupy destination table: {e}"))?;
+
+    // KOTs, any open bill, and a linked reservation all follow the table
+    sqlx::query(
+        "UPDATE kot_master
+         SET    table_id = $1, updated_at = NOW(),
+                remarks  = COALESCE(remarks || ' · ', '') || 'Table transfer'
+         WHERE  order_session_id = $2",
+    )
+    .bind(target_table_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to move KOTs: {e}"))?;
+
+    sqlx::query(
+        "UPDATE bill_master SET table_id = $1
+         WHERE  order_session_id = $2 AND bill_status NOT IN ('PAID', 'CANCELLED')",
+    )
+    .bind(target_table_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to move bill: {e}"))?;
+
+    sqlx::query(
+        "UPDATE reservation_master SET table_id = $1, updated_at = NOW()
+         WHERE  order_session_id = $2 AND is_active = 1",
+    )
+    .bind(target_table_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to move reservation: {e}"))?;
+
+    tx.commit().await.map_err(|e| format!("Transaction commit failed: {e}"))?;
+
+    sqlx::query(
+        "INSERT INTO order_status_history (order_session_id, status_name, remarks)
+         VALUES ($1, 'TABLE_SHIFTED', $2)",
+    )
+    .bind(session_id)
+    .bind(format!("Session moved to table {target_table_id}"))
+    .execute(&pool)
+    .await
+    .ok();
+
+    Ok(())
+}
+
+/// Partial item transfer — move selected order items from one session to a
+/// different table. If the target has a live session the items merge into it,
+/// otherwise a fresh session is opened on the target. Items already sent to
+/// the kitchen are regrouped under a new "transfer" KOT on the destination so
+/// the KOT belongs to the new table. Prices are kept as snapshots.
+/// If the source ends up empty it is cancelled and its table freed.
+#[tauri::command]
+pub async fn transfer_order_items(
+    app:               tauri::AppHandle,
+    state:             tauri::State<'_, AppState>,
+    source_session_id: i32,
+    target_table_id:   i32,
+    item_ids:          Vec<i32>,
+) -> Result<i32, String> {
+    if item_ids.is_empty() {
+        return Err("No items selected to move.".into());
+    }
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Source session — must be live
+    let src = sqlx::query(
+        "SELECT table_id, order_type, session_status
+         FROM   order_session
+         WHERE  id = $1 AND is_active = 1",
+    )
+    .bind(source_session_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Source session lookup failed: {e}"))?
+    .ok_or_else(|| "Source session not found.".to_string())?;
+
+    let source_table_id: Option<i32> = src.try_get("table_id").ok().flatten();
+    let order_type:      String      = src.try_get("order_type").ok().flatten().unwrap_or_else(|| "DINE_IN".to_string());
+    let src_status:      String      = src.try_get("session_status").unwrap_or_default();
+
+    if matches!(src_status.as_str(), "SETTLED" | "CANCELLED") {
+        return Err("This order is already closed — nothing to move.".into());
+    }
+    if source_table_id == Some(target_table_id) {
+        return Err("Source and destination are the same table.".into());
+    }
+
+    // Validate the selected items belong to the source session and are active
+    let valid_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM order_item
+         WHERE  id = ANY($1) AND order_session_id = $2 AND item_status = 'ACTIVE'",
+    )
+    .bind(&item_ids)
+    .bind(source_session_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Item validation failed: {e}"))?;
+
+    if valid_count as usize != item_ids.len() {
+        return Err("Some selected items are no longer available on the source table.".into());
+    }
+
+    // Target table + group + any live session
+    let target = sqlx::query(
+        "SELECT table_group_id, current_order_session_id
+         FROM   restaurant_table
+         WHERE  id = $1 AND is_active = TRUE",
+    )
+    .bind(target_table_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Target table lookup failed: {e}"))?
+    .ok_or_else(|| "Destination table not found.".to_string())?;
+
+    let target_group_id: Option<i32> = target.try_get("table_group_id").ok().flatten();
+    let existing_dest:   Option<i32> = target.try_get("current_order_session_id").ok().flatten();
+
+    let mut tx = pool.begin().await.map_err(|e| format!("Transaction start failed: {e}"))?;
+
+    // Resolve / create the destination session
+    let dest_session_id: i32 = if let Some(dest) = existing_dest {
+        dest
+    } else {
+        let new_id: i32 = sqlx::query_scalar(
+            "INSERT INTO order_session (order_type, table_id, table_group_id, session_status)
+             VALUES ($1, $2, $3, 'OPEN') RETURNING id",
+        )
+        .bind(&order_type)
+        .bind(target_table_id)
+        .bind(target_group_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to open destination session: {e}"))?;
+
+        let order_no = format!("ORD-{new_id}");
+        sqlx::query("UPDATE order_session SET order_no = $1, token_no = $1 WHERE id = $2")
+            .bind(&order_no)
+            .bind(new_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to assign order number: {e}"))?;
+
+        sqlx::query(
+            "UPDATE restaurant_table
+             SET    current_status = 'OCCUPIED',
+                    current_order_session_id = $1,
+                    occupied_since = NOW()
+             WHERE  id = $2",
+        )
+        .bind(new_id)
+        .bind(target_table_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to occupy destination table: {e}"))?;
+
+        new_id
+    };
+
+    // Classify every KOT the moved (already-sent) items belong to: how many of
+    // its active items are moving versus its total. This decides per-KOT
+    // whether the whole ticket follows or only part of it splits off.
+    let kot_rows = sqlx::query(
+        "SELECT km.id AS kot_id,
+                COUNT(*) FILTER (WHERE oi.id = ANY($1)) AS moving,
+                COUNT(*)                                AS total
+         FROM   kot_master km
+         JOIN   order_item oi ON oi.kot_id = km.id AND oi.item_status = 'ACTIVE'
+         WHERE  km.id IN (SELECT DISTINCT kot_id FROM order_item
+                          WHERE id = ANY($1) AND kot_id IS NOT NULL)
+         GROUP  BY km.id",
+    )
+    .bind(&item_ids)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| format!("KOT classification failed: {e}"))?;
+
+    for row in &kot_rows {
+        let kot_id: i32 = row.try_get("kot_id").unwrap_or(0);
+        let moving: i64 = row.try_get("moving").unwrap_or(0);
+        let total:  i64 = row.try_get("total").unwrap_or(0);
+
+        if moving >= total {
+            // Whole KOT follows the order — re-point the existing ticket to the
+            // new table/session. No new KOT number is minted.
+            sqlx::query(
+                "UPDATE kot_master
+                 SET    table_id = $1, order_session_id = $2, updated_at = NOW(),
+                        remarks  = COALESCE(remarks || ' · ', '') || 'Table transfer'
+                 WHERE  id = $3",
+            )
+            .bind(target_table_id)
+            .bind(dest_session_id)
+            .bind(kot_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to move KOT: {e}"))?;
+        } else {
+            // Split: only part of this ticket moves. Open a fresh transfer KOT
+            // on the destination so the kitchen has a clear "these items → new
+            // table" slip, and re-link just the moved items to it. The rest
+            // stay on the original KOT at the source table.
+            let new_kot: i32 = sqlx::query_scalar(
+                "INSERT INTO kot_master (order_session_id, table_id, kot_status, remarks)
+                 VALUES ($1, $2, 'PENDING', 'Table transfer') RETURNING id",
+            )
+            .bind(dest_session_id)
+            .bind(target_table_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to create transfer KOT: {e}"))?;
+
+            sqlx::query("UPDATE kot_master SET kot_no = $1 WHERE id = $2")
+                .bind(format!("KOT-{new_kot}"))
+                .bind(new_kot)
+                .execute(&mut *tx)
+                .await
+                .ok();
+
+            sqlx::query(
+                "UPDATE kot_item SET kot_id = $1
+                 WHERE  kot_id = $2 AND order_item_id = ANY($3)",
+            )
+            .bind(new_kot)
+            .bind(kot_id)
+            .bind(&item_ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to regroup KOT items: {e}"))?;
+
+            sqlx::query(
+                "UPDATE order_item SET kot_id = $1
+                 WHERE  kot_id = $2 AND id = ANY($3)",
+            )
+            .bind(new_kot)
+            .bind(kot_id)
+            .bind(&item_ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to relink moved items: {e}"))?;
+        }
+    }
+
+    // Move the order items to the destination session. Pending items (no KOT)
+    // simply change table; sent items keep their now-correct kot_id.
+    sqlx::query(
+        "UPDATE order_item SET order_session_id = $1, updated_at = NOW()
+         WHERE  id = ANY($2)",
+    )
+    .bind(dest_session_id)
+    .bind(&item_ids)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to move items: {e}"))?;
+
+    // Destination status: KOT_SENT if it now holds any sent item, else leave OPEN
+    sqlx::query(
+        "UPDATE order_session
+         SET    session_status = 'KOT_SENT', updated_at = NOW()
+         WHERE  id = $1
+           AND  session_status = 'OPEN'
+           AND  EXISTS (SELECT 1 FROM order_item
+                        WHERE order_session_id = $1
+                          AND item_status = 'ACTIVE' AND kot_status = 'SENT')",
+    )
+    .bind(dest_session_id)
+    .execute(&mut *tx)
+    .await
+    .ok();
+
+    // Did the source run dry?
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM order_item
+         WHERE  order_session_id = $1 AND item_status = 'ACTIVE'",
+    )
+    .bind(source_session_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| format!("Remaining-item check failed: {e}"))?;
+
+    if remaining == 0 {
+        sqlx::query(
+            "UPDATE order_session
+             SET    session_status = 'CANCELLED', settled_at = NOW(), updated_at = NOW(),
+                    total_occupancy_minutes = GREATEST(
+                        0, FLOOR(EXTRACT(EPOCH FROM (NOW() - opened_at)) / 60)::integer)
+             WHERE  id = $1",
+        )
+        .bind(source_session_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to close empty source session: {e}"))?;
+
+        if let Some(src_id) = source_table_id {
+            sqlx::query(
+                "UPDATE restaurant_table
+                 SET    current_status = 'AVAILABLE',
+                        current_order_session_id = NULL,
+                        occupied_since = NULL
+                 WHERE  id = $1",
+            )
+            .bind(src_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to free emptied source table: {e}"))?;
+        }
+    }
+
+    tx.commit().await.map_err(|e| format!("Transaction commit failed: {e}"))?;
+
+    // Audit both sides — non-critical
+    sqlx::query(
+        "INSERT INTO order_status_history (order_session_id, status_name, remarks)
+         VALUES ($1, 'ITEMS_TRANSFERRED', $2)",
+    )
+    .bind(source_session_id)
+    .bind(format!("{} item(s) moved to table {target_table_id}", item_ids.len()))
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "INSERT INTO order_status_history (order_session_id, status_name, remarks)
+         VALUES ($1, 'ITEMS_RECEIVED', $2)",
+    )
+    .bind(dest_session_id)
+    .bind(format!("{} item(s) received from session {source_session_id}", item_ids.len()))
+    .execute(&pool)
+    .await
+    .ok();
+
+    Ok(dest_session_id)
 }
