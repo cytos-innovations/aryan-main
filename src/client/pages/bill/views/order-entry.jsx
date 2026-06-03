@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
@@ -311,6 +311,14 @@ export default function OrderEntryView() {
   const [addingId,        setAddingId]        = useState(null);
   const [isKotting,       setIsKotting]       = useState(false);
   const [discountPercent, setDiscountPercent] = useState(0);
+  // Tracks which item row should auto-focus qty (key = menu_id for draft, item.id for session)
+  const [lastAddedKey,    setLastAddedKey]    = useState(null);
+  const searchRefHandle                       = useRef(null); // set by MenuCenterPanel via onSearchRef
+
+  function focusSearch() {
+    setLastAddedKey(null);
+    setTimeout(() => searchRefHandle.current?.current?.focus(), 30);
+  }
 
   const isDraft = !activeSessionId;
 
@@ -383,6 +391,7 @@ export default function OrderEntryView() {
       const rate = selectItemRate(menuItem, applicableRate);
       addDraftItem(menuItem, rate);
       pushRecentId(menuItem.id);
+      setLastAddedKey(menuItem.id); // menu_id for draft rows
       return;
     }
     if (!activeSessionId || !session) return;
@@ -390,8 +399,12 @@ export default function OrderEntryView() {
     addItemMut.mutate(
       { sessionId: activeSessionId, menuId: menuItem.id, quantity: 1, specialInstruction: null },
       {
-        onSuccess: () => { pushRecentId(menuItem.id); setAddingId(null); },
-        onError:   () => setAddingId(null),
+        onSuccess: () => {
+          pushRecentId(menuItem.id);
+          setAddingId(null);
+          setLastAddedKey(menuItem.id); // use menu_id as key for both draft and session rows
+        },
+        onError: () => setAddingId(null),
       },
     );
   }
@@ -529,6 +542,7 @@ export default function OrderEntryView() {
                 onAddItem={handleAddItem}
                 applicableRate={applicableRate}
                 addingId={addingId}
+                onSearchRef={(ref) => { searchRefHandle.current = ref; }}
               />
             </div>
 
@@ -544,6 +558,8 @@ export default function OrderEntryView() {
                 items={items}
                 isLoadingItems={isLoadingItems}
                 discountPercent={discountPercent}
+                lastAddedKey={lastAddedKey}
+                onQtyEnter={focusSearch}
               />
             </div>
           </div>

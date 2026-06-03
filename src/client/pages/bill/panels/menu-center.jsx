@@ -316,10 +316,16 @@ function CenterSkeleton() {
 
 // ─── Main component ───────────────────────────────────────────────
 
-export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicableRate, addingId }) {
+export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicableRate, addingId, onSearchRef }) {
   const { selectedMenuGroupId, selectedMenuCategoryId } = useBillingContext();
   const [search, setSearch] = useState("");
   const searchRef = useRef(null);
+
+  // Expose search ref to parent so it can refocus after qty entry
+  useEffect(() => {
+    onSearchRef?.(searchRef);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-focus search bar whenever the panel mounts (new order / table open)
   useEffect(() => {

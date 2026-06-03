@@ -53,7 +53,7 @@ function KotDot({ status }) {
 
 // ─── Order item row ───────────────────────────────────────────
 
-function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close }) {
+function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActive, onQtyEnter }) {
   const updateQty  = useUpdateOrderItemQty(sessionId);
   const cancelItem = useCancelOrderItem(sessionId);
   const {
@@ -82,6 +82,16 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close }) {
   // Live search against KOT message master
   const kotSearch  = useSearchKotMessages(kotInput, isF6Active);
   const kotResults = kotSearch.data ?? [];
+
+  // Auto-focus and pre-select qty when this row is freshly added
+  useEffect(() => {
+    if (isActive && !isF6Active) {
+      setQtyInput(String(item.quantity));
+      setQtyEditing(true);
+      setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 60);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   // Focus the KOT inline input when F6 activates for this item
   useEffect(() => {
@@ -128,9 +138,21 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close }) {
     if (e.key === "Enter") {
       e.preventDefault();
       if (activeIdx >= 0 && kotResults[activeIdx]) {
+        // User navigated with arrow keys — pick highlighted
         pickSuggestion(kotResults[activeIdx].message);
       } else {
-        commitKotInput();
+        // Auto-match: exact code match takes priority
+        const q = kotInput.trim();
+        const exactCode = q ? kotResults.find((m) => String(m.code ?? "") === q) : null;
+        if (exactCode) {
+          pickSuggestion(exactCode.message);
+        } else if (kotResults.length === 1) {
+          // Only one result — pick it automatically
+          pickSuggestion(kotResults[0].message);
+        } else {
+          // Save whatever the user typed as a custom message
+          commitKotInput();
+        }
       }
       return;
     }
@@ -159,18 +181,19 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close }) {
     setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 30);
   }
 
-  function commitQtyEdit() {
+  function commitQtyEdit(returnToSearch = false) {
     const parsed = parseInt(qtyInput, 10);
     if (!isNaN(parsed) && parsed > 0) {
       if (isDraft) updateDraftQty(item.menu_id, parsed);
       else updateQty.mutate({ id: item.id, qty: parsed });
     }
     setQtyEditing(false);
+    if (returnToSearch) onQtyEnter?.();
   }
 
   function handleQtyKeyDown(e) {
-    if (e.key === "Enter")  { e.preventDefault(); commitQtyEdit(); }
-    if (e.key === "Escape") { setQtyEditing(false); }
+    if (e.key === "Enter")  { e.preventDefault(); commitQtyEdit(true); }
+    if (e.key === "Escape") { setQtyEditing(false); onQtyEnter?.(); }
   }
 
   const decDisabled = isDraft ? item.quantity <= 1 : (!canEdit || item.quantity <= 1 || updateQty.isPending);
@@ -378,27 +401,26 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close }) {
 
 // ─── Order items area ─────────────────────────────────────────
 
-function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
-  // Track which item has F6 KOT message input open (by item id/menu_id key)
+function OrderItemsArea({ sessionId, items, isLoading, isDraft, lastAddedKey, onQtyEnter }) {
   const [f6ItemKey, setF6ItemKey] = useState(null);
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
 
-  // The last active item gets F6 focus
-  const lastItem = activeItems.length > 0 ? activeItems[activeItems.length - 1] : null;
-  const lastItemKey = lastItem ? (isDraft ? lastItem.menu_id : lastItem.id) : null;
+  // F6 target = lastAddedKey (menu_id of the item just added, controlled by parent)
+  // Falls back to the last active item's menu_id when nothing freshly added
+  const lastItem    = activeItems.length > 0 ? activeItems[activeItems.length - 1] : null;
+  const lastItemKey = lastAddedKey ?? (lastItem?.menu_id ?? null);
 
-  // Track previous item count to detect newly added items
+  // Clear any open F6 panel when a new item is added
   const prevCountRef = useRef(activeItems.length);
   useEffect(() => {
     if (activeItems.length > prevCountRef.current) {
-      // Item was just added — clear any open F6 so it's ready on next F6 press
       setF6ItemKey(null);
     }
     prevCountRef.current = activeItems.length;
   }, [activeItems.length]);
 
-  // Global F6 listener — opens KOT message input on last item
+  // Global F6 — opens KOT message input on the active (last-added) item by menu_id
   useEffect(() => {
     function onKeyDown(e) {
       if (e.key !== "F6") return;
@@ -441,19 +463,18 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
           <kbd className="rounded bg-muted px-0.5 text-[8px] font-mono text-muted-foreground/50 leading-tight">F6</kbd>
         </span>
       </div>
-      {activeItems.map((item) => {
-        const itemKey = isDraft ? item.menu_id : item.id;
-        return (
-          <OrderItemRow
-            key={item.id}
-            item={item}
-            sessionId={sessionId}
-            isDraft={isDraft}
-            isF6Active={f6ItemKey === itemKey}
-            onF6Close={() => setF6ItemKey(null)}
-          />
-        );
-      })}
+      {activeItems.map((item) => (
+        <OrderItemRow
+          key={item.id}
+          item={item}
+          sessionId={sessionId}
+          isDraft={isDraft}
+          isActive={lastAddedKey === item.menu_id}
+          isF6Active={f6ItemKey === item.menu_id}
+          onF6Close={() => setF6ItemKey(null)}
+          onQtyEnter={onQtyEnter}
+        />
+      ))}
     </div>
   );
 }
@@ -674,9 +695,10 @@ export default function OrderRightPanel({
   session, sessionId,
   isDraft, draftOrderType, draftCovers,
   onSetDraftConfig,
-  // Lifted from OrderEntryView:
   items, isLoadingItems,
   discountPercent,
+  lastAddedKey,
+  onQtyEnter,
 }) {
   return (
     <div className="flex flex-col h-full overflow-hidden bg-card">
@@ -697,6 +719,8 @@ export default function OrderRightPanel({
           items={items}
           isLoading={isLoadingItems}
           isDraft={isDraft}
+          lastAddedKey={lastAddedKey}
+          onQtyEnter={onQtyEnter}
         />
       </div>
 
