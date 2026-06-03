@@ -73,7 +73,7 @@ function BillingScreen() {
   }, []);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden">
+    <div className="absolute inset-0 flex flex-col overflow-hidden">
       {view === BILLING_VIEW.TABLE_SELECT && (
         <TableSelectView onOpenReprint={() => setReprintOpen(true)} />
       )}

@@ -379,7 +379,7 @@ export default function AppShell() {
     <TooltipProvider>
       <SidebarProvider defaultOpen={true} className="h-svh overflow-hidden">
         <AppSidebar />
-        <SidebarInset>
+        <SidebarInset className="flex flex-col overflow-hidden">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="h-4 my-auto" />
@@ -406,7 +406,7 @@ export default function AppShell() {
               <ThemeToggle />
             </div>
           </header>
-          <main className="flex-1 overflow-auto">
+          <main className="flex-1 min-h-0 overflow-auto relative">
             <Outlet />
           </main>
         </SidebarInset>
