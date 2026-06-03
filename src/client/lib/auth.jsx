@@ -44,34 +44,6 @@ export function AuthProvider({ children }) {
     }
   }, [auth]);
 
-  // Re-maximize when restored from taskbar.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let unlistenResize, unlistenFocus;
-
-    async function ensureMaximized() {
-      try {
-        const isMax = await win.isMaximized();
-        if (!isMax) await win.maximize();
-      } catch {}
-    }
-
-    // onResized fires whenever Windows changes the window size (including restore)
-    win.onResized(ensureMaximized).then((fn) => { unlistenResize = fn; });
-
-    // onFocusChanged with delay covers cases where resize fires before state settles
-    win.onFocusChanged(({ payload: focused }) => {
-      if (focused) {
-        setTimeout(ensureMaximized, 50);
-        setTimeout(ensureMaximized, 300);
-      }
-    }).then((fn) => { unlistenFocus = fn; });
-
-    return () => {
-      unlistenResize?.();
-      unlistenFocus?.();
-    };
-  }, []);
 
   const login = useCallback(async (username, password, applicationId) => {
     const result = await invoke("login", {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -12,6 +12,7 @@ import {
   StickyNote01Icon,
   Discount01Icon,
   Comment01Icon,
+  Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,7 @@ import {
   useCancelOrderItem,
   useUpdateSessionInfo,
   useUpdateSessionParty,
+  useSearchKotMessages,
 } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
 import { calcBillTotals, calcTaxBreakdown, fmtAmount } from "../utils/billing-calc";
@@ -51,7 +53,7 @@ function KotDot({ status }) {
 
 // ─── Order item row ───────────────────────────────────────────
 
-function OrderItemRow({ item, sessionId, isDraft }) {
+function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close }) {
   const updateQty  = useUpdateOrderItemQty(sessionId);
   const cancelItem = useCancelOrderItem(sessionId);
   const {
@@ -59,22 +61,80 @@ function OrderItemRow({ item, sessionId, isDraft }) {
     setDraftItemKotMsg, setPendingItemKotMsg, pendingItemKotMsgs,
   } = useBillingContext();
 
+  const [qtyEditing,    setQtyEditing]    = useState(false);
+  const [qtyInput,      setQtyInput]      = useState("");
+  const [kotInput,      setKotInput]      = useState("");
+  const [dropdownOpen,  setDropdownOpen]  = useState(false);
+  const [activeIdx,     setActiveIdx]     = useState(-1);
+  const kotInputRef                       = useRef(null);
+  const qtyInputRef                       = useRef(null);
+  const dropdownRef                       = useRef(null);
+
   if (item.item_status === "CANCELLED") return null;
 
   const canEdit = isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE");
 
-  // KOT message resolution (all UI-only until KOT is punched):
-  //  • draft items         → stored on the draft item
-  //  • existing pending     → local pending map overrides the DB value
-  //  • already-saved (DB)   → kot_messages aggregate
   const hasPending = !isDraft && Object.prototype.hasOwnProperty.call(pendingItemKotMsgs, item.id);
   const kotMessage = isDraft
     ? (item.kot_message ?? null)
     : (hasPending ? pendingItemKotMsgs[item.id] : (item.kot_messages ?? null));
 
+  // Live search against KOT message master
+  const kotSearch  = useSearchKotMessages(kotInput, isF6Active);
+  const kotResults = kotSearch.data ?? [];
+
+  // Focus the KOT inline input when F6 activates for this item
+  useEffect(() => {
+    if (isF6Active) {
+      setKotInput(kotMessage ?? "");
+      setDropdownOpen(true);
+      setActiveIdx(-1);
+      setTimeout(() => kotInputRef.current?.focus(), 50);
+    } else {
+      setDropdownOpen(false);
+      setActiveIdx(-1);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isF6Active]);
+
   function handleKotMsg(message) {
     if (isDraft) setDraftItemKotMsg(item.menu_id, message);
-    else setPendingItemKotMsg(item.id, message);  // UI only — persisted on KOT
+    else setPendingItemKotMsg(item.id, message);
+  }
+
+  function commitKotInput(text) {
+    const val = (text ?? kotInput).trim();
+    handleKotMsg(val || null);
+    onF6Close?.();
+  }
+
+  function pickSuggestion(msg) {
+    setKotInput(msg);
+    handleKotMsg(msg || null);
+    onF6Close?.();
+  }
+
+  function handleKotKeyDown(e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.min(i + 1, kotResults.length - 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => Math.max(i - 1, -1));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIdx >= 0 && kotResults[activeIdx]) {
+        pickSuggestion(kotResults[activeIdx].message);
+      } else {
+        commitKotInput();
+      }
+      return;
+    }
+    if (e.key === "Escape") { onF6Close?.(); }
   }
 
   function handleDecrement() {
@@ -92,9 +152,33 @@ function OrderItemRow({ item, sessionId, isDraft }) {
     else cancelItem.mutate(item.id);
   }
 
+  function startQtyEdit() {
+    if (!canEdit) return;
+    setQtyInput(String(item.quantity));
+    setQtyEditing(true);
+    setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 30);
+  }
+
+  function commitQtyEdit() {
+    const parsed = parseInt(qtyInput, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      if (isDraft) updateDraftQty(item.menu_id, parsed);
+      else updateQty.mutate({ id: item.id, qty: parsed });
+    }
+    setQtyEditing(false);
+  }
+
+  function handleQtyKeyDown(e) {
+    if (e.key === "Enter")  { e.preventDefault(); commitQtyEdit(); }
+    if (e.key === "Escape") { setQtyEditing(false); }
+  }
+
   const decDisabled = isDraft ? item.quantity <= 1 : (!canEdit || item.quantity <= 1 || updateQty.isPending);
   const incDisabled = isDraft ? false : (!canEdit || updateQty.isPending);
   const delDisabled = isDraft ? false : (!canEdit || cancelItem.isPending);
+
+  // qty=1: show trash on left instead of minus
+  const showTrashLeft = item.quantity === 1;
 
   return (
     <div className="group flex flex-col border-b last:border-b-0 hover:bg-muted/20 transition-colors">
@@ -110,26 +194,61 @@ function OrderItemRow({ item, sessionId, isDraft }) {
           {item.item_name}
         </span>
 
-        {/* Qty controls */}
+        {/* Qty controls: [trash/minus] [qty] [+] */}
         <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            onClick={handleDecrement}
-            disabled={decDisabled}
-            className="h-5 w-5 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-25 transition-colors"
-          >
-            <HugeiconsIcon icon={MinusSignIcon} size={8} strokeWidth={2.5} />
-          </button>
-          <span className="w-6 text-center text-xs font-mono font-semibold tabular-nums">
-            {item.quantity}
-          </span>
+          {/* Left button: trash when qty=1, minus otherwise */}
+          {showTrashLeft ? (
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={delDisabled}
+              className="h-6 w-6 rounded border bg-background flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-25 transition-colors"
+              title="Remove item"
+            >
+              <HugeiconsIcon icon={Delete01Icon} size={10} strokeWidth={2} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDecrement}
+              disabled={decDisabled}
+              className="h-6 w-6 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-25 transition-colors"
+            >
+              <HugeiconsIcon icon={MinusSignIcon} size={9} strokeWidth={2.5} />
+            </button>
+          )}
+
+          {/* Qty — click to edit */}
+          {qtyEditing ? (
+            <input
+              ref={qtyInputRef}
+              type="number"
+              min="1"
+              value={qtyInput}
+              onChange={(e) => setQtyInput(e.target.value)}
+              onBlur={commitQtyEdit}
+              onKeyDown={handleQtyKeyDown}
+              className="w-8 h-6 text-center text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary px-0.5"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={startQtyEdit}
+              title="Click to edit quantity"
+              className="w-7 h-6 text-center text-xs font-mono font-semibold tabular-nums rounded hover:bg-muted transition-colors"
+            >
+              {item.quantity}
+            </button>
+          )}
+
+          {/* Plus */}
           <button
             type="button"
             onClick={handleIncrement}
             disabled={incDisabled}
-            className="h-5 w-5 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-25 transition-colors"
+            className="h-6 w-6 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-25 transition-colors"
           >
-            <HugeiconsIcon icon={Add01Icon} size={8} strokeWidth={2.5} />
+            <HugeiconsIcon icon={Add01Icon} size={9} strokeWidth={2.5} />
           </button>
         </div>
 
@@ -138,27 +257,104 @@ function OrderItemRow({ item, sessionId, isDraft }) {
           ₹{fmtAmount(item.final_amount)}
         </span>
 
-        {/* KOT message + Remove */}
-        <div className="flex items-center gap-0.5 shrink-0">
+        {/* KOT message picker — popover (click) or F6 (keyboard) */}
+        <div className="flex items-center gap-0.5 shrink-0" title="KOT message — press F6">
           <KotMessagePicker
             value={kotMessage}
             disabled={!canEdit}
             onSelect={handleKotMsg}
           />
-          <button
-            type="button"
-            onClick={handleRemove}
-            disabled={delDisabled}
-            className="h-5 w-5 shrink-0 rounded flex items-center justify-center text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 disabled:!opacity-0! transition-all"
-            title="Remove item"
-          >
-            <HugeiconsIcon icon={Delete01Icon} size={10} strokeWidth={2} />
-          </button>
         </div>
       </div>
 
-      {/* KOT message */}
-      {kotMessage && (
+      {/* F6 inline KOT message input + live dropdown */}
+      {isF6Active && canEdit && (
+        <div className="px-3 pb-2 -mt-0.5 relative" ref={dropdownRef}>
+          {/* Input row */}
+          <div className="flex items-center gap-1.5 rounded border border-primary/40 bg-primary/5 px-2 py-1">
+            <HugeiconsIcon icon={Comment01Icon} size={10} strokeWidth={2} className="text-primary/60 shrink-0" />
+            <input
+              ref={kotInputRef}
+              type="text"
+              value={kotInput}
+              onChange={(e) => { setKotInput(e.target.value); setActiveIdx(-1); setDropdownOpen(true); }}
+              onKeyDown={handleKotKeyDown}
+              placeholder="Type message or search by name / code…"
+              className="flex-1 bg-transparent text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none min-w-0"
+            />
+            {kotInput && (
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); setKotInput(""); kotInputRef.current?.focus(); }}
+                className="shrink-0 text-muted-foreground/50 hover:text-foreground transition-colors"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} size={10} strokeWidth={2} />
+              </button>
+            )}
+          </div>
+
+          {/* Dropdown suggestions */}
+          {dropdownOpen && (
+            <div className="absolute left-3 right-3 top-full z-50 rounded border bg-popover shadow-md overflow-hidden">
+              {/* Master results first */}
+              {kotSearch.isLoading ? (
+                <div className="p-2 space-y-1">
+                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-7 rounded" />)}
+                </div>
+              ) : kotResults.length === 0 && !kotInput.trim() ? (
+                <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">Type to search KOT messages…</p>
+              ) : kotResults.length > 0 ? (
+                <div className="max-h-40 overflow-y-auto">
+                  {kotResults.map((m, idx) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onMouseDown={(e) => { e.preventDefault(); pickSuggestion(m.message); }}
+                      className={[
+                        "w-full flex items-center justify-between gap-2 px-3 py-2 text-left border-b last:border-b-0 transition-colors",
+                        activeIdx === idx ? "bg-primary/10 text-primary" : "hover:bg-muted",
+                      ].join(" ")}
+                    >
+                      <span className="text-[11px] font-medium truncate">{m.message}</span>
+                      {m.code != null && (
+                        <span className="text-[10px] text-muted-foreground shrink-0">#{m.code}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {/* Custom free-text option — below master results */}
+              {kotInput.trim() && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => { e.preventDefault(); commitKotInput(kotInput.trim()); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left border-t hover:bg-muted transition-colors"
+                >
+                  <HugeiconsIcon icon={Comment01Icon} size={10} strokeWidth={2} className="text-muted-foreground/60 shrink-0" />
+                  <span className="text-[11px] truncate text-muted-foreground">{kotInput.trim()}</span>
+                  <span className="text-[10px] text-muted-foreground/60 ml-auto shrink-0">custom</span>
+                </button>
+              )}
+
+              {/* Clear current message if one is set */}
+              {kotMessage && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => { e.preventDefault(); pickSuggestion(""); }}
+                  className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-[11px] text-destructive hover:bg-destructive/5 border-t transition-colors"
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} size={10} strokeWidth={2} />
+                  Clear message
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* KOT message display */}
+      {!isF6Active && kotMessage && (
         <div className="flex items-start gap-1 px-3 pb-1.5 -mt-0.5">
           <HugeiconsIcon icon={Comment01Icon} size={9} strokeWidth={2} className="text-primary/60 mt-0.5 shrink-0" />
           <p className="text-[10px] text-primary/80 font-medium leading-snug">
@@ -183,6 +379,37 @@ function OrderItemRow({ item, sessionId, isDraft }) {
 // ─── Order items area ─────────────────────────────────────────
 
 function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
+  // Track which item has F6 KOT message input open (by item id/menu_id key)
+  const [f6ItemKey, setF6ItemKey] = useState(null);
+
+  const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
+
+  // The last active item gets F6 focus
+  const lastItem = activeItems.length > 0 ? activeItems[activeItems.length - 1] : null;
+  const lastItemKey = lastItem ? (isDraft ? lastItem.menu_id : lastItem.id) : null;
+
+  // Track previous item count to detect newly added items
+  const prevCountRef = useRef(activeItems.length);
+  useEffect(() => {
+    if (activeItems.length > prevCountRef.current) {
+      // Item was just added — clear any open F6 so it's ready on next F6 press
+      setF6ItemKey(null);
+    }
+    prevCountRef.current = activeItems.length;
+  }, [activeItems.length]);
+
+  // Global F6 listener — opens KOT message input on last item
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key !== "F6") return;
+      if (!lastItemKey) return;
+      e.preventDefault();
+      setF6ItemKey((prev) => (prev === lastItemKey ? null : lastItemKey));
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lastItemKey]);
+
   if (isLoading) {
     return (
       <div className="p-2 space-y-1.5">
@@ -192,8 +419,6 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
       </div>
     );
   }
-
-  const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
 
   if (activeItems.length === 0) {
     return (
@@ -211,11 +436,24 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft }) {
         <span className="flex-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Item</span>
         <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 w-20 text-center">Qty</span>
         <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 w-14 text-right">Amt</span>
-        <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 w-11 text-center">Msg</span>
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 text-center flex items-center gap-1">
+          Msg
+          <kbd className="rounded bg-muted px-0.5 text-[8px] font-mono text-muted-foreground/50 leading-tight">F6</kbd>
+        </span>
       </div>
-      {activeItems.map((item) => (
-        <OrderItemRow key={item.id} item={item} sessionId={sessionId} isDraft={isDraft} />
-      ))}
+      {activeItems.map((item) => {
+        const itemKey = isDraft ? item.menu_id : item.id;
+        return (
+          <OrderItemRow
+            key={item.id}
+            item={item}
+            sessionId={sessionId}
+            isDraft={isDraft}
+            isF6Active={f6ItemKey === itemKey}
+            onF6Close={() => setF6ItemKey(null)}
+          />
+        );
+      })}
     </div>
   );
 }

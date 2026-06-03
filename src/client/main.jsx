@@ -8,12 +8,15 @@ import { HashRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider, ProtectedRoute, Can } from "@/lib/auth";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "@/app.css";
 import Login from "@/pages/login";
 import Error from "@/pages/error";
 import Forbidden from "@/pages/forbidden";
 import DbSetup from "@/pages/db-setup";
 import AppShell from "@/components/app-sidebar";
+
+getCurrentWindow().maximize().catch(() => {});
 
 const queryClient = new QueryClient({
   defaultOptions: {
