@@ -576,6 +576,7 @@ export function useSettledBills(params) {
     queryKey: BQK.SETTLED_BILLS(params),
     queryFn:  () => billingService.searchSettledBills(params),
     staleTime: 10_000,
+    refetchInterval: 30_000,
     enabled:  !!params,
   });
 }

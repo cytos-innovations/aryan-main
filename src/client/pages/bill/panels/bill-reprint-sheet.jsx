@@ -12,6 +12,8 @@ import {
   Clock01Icon,
   CashIcon,
   PercentIcon,
+  Refresh01Icon,
+  MultiplicationSignIcon,
 } from "@hugeicons/core-free-icons";
 
 import {
@@ -19,6 +21,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetClose,
 } from "@/components/ui/sheet";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -314,7 +317,7 @@ export default function BillReprintSheet({ open, onOpenChange }) {
   const queryParams = committed
     ? { search: committed, dateFrom: null, dateTo: null }
     : { search: null, ...range };
-  const { data: bills, isLoading, isFetching, isError, error } = useSettledBills(queryParams);
+  const { data: bills, isLoading, isFetching, isError, error, refetch } = useSettledBills(queryParams);
 
   // Auto-focus search on open; reset to list view
   useEffect(() => {
@@ -337,16 +340,38 @@ export default function BillReprintSheet({ open, onOpenChange }) {
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
+        showCloseButton={false}
         className="w-full sm:max-w-xl flex flex-col p-0 gap-0"
       >
         {/* ── Sheet header ── */}
         <SheetHeader className="shrink-0 border-b px-4 py-3">
           <div className="flex items-center gap-2">
-            <HugeiconsIcon icon={PrinterIcon} size={15} strokeWidth={2} className="text-primary" />
+            <HugeiconsIcon icon={PrinterIcon} size={15} strokeWidth={2} className="text-primary shrink-0" />
             <SheetTitle className="text-sm font-semibold leading-none">Bill Reprint</SheetTitle>
-            {isFetching && !isLoading && (
-              <span className="text-[10px] text-muted-foreground">refreshing…</span>
-            )}
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              title="Refresh"
+              className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 transition-colors"
+            >
+              <HugeiconsIcon
+                icon={Refresh01Icon}
+                size={14}
+                strokeWidth={2}
+                className={isFetching ? "animate-spin" : ""}
+              />
+            </button>
+            <SheetClose asChild>
+              <button
+                type="button"
+                title="Close"
+                className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                <HugeiconsIcon icon={MultiplicationSignIcon} size={13} strokeWidth={2.5} />
+              </button>
+            </SheetClose>
           </div>
         </SheetHeader>
 

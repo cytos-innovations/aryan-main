@@ -522,7 +522,7 @@ export default function OrderEntryView() {
           <div className="flex flex-1 overflow-hidden min-h-0">
 
             {/* CENTER — item grid */}
-            <div className="flex-1 overflow-hidden bg-background h-full">
+            <div className="flex-1 min-w-0 overflow-hidden bg-background h-full">
               <MenuCenterPanel
                 menu={menu}
                 isLoading={isMenuLoading}
@@ -533,7 +533,7 @@ export default function OrderEntryView() {
             </div>
 
             {/* RIGHT — order panel */}
-            <div className="shrink-0 w-[42%] max-w-150 min-w-105 border-l overflow-hidden h-full">
+            <div className="shrink-0 w-[38%] max-w-130 min-w-65 border-l overflow-hidden h-full">
               <OrderRightPanel
                 session={session}
                 sessionId={activeSessionId}

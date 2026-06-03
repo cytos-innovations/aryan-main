@@ -35,7 +35,7 @@ export function AuthProvider({ children }) {
     const win = getCurrentWindow();
     if (auth) {
       win.setClosable(false).catch(() => {});
-      win.setMaximizable(false).catch(() => {});
+      win.setMaximizable(true).catch(() => {});
       win.setMinimizable(true).catch(() => {});
     } else {
       win.setClosable(true).catch(() => {});

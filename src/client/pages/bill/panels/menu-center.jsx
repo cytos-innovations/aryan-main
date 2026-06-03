@@ -97,7 +97,9 @@ function CategoryChips({ menu }) {
             </PopoverTrigger>
             <PopoverContent
               align="start"
-              className="w-48 p-1"
+              sideOffset={4}
+              avoidCollisions={false}
+              className="w-48 p-1 z-50"
               onMouseLeave={() => setOpenCat(null)}
             >
               <button
@@ -304,7 +306,7 @@ function SectionLabel({ children }) {
 
 function CenterSkeleton() {
   return (
-    <div className="p-2 grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
+    <div className="p-2 grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2">
       {Array.from({ length: 24 }).map((_, i) => (
         <Skeleton key={i} className="h-72px rounded-lg" />
       ))}
@@ -442,7 +444,7 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2">
             {showRecents && <SectionLabel>Recent</SectionLabel>}
             {displayItems.map((item) => (
               <MenuItemCard
