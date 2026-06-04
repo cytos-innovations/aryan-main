@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -26,6 +27,7 @@ const QK = ["kot-messages"];
 const EMPTY = { kot_message: "" };
 
 export default function KotMessage() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -187,7 +189,7 @@ export default function KotMessage() {
               {dialog.mode === "create" ? "Create a new KOT message." : "Update this KOT message."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <Field>
                 <FieldLabel>KOT Message <span className="text-destructive">*</span></FieldLabel>

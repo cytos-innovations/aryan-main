@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ const EMPTY = {
 };
 
 export default function KitchenSection() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -272,7 +274,7 @@ export default function KitchenSection() {
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               {/* Row 1 — Code (narrow) | Section Name (wide) */}
               <div className="grid grid-cols-3 gap-3">

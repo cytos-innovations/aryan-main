@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -82,6 +83,7 @@ const EMPTY_TAX_ROW = {
 // ─────────────────────────────────────────────────────────────
 
 export default function MenuCategory() {
+  const enterNav = useEnterNav();
   const qc = useQueryClient();
   const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -551,7 +553,7 @@ export default function MenuCategory() {
             </DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
             {/* ── Row 1: Code | Category Name ─────────────────── */}
             <div className="grid grid-cols-2 gap-3">
               <Field>
@@ -681,7 +683,7 @@ export default function MenuCategory() {
             </div>
 
             {/* ── Tax Chart Grid ───────────────────────────────── */}
-            <div>
+            <div data-enter-skip>
               <div className="flex items-center justify-between mb-2">
                 <FieldLabel className="mb-0">Tax Chart</FieldLabel>
                 <Select

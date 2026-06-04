@@ -305,12 +305,40 @@ export default function OrderEntryView() {
   const qc  = useQueryClient();
   const now = useNow();
 
-  const [editOpen,        setEditOpen]        = useState(false);
-  const [cancelOpen,      setCancelOpen]      = useState(false);
-  const [settleOpen,      setSettleOpen]      = useState(false);
-  const [addingId,        setAddingId]        = useState(null);
-  const [isKotting,       setIsKotting]       = useState(false);
-  const [discountPercent, setDiscountPercent] = useState(0);
+  const [editOpen,   setEditOpen]   = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [settleOpen, setSettleOpen] = useState(false);
+  const [addingId,   setAddingId]   = useState(null);
+  const [isKotting,  setIsKotting]  = useState(false);
+
+  // Discount keyed strictly by DB sessionId (never by "draft").
+  // Draft orders start fresh every time — no persistence needed.
+  // Real sessions persist in localStorage until settled.
+  const discKey = activeSessionId ? `pos-disc:${activeSessionId}` : null;
+
+  const [sessionDisc, setSessionDiscState] = useState(() => {
+    if (!activeSessionId) return null; // draft = always fresh
+    try { return JSON.parse(localStorage.getItem(`pos-disc:${activeSessionId}`)) ?? null; }
+    catch { return null; }
+  });
+
+  // Re-read from localStorage when switching to a different real session
+  useEffect(() => {
+    if (!activeSessionId) { setSessionDiscState(null); return; }
+    try { setSessionDiscState(JSON.parse(localStorage.getItem(`pos-disc:${activeSessionId}`)) ?? null); }
+    catch { setSessionDiscState(null); }
+  }, [activeSessionId]);
+
+  function saveSessionDisc(disc) {
+    if (activeSessionId) {
+      // Real session — persist to localStorage so it survives bill generation + table switch
+      try { localStorage.setItem(`pos-disc:${activeSessionId}`, JSON.stringify(disc)); }
+      catch { /* storage full — silent */ }
+    }
+    setSessionDiscState(disc);
+  }
+
+  const discountPercent = sessionDisc?.discPct ?? 0;
   // Tracks which item row should auto-focus qty (key = menu_id for draft, item.id for session)
   const [lastAddedKey,    setLastAddedKey]    = useState(null);
   const searchRefHandle                       = useRef(null); // set by MenuCenterPanel via onSearchRef
@@ -357,7 +385,8 @@ export default function OrderEntryView() {
   const billDisc  = Math.round((totals.finalAmount * (Number(discountPercent) || 0)) / 100 * 100) / 100;
   const afterDisc = Math.round((totals.finalAmount - billDisc) * 100) / 100;
   const roundOff  = Math.round(afterDisc) - afterDisc;
-  const netAmount = afterDisc + roundOff;
+  // Use the full saved netAmt (incl. misc, service charge, etc.) when available
+  const netAmount = sessionDisc?.netAmt ?? (afterDisc + roundOff);
 
   // ── Actions ───────────────────────────────────────────────
 
@@ -424,7 +453,13 @@ export default function OrderEntryView() {
         customerMobile:  customer?.mobile  ?? null,
         customerAddress: customer?.address ?? null,
       },
-      { onSuccess: clearSession },
+      {
+        onSuccess: () => {
+          // Clear persisted discount after successful settlement
+          if (discKey) { try { localStorage.removeItem(discKey); } catch { /* ignore */ } }
+          clearSession();
+        },
+      },
     );
   }
 
@@ -558,6 +593,7 @@ export default function OrderEntryView() {
                 items={items}
                 isLoadingItems={isLoadingItems}
                 discountPercent={discountPercent}
+                sessionDisc={sessionDisc}
                 lastAddedKey={lastAddedKey}
                 onQtyEnter={focusSearch}
               />
@@ -580,7 +616,8 @@ export default function OrderEntryView() {
             onKotDraft={handleKotDraft}
             onCancel={() => setCancelOpen(true)}
             discountPercent={discountPercent}
-            onDiscountChange={setDiscountPercent}
+            sessionDisc={sessionDisc}
+            onDiscountChange={saveSessionDisc}
           />
         </div>
       </div>
@@ -592,6 +629,8 @@ export default function OrderEntryView() {
           onOpenChange={setSettleOpen}
           session={session}
           netAmount={netAmount}
+          billTotals={totals}
+          sessionDisc={sessionDisc}
           onSettle={handleSettle}
           isSettling={settleBillMut.isPending}
         />

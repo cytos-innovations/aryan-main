@@ -481,7 +481,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, lastAddedKey, on
 
 // ─── Bill totals section ──────────────────────────────────────
 
-function BillTotals({ items, discountPercent }) {
+function BillTotals({ items, sessionDisc }) {
   const [taxExpanded, setTaxExpanded] = useState(false);
 
   const totals = useMemo(() => calcBillTotals(items ?? []), [items]);
@@ -502,10 +502,12 @@ function BillTotals({ items, discountPercent }) {
 
   const taxBreakdown = useMemo(() => calcTaxBreakdown(items ?? []), [items]);
 
-  const billDiscountAmt = Math.round((totals.finalAmount * (Number(discountPercent) || 0)) / 100 * 100) / 100;
-  const afterDiscount   = Math.round((totals.finalAmount - billDiscountAmt) * 100) / 100;
-  const roundOff        = Math.round(afterDiscount) - afterDiscount;
-  const netAmount       = afterDiscount + roundOff;
+  // Use saved discount from sessionDisc when available for accurate display
+  const totalDiscAmt = sessionDisc
+    ? Math.round(((sessionDisc.discAmt || 0) + (sessionDisc.foodDiscAmt || 0) + (sessionDisc.liquorDiscAmt || 0) + (sessionDisc.tDisc || 0)) * 100) / 100
+    : 0;
+  const netAmount = sessionDisc?.netAmt ?? totals.finalAmount;
+  const roundOff  = Math.round(netAmount) - netAmount;
 
   return (
     <div className="shrink-0 border-t bg-card">
@@ -556,16 +558,45 @@ function BillTotals({ items, discountPercent }) {
           </>
         )}
 
-        {/* Bill discount — read-only row; input lives in the bottom panel */}
-        {billDiscountAmt > 0 && (
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-              Discount ({discountPercent}%)
-            </span>
-            <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
-              -₹{fmtAmount(billDiscountAmt)}
-            </span>
+        {/* Bill discount breakdown from saved sessionDisc */}
+        {sessionDisc && totalDiscAmt > 0 && (
+          <div className="space-y-0.5">
+            {sessionDisc.foodDiscAmt > 0 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  Food Disc ({sessionDisc.foodPct}%)
+                </span>
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
+              </div>
+            )}
+            {sessionDisc.liquorDiscAmt > 0 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  Liquor Disc ({sessionDisc.liquorPct}%)
+                </span>
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
+              </div>
+            )}
+            {sessionDisc.discAmt > 0 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  Discount
+                </span>
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.discAmt)}</span>
+              </div>
+            )}
+            {sessionDisc.sCharge > 0 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  Service Charge
+                </span>
+                <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.sCharge)}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -697,6 +728,7 @@ export default function OrderRightPanel({
   onSetDraftConfig,
   items, isLoadingItems,
   discountPercent,
+  sessionDisc,
   lastAddedKey,
   onQtyEnter,
 }) {
@@ -728,6 +760,7 @@ export default function OrderRightPanel({
       <BillTotals
         items={items}
         discountPercent={discountPercent}
+        sessionDisc={sessionDisc}
       />
     </div>
   );

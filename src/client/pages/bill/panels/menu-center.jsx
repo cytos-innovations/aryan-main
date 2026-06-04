@@ -343,12 +343,42 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
   // Items to show in filtered view
   const filteredItems = useMemo(() => {
     if (search.trim()) {
-      const q = search.toLowerCase();
-      return menu.filter(
-        // Guard against null/undefined item_name from the backend
-        (i) => (i.item_name ?? "").toLowerCase().includes(q) ||
-               String(i.code ?? "").includes(q),
-      );
+      const raw = search.trim();
+      const q   = raw.toLowerCase();
+      // Initials query: strip spaces → "m k s" or "mks" → "mks"
+      const initials = q.replace(/\s+/g, "");
+
+      // Helper: does item name's initials start with the query initials?
+      function matchesInitials(name) {
+        const words = name.toLowerCase().split(/\s+/).filter(Boolean);
+        const nameInitials = words.map((w) => w[0]).join("");
+        return nameInitials.startsWith(initials);
+      }
+
+      const results = menu.filter((i) => {
+        const name = (i.item_name ?? "").toLowerCase();
+        const code = String(i.code ?? "");
+        return (
+          name.includes(q) ||
+          code.includes(q) ||
+          matchesInitials(i.item_name ?? "")
+        );
+      });
+
+      // Sort: exact code → name starts with → initials → contains
+      results.sort((a, b) => {
+        const score = (i) => {
+          const name = (i.item_name ?? "").toLowerCase();
+          const code = String(i.code ?? "").toLowerCase();
+          if (code === q)          return 0;
+          if (name.startsWith(q))  return 1;
+          if (matchesInitials(i.item_name ?? "")) return 2;
+          return 3;
+        };
+        return score(a) - score(b);
+      });
+
+      return results;
     }
     if (selectedMenuGroupId) {
       return menu.filter((i) => i.group_id === selectedMenuGroupId);
@@ -411,12 +441,19 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
               e.preventDefault();
               const q = search.trim();
               if (!q) return;
-              // Priority 1: exact item code match (e.g. user types "1" → code "1")
+              // Priority 1: exact item code match
               const byCode = menu.find(
                 (i) => String(i.code ?? "").toLowerCase() === q.toLowerCase(),
               );
               if (byCode) { onAddItem(byCode); setSearch(""); return; }
-              // Priority 2: single filtered result
+              // Priority 2: exact initials match (e.g. "mks" → "Mutton Seekh Kabab")
+              const initials = q.toLowerCase().replace(/\s+/g, "");
+              const byInitials = menu.filter((i) => {
+                const words = (i.item_name ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+                return words.map((w) => w[0]).join("") === initials;
+              });
+              if (byInitials.length === 1) { onAddItem(byInitials[0]); setSearch(""); return; }
+              // Priority 3: single filtered result
               if (filteredItems.length === 1) { onAddItem(filteredItems[0]); setSearch(""); }
             }}
             placeholder="Search item name or code…"

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -34,6 +35,7 @@ const EMPTY_FORM = {
 // ─────────────────────────────────────────────────────────────
 
 export default function MaterialItemName() {
+  const enterNav = useEnterNav();
   const qc = useQueryClient();
   const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -301,7 +303,7 @@ export default function MaterialItemName() {
             <DialogTitle>{isEditMode ? "Edit Item Name" : "Add Item Name"}</DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
             {/* Code + Name */}
             <div className="grid grid-cols-2 gap-3">
               <Field>

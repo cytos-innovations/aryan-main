@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -361,6 +362,7 @@ function SlabTable({ taxMasterId }) {
 // ─────────────────────────────────────────────────────────────
 
 export default function AccTaxMaster() {
+  const enterNav = useEnterNav();
   const qc = useQueryClient();
   const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -599,7 +601,7 @@ export default function AccTaxMaster() {
             <DialogTitle>{isEditMode ? "Edit Tax Master" : "Add Tax Master"}</DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-5">
             {/* Code */}
             <Field>
               <FieldLabel>
@@ -652,7 +654,7 @@ export default function AccTaxMaster() {
             />
 
             {/* Tax Slabs */}
-            <div className="border-t pt-2">
+            <div className="border-t pt-2" data-enter-skip>
               {isEditMode && editId ? (
                 <SlabTable taxMasterId={editId} />
               ) : (

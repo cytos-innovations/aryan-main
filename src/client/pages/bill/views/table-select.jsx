@@ -458,13 +458,19 @@ export default function TableSelectView({ onOpenReprint }) {
     setTableShiftOpen(true);
   }, []);
 
+  // Print Table — placeholder, wired up later (shortcut F9)
+  const handlePrintTable = useCallback(() => {
+    // TODO: implement print table functionality
+  }, []);
+
   useEffect(() => {
     function onKey(e) {
       if (e.key === "F7") { e.preventDefault(); handleTableShift(); }
+      if (e.key === "F9") { e.preventDefault(); handlePrintTable(); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleTableShift]);
+  }, [handleTableShift, handlePrintTable]);
 
   const floorQuery = useFloorView();
   const tables = floorQuery.data ?? [];
@@ -590,127 +596,64 @@ export default function TableSelectView({ onOpenReprint }) {
     <>
     <div className="flex flex-col h-full overflow-hidden">
       {/* ── Toolbar ── */}
-      <div className="shrink-0 border-b bg-card px-4 py-2 flex items-center gap-2 flex-wrap">
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
-          onClick={() => setReservationOpen(true)}
-        >
+      <div className="shrink-0 border-b bg-card px-4 py-2 flex items-center gap-2">
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={() => setReservationOpen(true)}>
           <HugeiconsIcon icon={Calendar01Icon} size={14} strokeWidth={2} />
           Reserve
         </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
-          onClick={onOpenReprint}
-        >
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={onOpenReprint}>
           <HugeiconsIcon icon={PrinterIcon} size={14} strokeWidth={2} />
           Bill Reprint
-          <span className="ml-0.5 text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">
-            PgUp
-          </span>
+          <span className="text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">PgUp</span>
         </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
-          onClick={handleTableShift}
-        >
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={handleTableShift}>
           <HugeiconsIcon icon={Exchange01Icon} size={14} strokeWidth={2} />
           Table Shift
-          <span className="ml-0.5 text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">
-            F7
-          </span>
+          <span className="text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">F7</span>
         </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
-          onClick={() => navigate("/master/table/tables", { state: { openAdd: true } })}
-        >
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={handlePrintTable}>
+          <HugeiconsIcon icon={PrinterIcon} size={14} strokeWidth={2} />
+          Print Table
+          <span className="text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">F9</span>
+        </Button>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={() => navigate("/master/table/tables", { state: { openAdd: true } })}>
           <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
           Add Table
         </Button>
-
-        {/* Reminder settings */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={() => setReminderOpen(true)}
-          title="Reservation reminder settings"
-        >
+        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setReminderOpen(true)} title="Reservation reminder settings">
           <HugeiconsIcon icon={HotelBellIcon} size={15} strokeWidth={2} />
         </Button>
-
-        <Separator orientation="vertical" className="h-5 mx-1" />
-
-        {/* Stats */}
-        <StatPill count={stats.available}  label="free"     colorClass="text-foreground" />
-        <StatPill count={stats.occupied}   label="kot sent" colorClass="text-amber-600 dark:text-amber-400" />
-        {stats.billPrinted > 0 && (
-          <StatPill count={stats.billPrinted} label="bill out" colorClass="text-emerald-600 dark:text-emerald-400" />
-        )}
-        {stats.reserved > 0 && (
-          <StatPill count={stats.reserved} label="reserved" colorClass="text-blue-600 dark:text-blue-400" />
-        )}
 
         <div className="flex-1" />
 
         {/* Search */}
-        <div className="relative">
-          <HugeiconsIcon
-            icon={Search01Icon}
-            size={13}
-            strokeWidth={2}
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-          />
-          <Input
-            ref={searchRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Search by name or code…"
-            className="h-8 pl-8 w-52 text-xs"
-          />
+        <div className="relative shrink-0">
+          <HugeiconsIcon icon={Search01Icon} size={13} strokeWidth={2} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <Input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={handleSearchKeyDown} placeholder="Search by name or code…" className="h-8 pl-8 w-48 text-xs" />
         </div>
 
         {/* Refresh */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={() => floorQuery.refetch()}
-          disabled={floorQuery.isFetching}
-          title="Refresh"
-        >
-          <HugeiconsIcon
-            icon={Refresh01Icon}
-            size={14}
-            strokeWidth={2}
-            className={floorQuery.isFetching ? "animate-spin" : ""}
-          />
+        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => floorQuery.refetch()} disabled={floorQuery.isFetching} title="Refresh">
+          <HugeiconsIcon icon={Refresh01Icon} size={14} strokeWidth={2} className={floorQuery.isFetching ? "animate-spin" : ""} />
         </Button>
       </div>
 
-      {/* ── Color legend ── */}
-      <div className="shrink-0 border-b bg-muted/20 px-4 py-1.5 flex items-center gap-4 flex-wrap">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Legend</span>
+      {/* ── Legend + live stats (single row) ── */}
+      <div className="shrink-0 border-b bg-muted/20 px-4 py-1.5 flex items-center gap-4">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 shrink-0">Legend</span>
         {[
-          { dot: "bg-border ring-1 ring-border",   label: "Available"     },
-          { dot: "bg-amber-400 dark:bg-amber-500",  label: "KOT Sent"     },
-          { dot: "bg-emerald-500",                  label: "Bill Out"     },
-          { dot: "bg-blue-500",                     label: "Reserved Soon" },
-          { dot: "bg-blue-400 opacity-50",          label: "Reserved"     },
-        ].map(({ dot, label }) => (
-          <div key={label} className="flex items-center gap-1.5">
+          { dot: "bg-border ring-1 ring-border",  label: "Available",    count: stats.available,   countCls: "text-foreground"                              },
+          { dot: "bg-amber-400 dark:bg-amber-500", label: "KOT Sent",    count: stats.occupied,    countCls: "text-amber-600 dark:text-amber-400"           },
+          { dot: "bg-emerald-500",                 label: "Bill Out",     count: stats.billPrinted, countCls: "text-emerald-600 dark:text-emerald-400"       },
+          { dot: "bg-blue-500",                    label: "Reserved Soon",count: null,              countCls: ""                                             },
+          { dot: "bg-blue-400 opacity-50",         label: "Reserved",     count: stats.reserved > 0 ? stats.reserved : null, countCls: "text-blue-600 dark:text-blue-400" },
+        ].map(({ dot, label, count, countCls }) => (
+          <div key={label} className="flex items-center gap-1.5 shrink-0">
             <span className={`inline-block h-2.5 w-2.5 rounded-sm shrink-0 ${dot}`} />
             <span className="text-[10px] text-muted-foreground">{label}</span>
+            {count != null && (
+              <span className={`text-[10px] font-semibold tabular-nums ${countCls}`}>{count}</span>
+            )}
           </div>
         ))}
       </div>

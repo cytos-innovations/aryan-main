@@ -41,7 +41,7 @@ import { fmtAmount } from "../utils/billing-calc";
 const SPLIT_VALUE = "__SPLIT__";
 const DUE_VALUE   = "__DUE__";
 
-export default function SettleDialog({ open, onOpenChange, session, netAmount, onSettle, isSettling }) {
+export default function SettleDialog({ open, onOpenChange, session, netAmount, billTotals, sessionDisc, onSettle, isSettling }) {
   const methodsQuery = usePaymentMethods();
   const methods      = methodsQuery.data ?? [];
 
@@ -332,6 +332,44 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, o
               </SelectContent>
             </Select>
           </Field>
+
+          {/* ── Discount breakdown (shown when any discount/charge was applied) ── */}
+          {sessionDisc && (sessionDisc.discAmt > 0 || sessionDisc.foodDiscAmt > 0 || sessionDisc.liquorDiscAmt > 0 || sessionDisc.sCharge > 0) && (
+            <div className="rounded-lg border bg-muted/20 px-3 py-2.5 space-y-1">
+              <div className="flex justify-between text-[11px] text-muted-foreground">
+                <span>Bill Total</span>
+                <span className="tabular-nums font-medium text-foreground">₹{fmtAmount(billTotals?.finalAmount ?? netAmount)}</span>
+              </div>
+              {sessionDisc.discAmt > 0 && (
+                <div className="flex justify-between text-[11px] text-muted-foreground">
+                  <span>Discount</span>
+                  <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.discAmt)}</span>
+                </div>
+              )}
+              {sessionDisc.foodDiscAmt > 0 && (
+                <div className="flex justify-between text-[11px] text-muted-foreground">
+                  <span>Food Discount ({sessionDisc.foodPct}%)</span>
+                  <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
+                </div>
+              )}
+              {sessionDisc.liquorDiscAmt > 0 && (
+                <div className="flex justify-between text-[11px] text-muted-foreground">
+                  <span>Liquor Discount ({sessionDisc.liquorPct}%)</span>
+                  <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
+                </div>
+              )}
+              {sessionDisc.sCharge > 0 && (
+                <div className="flex justify-between text-[11px] text-muted-foreground">
+                  <span>Service Charge</span>
+                  <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.sCharge)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm font-semibold border-t pt-1.5 mt-0.5">
+                <span>Net Total</span>
+                <span className="tabular-nums">₹{fmtAmount(netAmount)}</span>
+              </div>
+            </div>
+          )}
 
           {/* ── Due — optional part-payment now, balance recorded as due ── */}
           {isDue && (

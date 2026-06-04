@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 
 import { Can } from "@/lib/auth";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
@@ -25,6 +26,7 @@ const QK = ["identity-types"];
 const EMPTY = { code: "", name: "" };
 
 export default function LodgeIdentity() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -191,7 +193,7 @@ export default function LodgeIdentity() {
                 : "Update this identity type."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <Field>
                 <FieldLabel>

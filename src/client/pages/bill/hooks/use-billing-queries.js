@@ -371,7 +371,8 @@ export function useTransferItems() {
 export function useGenerateBill(sessionId) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => billingService.generateBill(sessionId),
+    mutationFn: ({ billDiscountAmount, billNetAmount } = {}) =>
+      billingService.generateBill(sessionId, billDiscountAmount, billNetAmount),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
@@ -393,6 +394,8 @@ export function useSettleBill(sessionId) {
       qc.invalidateQueries({ queryKey: BQK.RESERVATIONS });
       qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
+      // Invalidate all settled-bills queries so Bill Reprint updates immediately
+      qc.invalidateQueries({ queryKey: ["billing-settled-bills"] });
       toast.success("Bill settled");
     },
     onError: (e) => toast.error(String(e)),
@@ -572,11 +575,13 @@ export function useReservationAutoExpiry() {
 
 /** Search settled bills. params = { search, dateFrom, dateTo } */
 export function useSettledBills(params) {
+  // Stringify params so object identity doesn't break cache key equality
+  const stableKey = params ? JSON.stringify(params) : null;
   return useQuery({
-    queryKey: BQK.SETTLED_BILLS(params),
+    queryKey: ["billing-settled-bills", stableKey],
     queryFn:  () => billingService.searchSettledBills(params),
-    staleTime: 10_000,
-    refetchInterval: 30_000,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     enabled:  !!params,
   });
 }

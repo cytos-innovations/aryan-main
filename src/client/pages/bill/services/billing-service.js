@@ -99,8 +99,12 @@ export const billingService = {
   getBillSummary: (sessionId) =>
     invoke("get_bill_summary", { sessionId }),
 
-  generateBill: (sessionId) =>
-    invoke("generate_bill", { sessionId }),
+  generateBill: (sessionId, billDiscountAmount, billNetAmount) =>
+    invoke("generate_bill", {
+      sessionId,
+      billDiscountAmount: billDiscountAmount ?? null,
+      billNetAmount:      billNetAmount      ?? null,
+    }),
 
   /**
    * @param {Object} params

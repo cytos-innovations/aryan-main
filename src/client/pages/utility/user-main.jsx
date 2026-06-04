@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export default function UserMain() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
 
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
@@ -243,7 +245,7 @@ export default function UserMain() {
                 : "Update the user's information. Leave password blank to keep unchanged."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <Field>
                 <FieldLabel>Username</FieldLabel>

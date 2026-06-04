@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -43,6 +44,7 @@ const EMPTY = {
 };
 
 export default function RestaurantTable() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const { state: navState } = useLocation();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
@@ -263,7 +265,7 @@ export default function RestaurantTable() {
               {dialog.mode === "create" ? "Create a new restaurant table." : "Update this table."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <div className="grid grid-cols-2 gap-3">
                 <Field>

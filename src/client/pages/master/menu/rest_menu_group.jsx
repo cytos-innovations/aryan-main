@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -40,6 +41,7 @@ const YN_OPTIONS = [
 ];
 
 export default function MenuGroup() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [categoryFilter, setCategoryFilter] = useState("__all__");
@@ -333,7 +335,7 @@ export default function MenuGroup() {
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               {/* Row 1 — Code | Group Name */}
               <div className="grid grid-cols-2 gap-3">

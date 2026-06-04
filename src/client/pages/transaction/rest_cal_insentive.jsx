@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -138,6 +139,7 @@ function fmtInc(val) {
 }
 
 export default function CalIncentive() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -349,7 +351,7 @@ export default function CalIncentive() {
                 : "Update the day-wise incentive percentages."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               {/* Menu Card */}
               <Field>

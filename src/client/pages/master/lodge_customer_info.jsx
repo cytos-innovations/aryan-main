@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -294,6 +295,7 @@ function DocRow({ doc, custId, onDeleted, onPreview }) {
 // ── Main component ────────────────────────────────────────────
 
 export default function LodgeCustomerInfo() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -758,7 +760,7 @@ export default function LodgeCustomerInfo() {
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
 
               {/* ─── Customer Details ─── */}

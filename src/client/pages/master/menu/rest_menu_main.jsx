@@ -1,4 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -102,6 +103,7 @@ function IngredientInput({ value, onChange, placeholder }) {
 }
 
 export default function MenuCardPage() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [groupFilter, setGroupFilter] = useState("__all__");
@@ -551,7 +553,7 @@ export default function MenuCardPage() {
                 : "Update this menu item."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               {/* Row 1 — Code | Item Name */}
               <div className="grid grid-cols-3 gap-3">

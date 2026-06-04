@@ -245,7 +245,7 @@ export function BillingProvider({ children }) {
 
   return (
     <BillingContext.Provider value={{
-      ...state,            // includes draftCustomerName from state
+      ...state,
       setSession,
       setView,
       selectMenuCategory,

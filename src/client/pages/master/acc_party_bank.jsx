@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -47,6 +48,7 @@ const EMPTY_FORM = { code: "", name: "", location: "" };
 // ─────────────────────────────────────────────────────────────
 
 export default function AccPartyBank() {
+  const enterNav = useEnterNav();
   const qc = useQueryClient();
   const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -241,7 +243,7 @@ export default function AccPartyBank() {
             <DialogTitle>{isEditMode ? "Edit Party Bank" : "Add Party Bank"}</DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <Field>
                 <FieldLabel>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -25,6 +26,7 @@ const QK = ["food-types"];
 const EMPTY = { code: "", name: "" };
 
 export default function FoodType() {
+  const enterNav = useEnterNav();
   const queryClient = useQueryClient();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "code", sortDir: "asc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -171,7 +173,7 @@ export default function FoodType() {
                 : "Update this food type."}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <div className="flex flex-col gap-3">
                 <Field>

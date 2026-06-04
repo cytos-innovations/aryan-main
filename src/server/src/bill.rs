@@ -1457,9 +1457,11 @@ pub async fn get_bill_summary(
 
 #[tauri::command]
 pub async fn generate_bill(
-    app:        tauri::AppHandle,
-    state:      tauri::State<'_, AppState>,
-    session_id: i32,
+    app:                  tauri::AppHandle,
+    state:                tauri::State<'_, AppState>,
+    session_id:           i32,
+    bill_discount_amount: Option<f64>,
+    bill_net_amount:      Option<f64>,
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
@@ -1492,13 +1494,22 @@ pub async fn generate_bill(
     .await
     .map_err(|e| format!("Totals failed: {e}"))?;
 
-    let gross_amount:    f64 = totals.try_get::<f64, _>("gross_amount").unwrap_or(0.0);
-    let discount_amount: f64 = totals.try_get::<f64, _>("discount_amount").unwrap_or(0.0);
-    let taxable_amount:  f64 = totals.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
-    let tax_amount:      f64 = totals.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
-    let final_amount:    f64 = totals.try_get::<f64, _>("final_amount").unwrap_or(0.0);
-    let round_off        = round2(final_amount.round() - final_amount);
-    let net_amount       = round2(final_amount + round_off);
+    let gross_amount:       f64 = totals.try_get::<f64, _>("gross_amount").unwrap_or(0.0);
+    let item_discount:      f64 = totals.try_get::<f64, _>("discount_amount").unwrap_or(0.0);
+    let taxable_amount:     f64 = totals.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
+    let tax_amount:         f64 = totals.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
+    let final_amount:       f64 = totals.try_get::<f64, _>("final_amount").unwrap_or(0.0);
+    // Bill-level discount (from the UI discount panel) is added on top of item discounts
+    let extra_disc:         f64 = bill_discount_amount.unwrap_or(0.0).max(0.0);
+    let discount_amount:    f64 = round2(item_discount + extra_disc);
+    let round_off               = round2(final_amount.round() - final_amount);
+    // If a UI-computed net_amount was passed (includes misc, service charge etc.) use it,
+    // otherwise derive from final_amount minus extra discount
+    let net_amount:         f64 = if let Some(n) = bill_net_amount {
+        round2(n)
+    } else {
+        round2(final_amount - extra_disc + round_off)
+    };
 
     // Get session details
     let (table_id, customer_id): (Option<i32>, Option<i32>) = {

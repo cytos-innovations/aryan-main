@@ -11,7 +11,6 @@ import {
   UserAccountIcon,
   Clock01Icon,
   CashIcon,
-  PercentIcon,
   Refresh01Icon,
   MultiplicationSignIcon,
 } from "@hugeicons/core-free-icons";
@@ -135,13 +134,18 @@ function BillListItem({ bill, onView }) {
 
 // ─── Bill detail view ─────────────────────────────────────────
 
+const STATUS_CLS = {
+  PAID: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  DUE:  "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+};
+
 function BillDetailView({ billId, onClose }) {
   const { data: bill, isLoading } = useBillForReprint(billId);
 
   if (isLoading) {
     return (
       <div className="flex flex-col h-full p-4 gap-3">
-        {Array.from({ length: 6 }).map((_, i) => (
+        {Array.from({ length: 8 }).map((_, i) => (
           <Skeleton key={i} className="h-8 rounded-md" />
         ))}
       </div>
@@ -165,58 +169,67 @@ function BillDetailView({ billId, onClose }) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Detail header */}
+
+      {/* ── Top bar ── */}
       <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 border-b bg-muted/20">
         <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 text-xs px-2" onClick={onClose}>
           <HugeiconsIcon icon={ArrowLeft01Icon} size={12} strokeWidth={2} />
           Back
         </Button>
         <Separator orientation="vertical" className="h-4" />
-        <HugeiconsIcon icon={ReceiptIndianRupeeIcon} size={13} strokeWidth={2} className="text-muted-foreground" />
-        <span className="text-sm font-semibold">{bill.bill_no ?? `Bill #${bill.id}`}</span>
+        <HugeiconsIcon icon={ReceiptIndianRupeeIcon} size={13} strokeWidth={2} className="text-primary" />
+        <span className="text-sm font-bold">{bill.bill_no ?? `Bill #${bill.id}`}</span>
         {bill.order_no && (
-          <span className="text-xs text-muted-foreground font-mono">{bill.order_no}</span>
+          <span className="text-[11px] text-muted-foreground font-mono">{bill.order_no}</span>
         )}
-        <div className="flex-1" />
-        <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-          bill.bill_status === "PAID"
-            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-            : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-        }`}>
+        <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ml-1 ${STATUS_CLS[bill.bill_status] ?? STATUS_CLS.DUE}`}>
           {bill.bill_status}
         </span>
+        <div className="flex-1" />
         <Button type="button" size="sm" className="h-7 gap-1.5 text-xs">
           <HugeiconsIcon icon={PrinterIcon} size={12} strokeWidth={2} />
           Print
         </Button>
       </div>
 
-      {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Info block */}
-        <div className="px-4 py-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs border-b">
-          {bill.table_name && <InfoRow label="Table"    value={bill.table_name} />}
-          {bill.order_type && <InfoRow label="Type"     value={bill.order_type.replace("_", " ")} />}
-          {bill.customer_name && <InfoRow label="Customer" value={bill.customer_name} />}
-          {bill.customer_mobile && <InfoRow label="Mobile"   value={bill.customer_mobile} />}
-          <InfoRow label="Settled" value={fmtDatetime(bill.settled_at ?? bill.created_at)} />
+      {/* ── Scrollable body ── */}
+      <div className="flex-1 overflow-y-auto divide-y">
+
+        {/* ── Bill Info ── */}
+        <div className="px-4 py-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+          <InfoRow label="Bill No"  value={bill.bill_no ?? `#${bill.id}`} bold />
+          <InfoRow label="Order No" value={bill.order_no ?? "—"} />
+          {bill.table_name  && <InfoRow label="Table"    value={bill.table_name} />}
+          {bill.order_type  && <InfoRow label="Type"     value={bill.order_type.replace(/_/g, " ")} />}
+          <InfoRow label="Status"   value={bill.bill_status} />
+          <InfoRow label="Settled"  value={fmtDatetime(bill.settled_at ?? bill.created_at)} />
         </div>
 
-        {/* Items */}
-        <div className="px-4 pt-3 pb-1">
-          <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Items</p>
+        {/* ── Customer Info ── */}
+        {(bill.customer_name || bill.customer_mobile) && (
+          <div className="px-4 py-3 space-y-1.5 text-xs">
+            <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Customer</p>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+              {bill.customer_name   && <InfoRow label="Name"   value={bill.customer_name} />}
+              {bill.customer_mobile && <InfoRow label="Mobile" value={bill.customer_mobile} />}
+            </div>
+          </div>
+        )}
+
+        {/* ── Items ── */}
+        <div className="px-4 py-3">
+          <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Items</p>
           <div className="border rounded-md overflow-hidden">
-            {/* Column header */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70">
               <span className="flex-1">Item</span>
-              <span className="w-10 text-center">Qty</span>
+              <span className="w-8 text-center">Qty</span>
               <span className="w-16 text-right">Rate</span>
               <span className="w-16 text-right">Amount</span>
             </div>
-            {(bill.items ?? []).map((item) => (
-              <div key={item.id} className="flex items-center gap-2 px-3 py-1.5 border-t text-xs">
+            {(bill.items ?? []).map((item, i) => (
+              <div key={item.id ?? i} className="flex items-center gap-2 px-3 py-1.5 border-t text-xs">
                 <span className="flex-1 min-w-0 truncate font-medium">{item.item_name}</span>
-                <span className="w-10 text-center tabular-nums text-muted-foreground">{item.quantity}</span>
+                <span className="w-8 text-center tabular-nums text-muted-foreground">{item.quantity}</span>
                 <span className="w-16 text-right tabular-nums text-muted-foreground">₹{fmtAmount(item.rate)}</span>
                 <span className="w-16 text-right tabular-nums font-semibold">₹{fmtAmount(item.final_amount)}</span>
               </div>
@@ -224,62 +237,57 @@ function BillDetailView({ billId, onClose }) {
           </div>
         </div>
 
-        {/* Totals */}
-        <div className="px-4 py-3 space-y-1.5 text-xs border-t mt-2">
+        {/* ── Bill Totals ── */}
+        <div className="px-4 py-3 space-y-1.5 text-xs">
+          <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Bill Summary</p>
+          <TotalsRow label="Gross Amount" value={bill.gross_amount} />
           {bill.discount_amount > 0 && (
             <TotalsRow label="Discount" value={-bill.discount_amount} accent="text-emerald-600 dark:text-emerald-400" />
           )}
-          {(bill.tax_details ?? []).map((t) => (
-            <TotalsRow
-              key={t.tax_name}
-              label={`${t.tax_name} (${t.tax_percentage}%)`}
-              value={t.tax_amount}
-            />
-          ))}
-          {bill.tax_amount > 0 && (bill.tax_details ?? []).length === 0 && (
-            <TotalsRow label="Tax" value={bill.tax_amount} />
-          )}
-          {roundOff !== 0 && (
-            <TotalsRow label="Round Off" value={roundOff} small />
-          )}
-          <div className="flex items-center justify-between pt-1 border-t font-bold">
-            <span>Net Total</span>
-            <span className="tabular-nums text-base">₹{fmtAmount(bill.net_amount)}</span>
+          {(bill.tax_details ?? []).length > 0
+            ? (bill.tax_details.map((t) => (
+                <TotalsRow key={t.tax_name} label={`${t.tax_name} (${t.tax_percentage}%)`} value={t.tax_amount} />
+              )))
+            : bill.tax_amount > 0 && <TotalsRow label="Tax" value={bill.tax_amount} />
+          }
+          {roundOff !== 0 && <TotalsRow label="Round Off" value={roundOff} small />}
+          <div className="flex items-center justify-between pt-2 border-t">
+            <span className="font-bold text-sm">Net Total</span>
+            <span className="tabular-nums font-bold text-base">₹{fmtAmount(bill.net_amount)}</span>
           </div>
         </div>
 
-        {/* Payments */}
+        {/* ── Payments ── */}
         {(bill.payments ?? []).length > 0 && (
-          <div className="px-4 pb-4 border-t pt-3">
-            <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-              Payment
-            </p>
-            <div className="space-y-1">
+          <div className="px-4 py-3 text-xs">
+            <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Payment</p>
+            <div className="border rounded-md overflow-hidden">
               {bill.payments.map((p, i) => (
-                <div key={i} className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                <div key={i} className="flex items-center justify-between px-3 py-2 border-b last:border-b-0">
+                  <div className="flex items-center gap-2 text-muted-foreground">
                     <HugeiconsIcon icon={CashIcon} size={11} strokeWidth={2} />
-                    <span>{p.payment_type}</span>
+                    <span className="font-medium text-foreground">{p.payment_type}</span>
                     {p.reference_no && (
-                      <span className="font-mono text-[10px]">· {p.reference_no}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">· {p.reference_no}</span>
                     )}
                   </div>
-                  <span className="tabular-nums font-medium">₹{fmtAmount(p.payment_amount)}</span>
+                  <span className="tabular-nums font-semibold">₹{fmtAmount(p.payment_amount)}</span>
                 </div>
               ))}
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
 }
 
-function InfoRow({ label, value }) {
+function InfoRow({ label, value, bold }) {
   return (
     <div className="flex gap-1">
       <span className="text-muted-foreground shrink-0 w-16">{label}</span>
-      <span className="font-medium truncate">{value}</span>
+      <span className={`truncate ${bold ? "font-bold" : "font-medium"}`}>{value}</span>
     </div>
   );
 }
@@ -319,14 +327,17 @@ export default function BillReprintSheet({ open, onOpenChange }) {
     : { search: null, ...range };
   const { data: bills, isLoading, isFetching, isError, error, refetch } = useSettledBills(queryParams);
 
-  // Auto-focus search on open; reset to list view
+  // Auto-focus search on open; reset to list view; force fresh fetch
   useEffect(() => {
     if (open) {
       setViewBillId(null);
       setCommitted("");
       setSearchInput("");
       setTimeout(() => searchRef.current?.focus(), 80);
+      // Refetch on every open so newly settled bills always appear
+      setTimeout(() => refetch(), 100);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   function handleSearchKey(e) {

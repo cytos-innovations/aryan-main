@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -112,6 +113,7 @@ function TallyLookupInput({ codeValue, nameValue, onCodeChange, onResolved }) {
 // ─────────────────────────────────────────────────────────────
 
 export default function AccDebtor() {
+  const enterNav = useEnterNav();
   const qc = useQueryClient();
   const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -383,7 +385,7 @@ export default function AccDebtor() {
             <DialogTitle>{isEditMode ? "Edit Debtor" : "Add Debtor"}</DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
             <Field>
               <FieldLabel>
                 Code {isEditMode && <span className="text-destructive">*</span>}

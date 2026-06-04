@@ -2,14 +2,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { toast } from "sonner";
 import {
-  SendingOrderIcon,
   PrinterIcon,
-  ReceiptIndianRupeeIcon,
   CashIcon,
   Hold01Icon,
   Discount01Icon,
   ArrowLeft01Icon,
   AlertCircleIcon,
+  CouponPercentIcon,
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -76,7 +75,7 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
 // ─── Billing mode panel (single-row action bar) ───────────────
 
 function BillingModePanel({
-  kotLabel, canKot, kotPending,
+  canKot, kotPending,
   canBill, billPending,
   canSettle,
   netAmount,
@@ -85,29 +84,15 @@ function BillingModePanel({
   return (
     <div className="flex items-stretch gap-1.5 px-2 py-1.5">
       <ActionBtn
-        icon={SendingOrderIcon}
-        label={kotLabel}
-        shortcut="F8"
-        onClick={onKot}
-        disabled={!canKot || kotPending}
-        variant="default"
-        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
-      />
-      <ActionBtn
         icon={PrinterIcon}
         label="KOT+Print"
         shortcut="Home"
         onClick={onKot}
         disabled={!canKot || kotPending}
+        variant="default"
+        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
         data-pos-action="kotprint"
         onKeyDown={makePosTabHandler("kotprint")}
-      />
-      <ActionBtn
-        icon={ReceiptIndianRupeeIcon}
-        label="Bill"
-        shortcut="F9"
-        onClick={onBill}
-        disabled={!canBill || billPending}
       />
       <ActionBtn
         icon={PrinterIcon}
@@ -117,6 +102,12 @@ function BillingModePanel({
         disabled={!canBill || billPending}
         data-pos-action="billprint"
         onKeyDown={makePosTabHandler("billprint")}
+      />
+      <ActionBtn
+        icon={CouponPercentIcon}
+        label="Pre-Disc"
+        shortcut="F8"
+        disabled
       />
       <ActionBtn
         icon={Discount01Icon}
@@ -148,116 +139,154 @@ function BillingModePanel({
 // ─── Discount mode panel ──────────────────────────────────────
 
 const r2 = (n) => Math.round(n * 100) / 100;
-const clampPct = (p) => Math.max(0, Math.min(100, p));
-// Keep only digits and a single decimal point
 const sanitizeNum = (v) => v.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
 
-/**
- * Bill-discount editor — compact single-row strip (matches the billing bar
- * height). Shows total + tax, two linked inputs (% ↔ ₹), and a live discount /
- * net readout. Save commits the percent (driving every dependent total and the
- * Settle amount); Cancel discards the edit.
- */
-function DiscountModePanel({ totals, discountPercent, onApply, onBack }) {
-  const base = totals.finalAmount || 0;
+function DiscField({ label, value, onChange, readOnly, autoFocus, onKeyDown, inputRef }) {
+  return (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <span className="text-[10px] font-bold text-foreground whitespace-nowrap">{label}</span>
+      <input
+        ref={inputRef}
+        inputMode="decimal"
+        value={value}
+        readOnly={readOnly}
+        onChange={onChange ? (e) => onChange(sanitizeNum(e.target.value)) : undefined}
+        onFocus={(e) => !readOnly && e.target.select()}
+        onKeyDown={onKeyDown}
+        // eslint-disable-next-line jsx-a11y/no-autofocus
+        autoFocus={autoFocus}
+        className={[
+          "w-18 h-7 rounded border text-xs text-right tabular-nums px-2",
+          "bg-muted/30 border-border/60",
+          "focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary",
+          readOnly
+            ? "text-foreground font-semibold bg-muted/10 border-border/30 cursor-default select-none"
+            : "text-foreground",
+        ].join(" ")}
+      />
+    </div>
+  );
+}
 
-  const [pctStr, setPctStr] = useState(() => String(Number(discountPercent) || 0));
-  const [amtStr, setAmtStr] = useState(() => String(r2((base * (Number(discountPercent) || 0)) / 100)));
+function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onApply, onBack }) {
+  const billAmt = totals.finalAmount || 0;
+  const taxAmt  = totals.taxAmount   || 0;
 
-  function changePct(raw) {
-    const v = sanitizeNum(raw);
-    setPctStr(v);
-    const p = clampPct(Number(v) || 0);
-    setAmtStr(String(r2((base * p) / 100)));
+  // Pre-fill from saved discount if available
+  const [discAmt,   setDiscAmt]   = useState(() => String(sessionDisc?.discAmt   ?? 0));
+  const [misc,      setMisc]      = useState(() => String(sessionDisc?.misc      ?? 0));
+  const [miscMinus, setMiscMinus] = useState(() => String(sessionDisc?.miscMinus ?? 0));
+  // Food & Liquor stored as percent (0–100)
+  const [foodPct,   setFoodPct]   = useState(() => String(sessionDisc?.foodPct   ?? 0));
+  const [liquorPct, setLiquorPct] = useState(() => String(sessionDisc?.liquorPct ?? 0));
+  const [sCharge,   setSCharge]   = useState(() => String(sessionDisc?.sCharge   ?? 0));
+  const [tDisc,     setTDisc]     = useState(() => String(sessionDisc?.tDisc     ?? 0));
+
+  // Discount amounts derived from percentages
+  const foodDiscAmt   = r2((foodTotal   * Math.min(100, Math.max(0, Number(foodPct)   || 0))) / 100);
+  const liquorDiscAmt = r2((liquorTotal * Math.min(100, Math.max(0, Number(liquorPct) || 0))) / 100);
+
+  const net = r2(
+    billAmt
+    - (Number(discAmt)   || 0)
+    - foodDiscAmt
+    - liquorDiscAmt
+    + (Number(misc)      || 0)
+    - (Number(miscMinus) || 0)
+    + (Number(sCharge)   || 0)
+    - (Number(tDisc)     || 0)
+  );
+
+  const r0 = useRef(null), r1 = useRef(null), r2ref = useRef(null),
+        r3 = useRef(null), r4 = useRef(null), r5    = useRef(null), r6 = useRef(null);
+  const fieldRefs = [r0, r1, r2ref, r3, r4, r5, r6];
+  function next(i) { fieldRefs[i + 1]?.current?.focus(); }
+  function kd(i)   { return (e) => { if (e.key === "Enter") { e.preventDefault(); next(i); } }; }
+
+  function handleSave() {
+    const totalDiscAmt = r2(
+      (Number(discAmt) || 0) + foodDiscAmt + liquorDiscAmt + (Number(tDisc) || 0)
+    );
+    const discPct = billAmt > 0 ? r2((totalDiscAmt / billAmt) * 100) : 0;
+    onApply({
+      discAmt:    Number(discAmt)   || 0,
+      misc:       Number(misc)      || 0,
+      miscMinus:  Number(miscMinus) || 0,
+      foodPct:    Number(foodPct)   || 0,
+      foodDiscAmt,
+      liquorPct:  Number(liquorPct) || 0,
+      liquorDiscAmt,
+      sCharge:    Number(sCharge)   || 0,
+      tDisc:      Number(tDisc)     || 0,
+      netAmt:     net,
+      discPct,
+    });
+    onBack();
   }
-  function changeAmt(raw) {
-    const v = sanitizeNum(raw);
-    setAmtStr(v);
-    const a = Math.max(0, Math.min(base, Number(v) || 0));
-    setPctStr(String(base > 0 ? r2((a / base) * 100) : 0));
-  }
-
-  const pctNum      = clampPct(Number(pctStr) || 0);
-  const discountAmt = r2((base * pctNum) / 100);
-  const afterDisc   = r2(base - discountAmt);
-  const roundOff    = r2(Math.round(afterDisc) - afterDisc);
-  const net         = r2(afterDisc + roundOff);
-
-  function handleSave() { onApply(pctNum); onBack(); }
 
   return (
-    <div className="flex items-center gap-3 px-3 py-2.5 min-h-20.5">
-      {/* Back + title */}
-      <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 text-xs px-2 -ml-1 shrink-0" onClick={onBack}>
-        <HugeiconsIcon icon={ArrowLeft01Icon} size={12} strokeWidth={2} />
-        Back
-      </Button>
-      <div className="flex items-center gap-1.5 shrink-0">
-        <HugeiconsIcon icon={Discount01Icon} size={16} strokeWidth={2} className="text-primary" />
-        <span className="text-sm font-semibold">Discount</span>
-      </div>
-
-      {/* Inline summary */}
-      <div className="flex items-center gap-3 text-[11px] shrink-0">
-        <span className="text-muted-foreground">
-          Total <span className="text-foreground font-medium tabular-nums">₹{fmtAmount(base)}</span>
-        </span>
-        {totals.taxAmount > 0 && (
-          <span className="text-muted-foreground">
-            Tax <span className="text-foreground font-medium tabular-nums">₹{fmtAmount(totals.taxAmount)}</span>
-          </span>
-        )}
-      </div>
-
-      {/* Linked inputs */}
-      <div className="flex items-center gap-2 ml-auto shrink-0">
-        {/* Percent */}
-        <div className="flex items-center h-8 rounded-md border bg-background overflow-hidden transition-shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40">
+    <div className="px-3 py-2 bg-card border-t space-y-1.5">
+      {/* Row 1 */}
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <DiscField label="Tax Amt. :"  value={fmtAmount(taxAmt)}  readOnly />
+        <DiscField label="Bill Amt. :" value={fmtAmount(billAmt)} readOnly />
+        <DiscField label="+ Misc :"    value={misc}      autoFocus inputRef={r0} onChange={setMisc}      onKeyDown={kd(0)} />
+        <DiscField label="- Misc :"    value={miscMinus}           inputRef={r1} onChange={setMiscMinus} onKeyDown={kd(1)} />
+        {/* Food % — shows derived amount beside the input */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-[10px] font-bold text-foreground whitespace-nowrap">Food % :</span>
           <input
+            ref={r2ref}
             inputMode="decimal"
-            value={pctStr}
-            onChange={(e) => changePct(e.target.value)}
+            value={foodPct}
+            onChange={(e) => setFoodPct(sanitizeNum(e.target.value))}
             onFocus={(e) => e.target.select()}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
-            className="w-16 h-full bg-transparent px-2 text-sm text-right tabular-nums outline-none"
-            // eslint-disable-next-line jsx-a11y/no-autofocus
-            autoFocus
+            onKeyDown={kd(2)}
+            className="w-14 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
           />
-          <span className="h-full px-2 flex items-center text-xs font-medium text-muted-foreground border-l bg-muted/50">%</span>
+          <span className="text-[10px] font-mono text-muted-foreground">%</span>
+          {foodDiscAmt > 0 && (
+            <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(foodDiscAmt)}</span>
+          )}
         </div>
-
-        <span className="text-muted-foreground text-xs">=</span>
-
-        {/* Amount */}
-        <div className="flex items-center h-8 rounded-md border bg-background overflow-hidden transition-shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40">
-          <span className="h-full px-2 flex items-center text-xs font-medium text-muted-foreground border-r bg-muted/50">₹</span>
+        {/* Liquor % */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-[10px] font-bold text-foreground whitespace-nowrap">Liquor % :</span>
           <input
+            ref={r3}
             inputMode="decimal"
-            value={amtStr}
-            onChange={(e) => changeAmt(e.target.value)}
+            value={liquorPct}
+            onChange={(e) => setLiquorPct(sanitizeNum(e.target.value))}
             onFocus={(e) => e.target.select()}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
-            className="w-20 h-full bg-transparent px-2 text-sm text-right tabular-nums outline-none"
+            onKeyDown={kd(3)}
+            className="w-14 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
           />
+          <span className="text-[10px] font-mono text-muted-foreground">%</span>
+          {liquorDiscAmt > 0 && (
+            <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(liquorDiscAmt)}</span>
+          )}
         </div>
       </div>
-
-      {/* Discount + Net readout */}
-      <div className="flex items-center gap-3 shrink-0 border-l pl-3">
-        <div className="text-right leading-tight">
-          <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Discount</div>
-          <div className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(discountAmt)}</div>
+      {/* Row 2 */}
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <DiscField label="Disc Amt :"         value={discAmt} inputRef={r4} onChange={setDiscAmt}  onKeyDown={kd(4)} />
+        <DiscField label="+ Service Charge :" value={sCharge} inputRef={r5} onChange={setSCharge}  onKeyDown={kd(5)} />
+        <DiscField label="Total Discount :"   value={tDisc}   inputRef={r6} onChange={setTDisc}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }} />
+        <DiscField label="Net Amt :" value={fmtAmount(net)} readOnly />
+        <div className="flex items-center gap-1.5 ml-auto">
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSave}
+            className="h-8 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground border-0"
+          >
+            Save
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onBack} className="h-8 px-4 text-xs">
+            Cancel
+          </Button>
         </div>
-        <div className="text-right leading-tight">
-          <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Net</div>
-          <div className="text-sm font-bold tabular-nums">₹{fmtAmount(net)}</div>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2 shrink-0">
-        <Button type="button" variant="outline" size="sm" className="h-8 px-3 text-xs" onClick={onBack}>Cancel</Button>
-        <Button type="button" size="sm" className="h-8 px-4 text-xs" onClick={handleSave}>Save</Button>
       </div>
     </div>
   );
@@ -271,7 +300,7 @@ export default function BottomActionBar({
   netAmount, billId, isSettling,
   onRequestSettle, settleDialogOpen,
   onKotDraft, onCancel,
-  discountPercent, onDiscountChange,
+  discountPercent, sessionDisc, onDiscountChange,
 }) {
   const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
   const generateKot  = useGenerateKot(sessionId);
@@ -279,8 +308,10 @@ export default function BottomActionBar({
   const [panelMode, setPanelMode] = useState(BOTTOM_PANEL_MODE.BILLING);
 
   // ── Derived state ─────────────────────────────────────────
-  const activeItems = (items ?? []).filter((i) => i.item_status === "ACTIVE");
-  const billTotals  = calcBillTotals(items ?? []);
+  const activeItems  = (items ?? []).filter((i) => i.item_status === "ACTIVE");
+  const billTotals   = calcBillTotals(items ?? []);
+  const foodTotal    = activeItems.filter((i) => !i.is_liquor).reduce((s, i) => s + (Number(i.final_amount) || 0), 0);
+  const liquorTotal  = activeItems.filter((i) =>  i.is_liquor).reduce((s, i) => s + (Number(i.final_amount) || 0), 0);
   const pendingKot  = activeItems.filter((i) => i.kot_status === "PENDING").length;
   const hasItems    = activeItems.length > 0;
   const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED";
@@ -290,7 +321,6 @@ export default function BottomActionBar({
   const canBill   = !isDraft && hasItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
   const canSettle = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
   const kotPending = isDraft ? isKotting : generateKot.isPending;
-  const kotLabel   = kotPending ? "Sending…" : (isDraft ? "KOT" : (pendingKot > 0 ? `KOT (${pendingKot})` : "KOT"));
 
   // Persist UI-held KOT messages for existing pending items into the DB
   async function flushPendingKotMsgs() {
@@ -322,8 +352,18 @@ export default function BottomActionBar({
   }, [isNearReservation, isDraft, onKotDraft, generateKot, clearSession, pendingItemKotMsgs]);
 
   const handleBill = useCallback(() => {
-    generateBill.mutate(undefined, { onSuccess: clearSession });
-  }, [generateBill, clearSession]);
+    const payload = sessionDisc ? {
+      // Total of all discount types: disc amt + food disc + liquor disc + total disc
+      billDiscountAmount: Math.round((
+        (sessionDisc.discAmt      || 0) +
+        (sessionDisc.foodDiscAmt  || 0) +
+        (sessionDisc.liquorDiscAmt|| 0) +
+        (sessionDisc.tDisc        || 0)
+      ) * 100) / 100,
+      billNetAmount: sessionDisc.netAmt ?? undefined,
+    } : {};
+    generateBill.mutate(payload, { onSuccess: clearSession });
+  }, [generateBill, clearSession, sessionDisc]);
 
   // Settle now opens the SettleDialog (customer + payment method + split)
   const handleSettle = useCallback(() => {
@@ -339,13 +379,13 @@ export default function BottomActionBar({
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
-    const POS_KEYS = new Set(["Home", "F11", "/", "*"]);
+    const POS_KEYS = new Set(["Home", "F11", "/"]);
 
     function onKey(e) {
       const tag = e.target.tagName;
       const isInput    = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       const isSearchBar = isInput && e.target.hasAttribute("data-pos-search");
-      const isCharKey  = e.key === "/" || e.key === "*";
+      const isCharKey  = e.key === "/";
       // Block char-key shortcuts in non-search inputs (e.g. payment amount field)
       // but allow them through from the search bar (search bar prevents typing them already)
       if (isInput && !isSearchBar && isCharKey) return;
@@ -361,7 +401,7 @@ export default function BottomActionBar({
 
       if (cur.panelMode !== BOTTOM_PANEL_MODE.BILLING) return;
 
-      // Prevent browser defaults for all POS keys (F11 fullscreen, F7 caret, etc.)
+      // Prevent browser defaults for all POS keys (F11 fullscreen, etc.)
       if (POS_KEYS.has(e.key)) e.preventDefault();
 
       switch (e.key) {
@@ -401,7 +441,6 @@ export default function BottomActionBar({
       <div key={panelMode} className="animate-in fade-in duration-150">
         {panelMode === BOTTOM_PANEL_MODE.BILLING && (
           <BillingModePanel
-            kotLabel={kotLabel}
             canKot={canKot}
             kotPending={kotPending}
             canBill={canBill}
@@ -418,7 +457,9 @@ export default function BottomActionBar({
         {panelMode === BOTTOM_PANEL_MODE.DISCOUNT && (
           <DiscountModePanel
             totals={billTotals}
-            discountPercent={discountPercent}
+            foodTotal={foodTotal}
+            liquorTotal={liquorTotal}
+            sessionDisc={sessionDisc}
             onApply={onDiscountChange}
             onBack={() => setPanelMode(BOTTOM_PANEL_MODE.BILLING)}
           />

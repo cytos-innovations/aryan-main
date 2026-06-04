@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -54,6 +55,7 @@ const EMPTY_FORM = { code: "", name: "", categoryId: null };
 // ─────────────────────────────────────────────────────────────
 
 export default function AccAccountGroups() {
+  const enterNav = useEnterNav();
   const qc = useQueryClient();
   const [qs, setQs] = useState(DEFAULT_QUERY_STATE);
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
@@ -253,7 +255,7 @@ export default function AccAccountGroups() {
             <DialogTitle>{isEditMode ? "Edit Account Group" : "Add Account Group"}</DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
             <Field>
               <FieldLabel>
                 Group Code {isEditMode && <span className="text-destructive">*</span>}
