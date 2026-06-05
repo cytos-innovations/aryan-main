@@ -71,7 +71,7 @@ function MenuCardCombobox({ options, value, onSelect, disabled }) {
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[var(--radix-popover-trigger-width)] p-0"
+        className="w-var(--radix-popover-trigger-width) p-0"
         style={{ "--radix-popover-trigger-width": "100%" }}
       >
         <div className="p-2 border-b">
