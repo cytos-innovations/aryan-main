@@ -1241,6 +1241,36 @@ CREATE TABLE IF NOT EXISTS user_discount_cap (
     UNIQUE(user_id)
 );
 
+-- KOT ITEM VOID LOG
+-- Audit trail for every item removed after KOT has been sent
+
+CREATE TABLE IF NOT EXISTS kot_item_void_log (
+    id                  SERIAL PRIMARY KEY,
+    order_item_id       INTEGER NOT NULL REFERENCES order_item(id),
+    order_session_id    INTEGER NOT NULL REFERENCES order_session(id),
+    kot_id              INTEGER          REFERENCES kot_master(id),
+    table_id            INTEGER          REFERENCES restaurant_table(id),
+    user_id             INTEGER REFERENCES users(id),
+    voided_by           VARCHAR(100),                    -- username snapshot (works for superadmin too)
+    item_name           VARCHAR(250) NOT NULL,          -- snapshot at void time
+    quantity_voided     NUMERIC(12,3) NOT NULL,          -- how many units were removed
+    void_reason         TEXT NOT NULL,                   -- mandatory reason entered by user
+    void_type           VARCHAR(20) NOT NULL DEFAULT 'REMOVE', -- REMOVE (full) | QTY_REDUCE
+    previous_quantity   NUMERIC(12,3),                   -- qty before the action
+    new_quantity        NUMERIC(12,3),                   -- qty after (0 = fully removed)
+
+    -- Standard Audit & Status Columns
+    is_active           INTEGER     NOT NULL DEFAULT 1,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by          INTEGER REFERENCES users(id),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by          INTEGER REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_void_log_session  ON kot_item_void_log(order_session_id);
+CREATE INDEX IF NOT EXISTS idx_void_log_kot      ON kot_item_void_log(kot_id);
+CREATE INDEX IF NOT EXISTS idx_void_log_user     ON kot_item_void_log(user_id);
+
 -- TABLE RESERVATION MASTER
 -- Handles future dining reservations
 

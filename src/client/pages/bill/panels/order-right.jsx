@@ -13,14 +13,17 @@ import {
   Discount01Icon,
   Comment01Icon,
   Cancel01Icon,
+  AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
 
-import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/lib/auth";
 import { useBillingContext } from "../state/billing-context";
 import {
   useUpdateOrderItemQty,
   useCancelOrderItem,
+  useCancelOrderItemWithReason,
   useUpdateSessionInfo,
   useUpdateSessionParty,
   useSearchKotMessages,
@@ -30,6 +33,118 @@ import { calcBillTotals, calcTaxBreakdown, fmtAmount } from "../utils/billing-ca
 import { FoodTypeDot } from "./menu-center";
 import { CustomerPicker, WaiterPicker } from "./party-pickers";
 import KotMessagePicker from "./kot-message-picker";
+
+// ─── Void reason dialog ───────────────────────────────────────
+
+const QUICK_REASONS = [
+  "Customer changed mind",
+  "Wrong item ordered",
+  "Item not available",
+  "Customer left",
+  "Duplicate entry",
+];
+
+function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
+  const [reason, setReason] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 60);
+  }, []);
+
+  function handleConfirm() {
+    const trimmed = reason.trim();
+    if (!trimmed) return;
+    onConfirm(trimmed);
+  }
+
+  function handleKey(e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleConfirm(); }
+    if (e.key === "Escape") onClose();
+  }
+
+  const isFullRemove = quantityToVoid >= (Number(item.quantity) || 1);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-card border rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-2.5 px-4 py-3 bg-destructive/10 border-b border-destructive/20">
+          <HugeiconsIcon icon={AlertCircleIcon} size={16} strokeWidth={2} className="text-destructive shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-destructive">
+              {isFullRemove ? "Remove KOT Item" : "Reduce KOT Item Quantity"}
+            </p>
+            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+              {item.item_name}
+              {!isFullRemove && (
+                <span className="ml-1 text-destructive font-medium">
+                  (−{quantityToVoid} of {item.quantity})
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="px-4 py-3 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            This item has already been sent to the kitchen. Select or type a reason to proceed.
+          </p>
+
+          {/* Quick pick */}
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_REASONS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setReason(r)}
+                className={[
+                  "text-[10px] px-2 py-1 rounded-full border transition-colors",
+                  reason === r
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/50 border-border/60 hover:bg-muted text-foreground",
+                ].join(" ")}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+
+          {/* Free-text */}
+          <textarea
+            ref={inputRef}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="Or type a custom reason…"
+            rows={2}
+            className="w-full text-xs rounded border border-border/60 bg-muted/30 px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground placeholder:text-muted-foreground/50"
+          />
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t bg-muted/20">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-8 px-4 text-xs">
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleConfirm}
+            disabled={!reason.trim()}
+            className="h-8 px-4 text-xs bg-destructive hover:bg-destructive/90 text-destructive-foreground border-0 disabled:opacity-40"
+          >
+            {isFullRemove ? "Remove Item" : "Reduce Qty"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── KOT status config ────────────────────────────────────────
 
@@ -54,8 +169,10 @@ function KotDot({ status }) {
 // ─── Order item row ───────────────────────────────────────────
 
 function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActive, onQtyEnter }) {
-  const updateQty  = useUpdateOrderItemQty(sessionId);
-  const cancelItem = useCancelOrderItem(sessionId);
+  const { auth } = useAuth();
+  const updateQty       = useUpdateOrderItemQty(sessionId);
+  const cancelItem      = useCancelOrderItem(sessionId);
+  const cancelWithReason = useCancelOrderItemWithReason(sessionId);
   const {
     updateDraftQty, removeDraftItem,
     setDraftItemKotMsg, setPendingItemKotMsg, pendingItemKotMsgs,
@@ -66,13 +183,18 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
   const [kotInput,      setKotInput]      = useState("");
   const [dropdownOpen,  setDropdownOpen]  = useState(false);
   const [activeIdx,     setActiveIdx]     = useState(-1);
+  // void dialog state: null = closed, { quantityToVoid } = open
+  const [voidDialog,    setVoidDialog]    = useState(null);
   const kotInputRef                       = useRef(null);
   const qtyInputRef                       = useRef(null);
   const dropdownRef                       = useRef(null);
 
   if (item.item_status === "CANCELLED") return null;
 
-  const canEdit = isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE");
+  const isKotSent = !isDraft && item.kot_status !== "PENDING" && item.item_status === "ACTIVE";
+  const canEdit   = isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE");
+  // KOT-sent items can still be removed/reduced — they just need a reason
+  const canRemove = canEdit || isKotSent;
 
   const hasPending = !isDraft && Object.prototype.hasOwnProperty.call(pendingItemKotMsgs, item.id);
   const kotMessage = isDraft
@@ -160,8 +282,10 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
   }
 
   function handleDecrement() {
-    if (isDraft) updateDraftQty(item.menu_id, item.quantity - 1);
-    else updateQty.mutate({ id: item.id, qty: item.quantity - 1 });
+    if (isDraft) { updateDraftQty(item.menu_id, item.quantity - 1); return; }
+    if (canEdit) { updateQty.mutate({ id: item.id, qty: item.quantity - 1 }); return; }
+    // KOT-sent: open void dialog to reduce by 1
+    if (isKotSent) setVoidDialog({ quantityToVoid: 1 });
   }
 
   function handleIncrement() {
@@ -170,8 +294,21 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
   }
 
   function handleRemove() {
-    if (isDraft) removeDraftItem(item.menu_id);
-    else cancelItem.mutate(item.id);
+    if (isDraft) { removeDraftItem(item.menu_id); return; }
+    if (canEdit) { cancelItem.mutate(item.id); return; }
+    // KOT-sent: open void dialog to remove the full quantity
+    if (isKotSent) setVoidDialog({ quantityToVoid: Number(item.quantity) });
+  }
+
+  function handleVoidConfirm(reason) {
+    cancelWithReason.mutate({
+      orderItemId:    item.id,
+      quantityToVoid: voidDialog.quantityToVoid,
+      voidReason:     reason,
+      userId:         auth?.user?.id ?? null,
+      voidedBy:       auth?.user?.username ?? null,
+    });
+    setVoidDialog(null);
   }
 
   function startQtyEdit() {
@@ -196,9 +333,10 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
     if (e.key === "Escape") { setQtyEditing(false); onQtyEnter?.(); }
   }
 
-  const decDisabled = isDraft ? item.quantity <= 1 : (!canEdit || item.quantity <= 1 || updateQty.isPending);
+  const isMutating  = cancelItem.isPending || cancelWithReason.isPending || updateQty.isPending;
+  const decDisabled = isDraft ? item.quantity <= 1 : ((!canRemove) || item.quantity <= 1 || isMutating);
   const incDisabled = isDraft ? false : (!canEdit || updateQty.isPending);
-  const delDisabled = isDraft ? false : (!canEdit || cancelItem.isPending);
+  const delDisabled = isDraft ? false : (!canRemove || isMutating);
 
   // qty=1: show trash on left instead of minus
   const showTrashLeft = item.quantity === 1;
@@ -394,6 +532,16 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
             {item.special_instruction}
           </p>
         </div>
+      )}
+
+      {/* Void reason dialog — portal over the whole screen */}
+      {voidDialog && (
+        <VoidReasonDialog
+          item={item}
+          quantityToVoid={voidDialog.quantityToVoid}
+          onConfirm={handleVoidConfirm}
+          onClose={() => setVoidDialog(null)}
+        />
       )}
     </div>
   );
@@ -639,6 +787,8 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
   const currentOrderType = isDraft ? draftOrderType : session?.order_type;
   const currentCovers    = isDraft ? draftCovers    : (session?.covers ?? 1);
   const isClosed         = !isDraft && session?.session_status === "BILL_PRINTED";
+  // Customer/waiter can still be assigned after bill is printed (until settled)
+  const isPartyLocked    = !isDraft && session?.session_status === "SETTLED";
 
   // Resolve current party values (draft vs DB session)
   const customerId     = isDraft ? draftCustomerId     : session?.customer_id;
@@ -681,12 +831,12 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
           customerId={customerId}
           customerName={customerName}
           customerMobile={customerMobile}
-          disabled={isClosed}
+          disabled={isPartyLocked}
           onSelect={handleSelectCustomer}
         />
         <WaiterPicker
           waiterName={waiterName}
-          disabled={isClosed}
+          disabled={isPartyLocked}
           onSelect={handleSelectWaiter}
         />
 
