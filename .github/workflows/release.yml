@@ -34,10 +34,11 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
-        run: npm run tauri build
+        shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
 
       - name: List bundle output
         shell: pwsh
@@ -54,24 +55,23 @@ jobs:
           $repo    = "${{ github.repository }}"
           $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
-          # Find MSI (always produced)
-          $msi    = Get-ChildItem -Recurse "$bundle" -Filter "*.msi"    | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
-          $msisig = Get-ChildItem -Recurse "$bundle" -Filter "*.msi.sig" | Select-Object -First 1
-
-          # Find NSIS exe if it exists
-          $nsis    = Get-ChildItem -Recurse "$bundle" -Filter "*.exe"    | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
+          # Find installer files
+          $msi     = Get-ChildItem -Recurse "$bundle" -Filter "*.msi"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
+          $msisig  = Get-ChildItem -Recurse "$bundle" -Filter "*.msi.sig" | Select-Object -First 1
+          $nsis    = Get-ChildItem -Recurse "$bundle" -Filter "*.exe"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
           $nsisig  = Get-ChildItem -Recurse "$bundle" -Filter "*.exe.sig" | Select-Object -First 1
 
-          # Pick the best available sig (prefer NSIS, fall back to MSI)
-          if ($nsisig) {
-            $chosenInstaller = $nsis
-            $chosenSig       = $nsisig
-          } else {
-            $chosenInstaller = $msi
-            $chosenSig       = $msisig
-          }
+          Write-Host "MSI:      $($msi?.FullName)"
+          Write-Host "MSI SIG:  $($msisig?.FullName)"
+          Write-Host "NSIS:     $($nsis?.FullName)"
+          Write-Host "NSIS SIG: $($nsisig?.FullName)"
 
-          $sig = (Get-Content $chosenSig.FullName -Raw).Trim()
+          # Pick best available sig
+          $chosenInstaller = if ($nsisig) { $nsis } else { $msi }
+          $chosenSig       = if ($nsisig) { $nsisig } else { $msisig }
+
+          # Build latest.json — sig is empty string if not available
+          $sig = if ($chosenSig) { (Get-Content $chosenSig.FullName -Raw).Trim() } else { "" }
           $url = "https://github.com/$repo/releases/download/$tag/$($chosenInstaller.Name)"
 
           $json = [ordered]@{
@@ -87,18 +87,14 @@ jobs:
           } | ConvertTo-Json -Depth 5
 
           $json | Out-File -FilePath "latest.json" -Encoding utf8NoBOM
-          Write-Host "latest.json contents:"
+          Write-Host "latest.json:"
           Get-Content "latest.json"
 
-          # Set outputs for upload step
-          echo "MSI=$($msi.FullName)"          >> $env:GITHUB_OUTPUT
-          echo "MSI_SIG=$($msisig.FullName)"   >> $env:GITHUB_OUTPUT
-          if ($nsis) {
-            echo "NSIS=$($nsis.FullName)"       >> $env:GITHUB_OUTPUT
-          }
-          if ($nsisig) {
-            echo "NSIS_SIG=$($nsisig.FullName)" >> $env:GITHUB_OUTPUT
-          }
+          # Outputs
+          echo "MSI=$($msi.FullName)"   >> $env:GITHUB_OUTPUT
+          echo "NSIS=$($nsis.FullName)" >> $env:GITHUB_OUTPUT
+          if ($msisig)  { echo "MSI_SIG=$($msisig.FullName)"  >> $env:GITHUB_OUTPUT }
+          if ($nsisig)  { echo "NSIS_SIG=$($nsisig.FullName)" >> $env:GITHUB_OUTPUT }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -113,7 +109,5 @@ jobs:
           prerelease: false
           files: |
             ${{ steps.build_json.outputs.MSI }}
-            ${{ steps.build_json.outputs.MSI_SIG }}
             ${{ steps.build_json.outputs.NSIS }}
-            ${{ steps.build_json.outputs.NSIS_SIG }}
             latest.json
