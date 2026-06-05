@@ -76,6 +76,9 @@ export const billingService = {
   cancelOrderItem: (orderItemId) =>
     invoke("cancel_order_item", { orderItemId }),
 
+  cancelOrderItemWithReason: ({ orderItemId, quantityToVoid, voidReason, userId, voidedBy }) =>
+    invoke("cancel_order_item_with_reason", { orderItemId, quantityToVoid, voidReason, userId, voidedBy }),
+
   // ── KOT ───────────────────────────────────────────────────────
 
   generateKot: (sessionId, remarks) =>

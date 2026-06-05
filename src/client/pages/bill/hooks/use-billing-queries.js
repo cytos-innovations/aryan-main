@@ -309,6 +309,49 @@ export function useCancelOrderItem(sessionId) {
   });
 }
 
+// Void a KOT-sent item with a mandatory reason.
+// payload = { orderItemId, quantityToVoid, voidReason, userId }
+export function useCancelOrderItemWithReason(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.cancelOrderItemWithReason,
+
+    onMutate: async ({ orderItemId, quantityToVoid }) => {
+      await qc.cancelQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      const prevItems = qc.getQueryData(BQK.ORDER_ITEMS(sessionId));
+
+      if (Array.isArray(prevItems)) {
+        qc.setQueryData(
+          BQK.ORDER_ITEMS(sessionId),
+          prevItems.map((i) => {
+            if (i.id !== orderItemId) return i;
+            const newQty = Math.max(0, (Number(i.quantity) || 0) - quantityToVoid);
+            return newQty <= 0
+              ? { ...i, item_status: "CANCELLED" }
+              : { ...i, quantity: newQty };
+          }),
+        );
+      }
+
+      return { prevItems };
+    },
+
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prevItems !== undefined) {
+        qc.setQueryData(BQK.ORDER_ITEMS(sessionId), ctx.prevItems);
+      }
+      toast.error(String(_e));
+    },
+
+    onSuccess: () => toast.success("Item voided"),
+
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
+    },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // KOT mutations
 // ─────────────────────────────────────────────────────────────

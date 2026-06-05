@@ -1184,6 +1184,186 @@ pub async fn cancel_order_item(
     Ok(())
 }
 
+/// Cancel (or partially reduce) a KOT-sent order item and record the mandatory reason.
+/// - `quantity_to_void`: units to remove (pass full qty to remove the item completely)
+/// - Always inserts a row in `kot_item_void_log` for audit
+/// - Full remove → item_status = CANCELLED; partial → quantity is decremented
+#[tauri::command]
+pub async fn cancel_order_item_with_reason(
+    app:              tauri::AppHandle,
+    state:            tauri::State<'_, AppState>,
+    order_item_id:    i32,
+    quantity_to_void: f64,
+    void_reason:      String,
+    user_id:          Option<i32>,
+    voided_by:        Option<String>,
+) -> Result<(), String> {
+    // Treat 0 as null — superadmin sentinel id is 0 and has no DB row
+    let user_id: Option<i32> = user_id.filter(|&id| id > 0);
+
+    if void_reason.trim().is_empty() {
+        return Err("Void reason is required".to_string());
+    }
+    if quantity_to_void <= 0.0 {
+        return Err("Quantity to void must be greater than zero".to_string());
+    }
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let row = sqlx::query(
+        "SELECT oi.item_name, oi.quantity::float8 AS quantity, oi.item_status,
+                oi.order_session_id, oi.kot_id,
+                oi.rate::float8, oi.discount_percent::float8, oi.tax_percentage::float8,
+                os.table_id
+         FROM   order_item oi
+         JOIN   order_session os ON os.id = oi.order_session_id
+         WHERE  oi.id = $1",
+    )
+    .bind(order_item_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Order item not found: {e}"))?;
+
+    let item_name:   String      = row.try_get("item_name").unwrap_or_default();
+    let current_qty: f64         = row.try_get::<f64, _>("quantity").unwrap_or(0.0);
+    let item_status: String      = row.try_get("item_status").unwrap_or_default();
+    let session_id:  i32         = row.try_get("order_session_id").unwrap_or(0);
+    let kot_id:      Option<i32> = row.try_get("kot_id").ok().flatten();
+    let table_id:    Option<i32> = row.try_get("table_id").ok().flatten();
+    let rate:        f64         = row.try_get::<f64, _>("rate").unwrap_or(0.0);
+    let disc_pct:    f64         = row.try_get::<f64, _>("discount_percent").unwrap_or(0.0);
+    let tax_pct:     f64         = row.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
+
+    if item_status != "ACTIVE" {
+        return Err("Item is already cancelled".to_string());
+    }
+
+    let actual_void    = quantity_to_void.min(current_qty);
+    let new_qty        = round2(current_qty - actual_void);
+    let is_full_remove = new_qty <= 0.0;
+    let void_type      = if is_full_remove { "REMOVE" } else { "QTY_REDUCE" };
+
+    let mut tx = pool.begin().await.map_err(|e| format!("TX start failed: {e}"))?;
+
+    if is_full_remove {
+        // 1. Mark order_item cancelled + inactive
+        sqlx::query(
+            "UPDATE order_item
+             SET    item_status  = 'CANCELLED',
+                    is_active    = 0,
+                    cancelled_at = NOW(),
+                    updated_at   = NOW()
+             WHERE  id = $1 AND item_status = 'ACTIVE'",
+        )
+        .bind(order_item_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to cancel order_item: {e}"))?;
+
+        // 2. Mark all kot_item rows for this order_item as cancelled + inactive
+        sqlx::query(
+            "UPDATE kot_item
+             SET    item_status = 'CANCELLED',
+                    is_active   = 0,
+                    updated_at  = NOW()
+             WHERE  order_item_id = $1 AND is_active = 1",
+        )
+        .bind(order_item_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to cancel kot_item: {e}"))?;
+
+        // 3. Deactivate order_item_modifier rows
+        sqlx::query(
+            "UPDATE order_item_modifier
+             SET    is_active  = 0,
+                    updated_at = NOW()
+             WHERE  order_item_id = $1 AND is_active = 1",
+        )
+        .bind(order_item_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to deactivate modifiers: {e}"))?;
+
+        // 4. Deactivate bill_item snapshot if a bill exists for this session
+        sqlx::query(
+            "UPDATE bill_item
+             SET    is_active  = 0,
+                    updated_at = NOW()
+             WHERE  order_item_id = $1 AND is_active = 1",
+        )
+        .bind(order_item_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to deactivate bill_item: {e}"))?;
+
+    } else {
+        // Partial quantity reduce — update amounts on order_item
+        let g      = round2(rate * new_qty);
+        let d      = round2(g * disc_pct / 100.0);
+        let t_base = round2(g - d);
+        let t      = round2(t_base * tax_pct / 100.0);
+        let f      = round2(t_base + t);
+
+        sqlx::query(
+            "UPDATE order_item
+             SET    quantity = $1, gross_amount = $2, discount_amount = $3,
+                    taxable_amount = $4, tax_amount = $5, final_amount = $6,
+                    updated_at = NOW()
+             WHERE  id = $7 AND item_status = 'ACTIVE'",
+        )
+        .bind(new_qty).bind(g).bind(d).bind(t_base).bind(t).bind(f)
+        .bind(order_item_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to reduce item qty: {e}"))?;
+
+        // Also update bill_item snapshot quantity/amounts to stay in sync
+        sqlx::query(
+            "UPDATE bill_item
+             SET    quantity       = $1,
+                    gross_amount   = $2,
+                    discount_amount= $3,
+                    tax_amount     = $5,
+                    final_amount   = $6,
+                    updated_at     = NOW()
+             WHERE  order_item_id = $7 AND is_active = 1",
+        )
+        .bind(new_qty).bind(g).bind(d).bind(t_base).bind(t).bind(f)
+        .bind(order_item_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to sync bill_item qty: {e}"))?;
+    }
+
+    sqlx::query(
+        "INSERT INTO kot_item_void_log
+            (order_item_id, order_session_id, kot_id, table_id, user_id, voided_by,
+             item_name, quantity_voided, void_reason, void_type,
+             previous_quantity, new_quantity, created_by, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6, $7,$8,$9,$10, $11,$12,$5,$5)",
+    )
+    .bind(order_item_id)
+    .bind(session_id)
+    .bind(kot_id)
+    .bind(table_id)
+    .bind(user_id)
+    .bind(voided_by.as_deref())
+    .bind(&item_name)
+    .bind(actual_void)
+    .bind(void_reason.trim())
+    .bind(void_type)
+    .bind(current_qty)
+    .bind(new_qty)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to log void: {e}"))?;
+
+    tx.commit().await.map_err(|e| format!("TX commit failed: {e}"))?;
+
+    Ok(())
+}
+
 // ── KOT ──────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -2785,7 +2965,7 @@ pub async fn update_session_party(
                 waiter_id       = COALESCE($5, waiter_id),
                 updated_at      = NOW()
          WHERE  id = $1
-           AND  session_status IN ('OPEN', 'KOT_SENT')",
+           AND  session_status IN ('OPEN', 'KOT_SENT', 'BILL_PRINTED')",
     )
     .bind(session_id)
     .bind(customer_id)

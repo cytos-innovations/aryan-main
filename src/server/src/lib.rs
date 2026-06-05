@@ -168,6 +168,7 @@ use bill::{
     add_order_item,
     update_order_item_qty,
     cancel_order_item,
+    cancel_order_item_with_reason,
     // KOT
     generate_kot,
     get_kot_list,
@@ -1500,6 +1501,26 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_by      INTEGER,
             UNIQUE(user_id)
         )"#,
+        r#"CREATE TABLE IF NOT EXISTS kot_item_void_log (
+            id                SERIAL PRIMARY KEY,
+            order_item_id     INTEGER NOT NULL REFERENCES order_item(id),
+            order_session_id  INTEGER NOT NULL REFERENCES order_session(id),
+            kot_id            INTEGER          REFERENCES kot_master(id),
+            table_id          INTEGER          REFERENCES restaurant_table(id),
+            user_id           INTEGER          REFERENCES users(id),
+            voided_by         VARCHAR(100),
+            item_name         VARCHAR(250) NOT NULL,
+            quantity_voided   NUMERIC(12,3) NOT NULL,
+            void_reason       TEXT NOT NULL,
+            void_type         VARCHAR(20) NOT NULL DEFAULT 'REMOVE',
+            previous_quantity NUMERIC(12,3),
+            new_quantity      NUMERIC(12,3),
+            is_active         INTEGER     NOT NULL DEFAULT 1,
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_by        INTEGER REFERENCES users(id),
+            updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_by        INTEGER REFERENCES users(id)
+        )"#,
     ];
 
     for stmt in stmts {
@@ -2081,6 +2102,7 @@ pub fn run() {
             add_order_item,
             update_order_item_qty,
             cancel_order_item,
+            cancel_order_item_with_reason,
             // Billing — KOT
             generate_kot,
             get_kot_list,

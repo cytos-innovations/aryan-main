@@ -168,7 +168,7 @@ function TableCard({ table, onClick, now }) {
       onClick={() => onClick(table, status, phase)}
       disabled={isReserved}
       className={[
-        "relative flex flex-col rounded-xl p-3.5 text-left select-none transition-all duration-150",
+        "relative flex flex-col h-27 rounded-xl p-3.5 text-left select-none transition-all duration-150",
         "ring-1 shadow-xs overflow-hidden",
         STATUS_RING[status],
         STATUS_BG[status],
@@ -200,14 +200,22 @@ function TableCard({ table, onClick, now }) {
         </div>
       </div>
 
-      {/* Status text */}
-      <span className={`text-[11px] font-medium mt-1 ${statusLabel.cls}`}>
-        {isNear && phase === "ARRIVED"
-          ? "Guest Arrived"
-          : isNear && isOverdue
-            ? "Awaiting Guest"
-            : statusLabel.text}
-      </span>
+      {/* Status text + covers */}
+      <div className="flex items-center gap-1.5 mt-1">
+        <span className={`text-[11px] font-medium ${statusLabel.cls}`}>
+          {isNear && phase === "ARRIVED"
+            ? "Guest Arrived"
+            : isNear && isOverdue
+              ? "Awaiting Guest"
+              : statusLabel.text}
+        </span>
+        {isOccupied && table.covers != null && (
+          <div className="flex items-center gap-0.5 text-[11px] text-muted-foreground ml-auto shrink-0">
+            <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
+            <span>{table.covers}</span>
+          </div>
+        )}
+      </div>
 
       {/* Occupied details */}
       {isOccupied && (
@@ -225,20 +233,12 @@ function TableCard({ table, onClick, now }) {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            {table.waiter_name && (
-              <div className="flex items-center gap-1 min-w-0">
-                <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} className="shrink-0" />
-                <span className="truncate">{table.waiter_name}</span>
-              </div>
-            )}
-            {table.covers != null && (
-              <div className="flex items-center gap-1 shrink-0 ml-auto">
-                <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
-                <span>{table.covers}</span>
-              </div>
-            )}
-          </div>
+          {table.waiter_name && (
+            <div className="flex items-center gap-1 text-[11px] text-muted-foreground min-w-0">
+              <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} className="shrink-0" />
+              <span className="truncate">{table.waiter_name}</span>
+            </div>
+          )}
         </div>
       )}
 
