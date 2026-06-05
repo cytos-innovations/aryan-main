@@ -6,12 +6,14 @@ import {
   CashIcon,
   Hold01Icon,
   Discount01Icon,
-  ArrowLeft01Icon,
   AlertCircleIcon,
   CouponPercentIcon,
 } from "@hugeicons/core-free-icons";
+import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
 import { useBillingContext } from "../state/billing-context";
 import { useGenerateKot, useGenerateBill } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
@@ -172,6 +174,17 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
   const billAmt = totals.finalAmount || 0;
   const taxAmt  = totals.taxAmount   || 0;
 
+  const { auth } = useAuth();
+  const capsQuery = useQuery({
+    queryKey: ["discount-cap", auth?.user?.id],
+    queryFn: () => invoke("get_user_discount_cap", { userId: auth.user.id }),
+    enabled: !!auth?.user?.id,
+    staleTime: 60_000,
+  });
+  const maxFood   = capsQuery.data?.food_discount   ?? 100;
+  const maxLiquor = capsQuery.data?.liquor_discount ?? 100;
+  const maxTotal  = capsQuery.data?.total_discount  ?? 100;
+
   // Pre-fill from saved discount if available
   const [discAmt,   setDiscAmt]   = useState(() => String(sessionDisc?.discAmt   ?? 0));
   const [misc,      setMisc]      = useState(() => String(sessionDisc?.misc      ?? 0));
@@ -181,6 +194,60 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
   const [liquorPct, setLiquorPct] = useState(() => String(sessionDisc?.liquorPct ?? 0));
   const [sCharge,   setSCharge]   = useState(() => String(sessionDisc?.sCharge   ?? 0));
   const [tDisc,     setTDisc]     = useState(() => String(sessionDisc?.tDisc     ?? 0));
+
+  // Clamp pre-filled values when caps load
+  useEffect(() => {
+    if (!capsQuery.data) return;
+    setFoodPct((prev) => {
+      const n = parseFloat(prev) || 0;
+      return n > maxFood ? String(maxFood) : prev;
+    });
+    setLiquorPct((prev) => {
+      const n = parseFloat(prev) || 0;
+      return n > maxLiquor ? String(maxLiquor) : prev;
+    });
+  }, [capsQuery.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Block individual cap on every keystroke; enforce total cap on blur
+  function handleFoodChange(val) {
+    const num = parseFloat(val) || 0;
+    if (num > maxFood) {
+      toast.warning(`Food discount cannot exceed ${maxFood}%`);
+      setFoodPct(String(maxFood));
+    } else {
+      setFoodPct(val);
+    }
+  }
+
+  function handleLiquorChange(val) {
+    const num = parseFloat(val) || 0;
+    if (num > maxLiquor) {
+      toast.warning(`Liquor discount cannot exceed ${maxLiquor}%`);
+      setLiquorPct(String(maxLiquor));
+    } else {
+      setLiquorPct(val);
+    }
+  }
+
+  function handleFoodBlur() {
+    const food   = parseFloat(foodPct) || 0;
+    const liquor = parseFloat(liquorPct) || 0;
+    if (food + liquor > maxTotal) {
+      const allowed = Math.max(0, maxTotal - liquor);
+      toast.warning(`Total discount cannot exceed ${maxTotal}%. Food reduced to ${allowed}%`);
+      setFoodPct(String(allowed));
+    }
+  }
+
+  function handleLiquorBlur() {
+    const liquor = parseFloat(liquorPct) || 0;
+    const food   = parseFloat(foodPct) || 0;
+    if (food + liquor > maxTotal) {
+      const allowed = Math.max(0, maxTotal - food);
+      toast.warning(`Total discount cannot exceed ${maxTotal}%. Liquor reduced to ${allowed}%`);
+      setLiquorPct(String(allowed));
+    }
+  }
 
   // Discount amounts derived from percentages
   const foodDiscAmt   = r2((foodTotal   * Math.min(100, Math.max(0, Number(foodPct)   || 0))) / 100);
@@ -239,7 +306,8 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
             ref={r2ref}
             inputMode="decimal"
             value={foodPct}
-            onChange={(e) => setFoodPct(sanitizeNum(e.target.value))}
+            onChange={(e) => handleFoodChange(sanitizeNum(e.target.value))}
+            onBlur={handleFoodBlur}
             onFocus={(e) => e.target.select()}
             onKeyDown={kd(2)}
             className="w-14 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
@@ -256,7 +324,8 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
             ref={r3}
             inputMode="decimal"
             value={liquorPct}
-            onChange={(e) => setLiquorPct(sanitizeNum(e.target.value))}
+            onChange={(e) => handleLiquorChange(sanitizeNum(e.target.value))}
+            onBlur={handleLiquorBlur}
             onFocus={(e) => e.target.select()}
             onKeyDown={kd(3)}
             className="w-14 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
@@ -283,6 +352,19 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
           >
             Save
           </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setDiscAmt("0"); setMisc("0"); setMiscMinus("0");
+              setFoodPct("0"); setLiquorPct("0");
+              setSCharge("0"); setTDisc("0");
+            }}
+            className="h-8 px-4 text-xs"
+          >
+            Reset
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={onBack} className="h-8 px-4 text-xs">
             Cancel
           </Button>
@@ -300,7 +382,7 @@ export default function BottomActionBar({
   netAmount, billId, isSettling,
   onRequestSettle, settleDialogOpen,
   onKotDraft, onCancel,
-  discountPercent, sessionDisc, onDiscountChange,
+  sessionDisc, onDiscountChange,
 }) {
   const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
   const generateKot  = useGenerateKot(sessionId);

@@ -16,6 +16,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 const TABS = [
   { id: "master", label: "Master" },
@@ -336,6 +340,136 @@ function ApplicationTab({ userId }) {
   );
 }
 
+const DEFAULT_CAPS = { food_discount: "100", liquor_discount: "100", total_discount: "100" };
+
+function DiscountCapDialog({ open, onClose, userId, userName }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState(DEFAULT_CAPS);
+
+  const capsQuery = useQuery({
+    queryKey: ["discount-cap", userId],
+    queryFn: () => invoke("get_user_discount_cap", { userId: Number(userId) }),
+    enabled: open && !!userId,
+    staleTime: 0,
+  });
+
+  // Reset to defaults when dialog opens for a new user
+  useEffect(() => {
+    if (!open) return;
+    setForm(DEFAULT_CAPS);
+  }, [open, userId]);
+
+  // Pre-fill with saved data when query finishes (data may be null = no record yet)
+  useEffect(() => {
+    if (capsQuery.isLoading || capsQuery.isFetching) return;
+    if (capsQuery.data) {
+      setForm({
+        food_discount:   String(capsQuery.data.food_discount   ?? 100),
+        liquor_discount: String(capsQuery.data.liquor_discount ?? 100),
+        total_discount:  String(capsQuery.data.total_discount  ?? 100),
+      });
+    }
+  }, [capsQuery.data, capsQuery.isLoading, capsQuery.isFetching]);
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      invoke("save_user_discount_cap", {
+        userId:         Number(userId),
+        foodDiscount:   parseFloat(form.food_discount)   || 0,
+        liquorDiscount: parseFloat(form.liquor_discount) || 0,
+        totalDiscount:  parseFloat(form.total_discount)  || 0,
+      }),
+    onSuccess: () => {
+      toast.success("Discount caps saved");
+      queryClient.invalidateQueries({ queryKey: ["discount-cap", userId] });
+      onClose();
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  function handleChange(field, val) {
+    // allow only numbers and one decimal point, max 100
+    if (!/^\d*\.?\d*$/.test(val)) return;
+    if (parseFloat(val) > 100) return;
+    setForm((prev) => ({ ...prev, [field]: val }));
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Bill Discount Settings</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* User — read-only */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">User</label>
+            <Input value={userName} disabled className="bg-muted text-muted-foreground" />
+          </div>
+
+          {/* Food Discount */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Food Discount</label>
+            <div className="relative">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.food_discount}
+                onChange={(e) => handleChange("food_discount", e.target.value)}
+                className="pr-8"
+                placeholder="0"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">%</span>
+            </div>
+          </div>
+
+          {/* Liquor Discount */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Liquor Discount</label>
+            <div className="relative">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.liquor_discount}
+                onChange={(e) => handleChange("liquor_discount", e.target.value)}
+                className="pr-8"
+                placeholder="0"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">%</span>
+            </div>
+          </div>
+
+          {/* Total Discount */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Total Discount</label>
+            <div className="relative">
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.total_discount}
+                onChange={(e) => handleChange("total_discount", e.target.value)}
+                className="pr-8"
+                placeholder="0"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">%</span>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose} disabled={saveMut.isPending}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+            {saveMut.isPending ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function UserAccess() {
   const queryClient = useQueryClient();
   const { auth } = useAuth();
@@ -345,6 +479,7 @@ export default function UserAccess() {
   const [activeTab, setActiveTab] = useState("master");
   const [selected, setSelected] = useState(new Set());
   const [dirty, setDirty] = useState(false);
+  const [discountDialogOpen, setDiscountDialogOpen] = useState(false);
 
   const usersQuery = useQuery({
     queryKey: ["all-users"],
@@ -464,6 +599,11 @@ export default function UserAccess() {
 
             {userSelected && activeTab !== "application" && (
               <div className="ml-auto flex items-center gap-2">
+                {activeTab === "utility" && (
+                  <Button variant="outline" size="sm" onClick={() => setDiscountDialogOpen(true)}>
+                    Bill Discount Settings
+                  </Button>
+                )}
                 <Can perm="user-access:update">
                   <Button
                     size="sm"
@@ -533,6 +673,13 @@ export default function UserAccess() {
 
         </CardContent>
       </Card>
+
+      <DiscountCapDialog
+        open={discountDialogOpen}
+        onClose={() => setDiscountDialogOpen(false)}
+        userId={userId}
+        userName={(usersQuery.data ?? []).find((u) => String(u.id) === userId)?.user_name ?? ""}
+      />
     </div>
   );
 }

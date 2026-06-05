@@ -1222,6 +1222,25 @@ CREATE TABLE table_session_history (
     updated_by INTEGER REFERENCES users(id)
 );
 
+-- USER DISCOUNT CAPS
+-- Per-user maximum discount percentages enforced at billing
+
+CREATE TABLE IF NOT EXISTS user_discount_cap (
+    id          SERIAL PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    food_discount    NUMERIC(5,2) NOT NULL DEFAULT 100,
+    liquor_discount  NUMERIC(5,2) NOT NULL DEFAULT 100,
+    total_discount   NUMERIC(5,2) NOT NULL DEFAULT 100,
+
+    -- Standard Audit & Status Columns
+    is_active  INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id),
+    UNIQUE(user_id)
+);
+
 -- TABLE RESERVATION MASTER
 -- Handles future dining reservations
 

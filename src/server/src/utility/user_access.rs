@@ -1,5 +1,5 @@
 use crate::{acquire_pool, ApplicationInfo, AppState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 #[derive(Debug, Serialize)]
@@ -282,6 +282,79 @@ pub async fn set_user_permissions(
     tx.commit()
         .await
         .map_err(|e| format!("Commit failed: {e}"))?;
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Discount caps
+// ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserDiscountCap {
+    pub user_id: i32,
+    pub food_discount: f64,
+    pub liquor_discount: f64,
+    pub total_discount: f64,
+}
+
+#[tauri::command]
+pub async fn get_user_discount_cap(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    user_id: i32,
+) -> Result<Option<UserDiscountCap>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let row = sqlx::query(
+        "SELECT user_id,
+                food_discount::FLOAT8   AS food_discount,
+                liquor_discount::FLOAT8 AS liquor_discount,
+                total_discount::FLOAT8  AS total_discount
+         FROM user_discount_cap WHERE user_id = $1 AND is_active = 1",
+    )
+    .bind(user_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Query failed: {e}"))?;
+
+    Ok(row.map(|r| UserDiscountCap {
+        user_id:         r.try_get("user_id").unwrap_or(user_id),
+        food_discount:   r.try_get::<f64, _>("food_discount").unwrap_or(100.0),
+        liquor_discount: r.try_get::<f64, _>("liquor_discount").unwrap_or(100.0),
+        total_discount:  r.try_get::<f64, _>("total_discount").unwrap_or(100.0),
+    }))
+}
+
+#[tauri::command]
+pub async fn save_user_discount_cap(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    user_id: i32,
+    food_discount: f64,
+    liquor_discount: f64,
+    total_discount: f64,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO user_discount_cap (user_id, food_discount, liquor_discount, total_discount)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id) DO UPDATE SET
+            food_discount   = EXCLUDED.food_discount,
+            liquor_discount = EXCLUDED.liquor_discount,
+            total_discount  = EXCLUDED.total_discount,
+            updated_at      = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(user_id)
+    .bind(food_discount)
+    .bind(liquor_discount)
+    .bind(total_discount)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Save failed: {e}"))?;
 
     Ok(())
 }

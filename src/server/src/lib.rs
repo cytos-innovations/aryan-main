@@ -18,6 +18,7 @@ use utility::query::{
 use utility::user_access::{
     get_all_applications, get_all_apps_with_assignment, get_all_users,
     get_applications_for_user, get_user_access, set_user_applications, set_user_permissions,
+    get_user_discount_cap, save_user_discount_cap,
 };
 
 use master::menu::rest_menu_category::{
@@ -1486,6 +1487,19 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by          INTEGER
         )"#,
+        r#"CREATE TABLE IF NOT EXISTS user_discount_cap (
+            id              SERIAL PRIMARY KEY,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            food_discount   NUMERIC(5,2) NOT NULL DEFAULT 100,
+            liquor_discount NUMERIC(5,2) NOT NULL DEFAULT 100,
+            total_discount  NUMERIC(5,2) NOT NULL DEFAULT 100,
+            is_active       INTEGER   NOT NULL DEFAULT 1,
+            created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by      INTEGER,
+            updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by      INTEGER,
+            UNIQUE(user_id)
+        )"#,
     ];
 
     for stmt in stmts {
@@ -1832,6 +1846,9 @@ pub fn run() {
             set_user_applications,
             get_user_access,
             set_user_permissions,
+            // User discount caps
+            get_user_discount_cap,
+            save_user_discount_cap,
             // Menu categories
             get_menu_categories,
             get_all_menu_categories,
