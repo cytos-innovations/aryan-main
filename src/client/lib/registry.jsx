@@ -24,11 +24,13 @@ import {
   Invoice03Icon,
   BookOpen01Icon,
   ReceiptIndianRupeeIcon,
+  Building04Icon,
 } from "@hugeicons/core-free-icons";
 
 import Dashboard from "@/pages/dashboard";
 import UserMain from "@/pages/utility/user-main";
 import UserAccess from "@/pages/utility/user_access";
+import CompanyDetails from "@/pages/utility/company_details";
 import AccTaxMaster from "@/pages/master/acc_tax_master";
 import AccTallyMaster from "@/pages/master/acc_tally_master";
 import AccCreditor from "@/pages/master/party ledger/acc_creditor";
@@ -425,6 +427,15 @@ export const registry = [
             perm: "user-access:view",
             icon: UserShield01Icon,
             element: <UserAccess />,
+          },
+          {
+            path: "/admin/company-details",
+            label: "Company Details",
+            application: "restaurant,lodge,account,material",
+            section: "utility",
+            perm: "company-details:view",
+            icon: Building04Icon,
+            element: <CompanyDetails />,
           },
         ],
       },

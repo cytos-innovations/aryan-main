@@ -71,7 +71,7 @@ const TRANSACTION_MODULES = new Set(["cal-incentive"]);
 
 function getTabForPerm(permName) {
   const [module] = permName.split(":");
-  if (module === "dashboard" || module === "users" || module === "user-access") return "utility";
+  if (module === "dashboard" || module === "users" || module === "user-access" || module === "company-details") return "utility";
   if (TRANSACTION_MODULES.has(module) || /^(order|payment|transaction|sale)/.test(module)) return "transaction";
   if (/^(report|analytic)/.test(module)) return "reports";
   return "master";

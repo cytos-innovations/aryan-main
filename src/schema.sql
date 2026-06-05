@@ -67,8 +67,9 @@ CREATE TABLE IF NOT EXISTS user_permissions (
     UNIQUE(user_id, permission_id)
 );
 
-CREATE TABLE company_details (
-    id INTEGER PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS company_details (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    -- Original columns (preserved)
     company_name VARCHAR(150),
     company_logo BYTEA,
     logo_file_name TEXT,
@@ -176,13 +177,65 @@ CREATE TABLE company_details (
     separate_rest_direct_yn CHAR(1),
     service_place VARCHAR(50),
     print_company_logo_yn CHAR(1),
-
+    -- Additional columns
+    company_name2           VARCHAR(150),
+    name2                   VARCHAR(100),
+    start_date              DATE,
+    end_date                DATE,
+    fssai_no                VARCHAR(50),
+    print_name_address      CHAR(1) DEFAULT 'N',
+    receiver_email3         VARCHAR(30),
+    cash_drawer_yn          CHAR(1) DEFAULT 'N',
+    otp_rate_change_yn      CHAR(1) DEFAULT 'N',
+    direct_bill_yn          CHAR(1) DEFAULT 'N',
+    time_format             VARCHAR(2) DEFAULT '12',
+    cancellation_message_yn CHAR(1) DEFAULT 'N',
+    print_token_yn          CHAR(1) DEFAULT 'N',
+    print_bill_footer_yn    CHAR(1) DEFAULT 'N',
+    printer_setting         VARCHAR(5) DEFAULT 'TH',
+    parcel_sec_code         INTEGER DEFAULT 1,
+    non_chargeable          INTEGER DEFAULT 0,
+    partner_company_name    VARCHAR(150),
+    partner_address1        VARCHAR(255),
+    partner_address2        VARCHAR(255),
+    partner_address3        VARCHAR(255),
+    partner_phone1          VARCHAR(15),
+    partner_phone2          VARCHAR(15),
+    partner_email           VARCHAR(50),
+    end_of_report           VARCHAR(100),
+    waiter_yn               CHAR(1) DEFAULT 'Y',
+    covers_yn               CHAR(1) DEFAULT 'Y',
+    outlet_printer_food     INTEGER DEFAULT 1,
+    outlet_printer_liquor   INTEGER DEFAULT 0,
+    max_qty                 INTEGER DEFAULT 0,
+    modify_current_bill_yn  CHAR(1) DEFAULT 'N',
+    modify_settled_bill_yn  CHAR(1) DEFAULT 'N',
+    complementary_yn        CHAR(1) DEFAULT 'N',
+    bill_closed_yn          CHAR(1) DEFAULT 'N',
+    print_table_no_yn       CHAR(1) DEFAULT 'N',
+    include_tax_yn          CHAR(1) DEFAULT 'Y',
+    allow_lodge_posting     CHAR(1) DEFAULT 'N',
+    domain_name             VARCHAR(50),
+    pay_upi_id              VARCHAR(100),
+    print_receipt_no_yn     CHAR(1) DEFAULT 'N',
+    sale_ratewise_yn        CHAR(1) DEFAULT 'N',
+    sale_jv_ledger          VARCHAR(100),
+    jv_ledger               VARCHAR(100),
+    roundoff_ledger         VARCHAR(100),
+    barcode_yn              CHAR(1) DEFAULT 'N',
+    search_type             INTEGER DEFAULT 1,
+    online_order_yn         CHAR(1) DEFAULT 'N',
+    online_merchant_id      VARCHAR(30),
+    online_direct_bill      CHAR(1) DEFAULT 'N',
+    time_on_kot_yn          CHAR(1) DEFAULT 'Y',
+    multiple_order_yn       CHAR(1) DEFAULT 'N',
     -- Standard Audit & Status Columns
     is_active INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by INTEGER REFERENCES users(id),
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_by INTEGER REFERENCES users(id)
+    updated_by INTEGER REFERENCES users(id),
+    CONSTRAINT company_details_single_row CHECK (id = 1)
 );
 
 
