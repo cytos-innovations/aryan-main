@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "app",
+        "title": "pos-app",
         "width": 1280,
         "height": 800,
         "minWidth": 1024,
@@ -36,5 +36,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBNzlDQzZDM0RDRUU3NDcKUldSSDU4NDliTXg1cXFudnVWeXVVejNCeFhZOVBJdkNuQng2NVg0UThoQXgrQVFCb3E5Z2J2UWQK",
+      "endpoints": [
+        "https://github.com/cytos-innovations/aryan-main/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

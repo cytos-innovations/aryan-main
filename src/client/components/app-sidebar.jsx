@@ -60,6 +60,7 @@ import {
 import { useAuth, Can } from "@/lib/auth";
 import { flatRoutes, homePath, registry } from "@/lib/registry";
 import { useTheme, THEMES } from "@/lib/theme";
+import { UpdateBell } from "@/components/update-notification";
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
@@ -403,6 +404,7 @@ export default function AppShell() {
                   </Button>
                 </Can>
               )}
+              <UpdateBell />
               <ThemeToggle />
             </div>
           </header>

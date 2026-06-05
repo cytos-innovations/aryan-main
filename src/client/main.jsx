@@ -15,7 +15,6 @@ import Error from "@/pages/error";
 import Forbidden from "@/pages/forbidden";
 import DbSetup from "@/pages/db-setup";
 import AppShell from "@/components/app-sidebar";
-
 getCurrentWindow().maximize().catch(() => {});
 
 const queryClient = new QueryClient({
