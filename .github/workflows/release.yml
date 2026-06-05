@@ -33,22 +33,74 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build and publish Tauri release
-        id: tauri
-        uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri app
+        run: npm run tauri build -- --bundles nsis,msi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        working-directory: .
+
+      - name: Get version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Find built installers and signatures
+        id: files
+        shell: pwsh
+        run: |
+          $bundle = "src/server/target/release/bundle"
+          $nsis   = Get-ChildItem "$bundle/nsis/*.exe"     | Select-Object -First 1
+          $msi    = Get-ChildItem "$bundle/msi/*.msi"      | Select-Object -First 1
+          $nsisig = Get-ChildItem "$bundle/nsis/*.exe.sig" | Select-Object -First 1
+          $msisig = Get-ChildItem "$bundle/msi/*.msi.sig"  | Select-Object -First 1
+          echo "NSIS=$($nsis.FullName)"     >> $env:GITHUB_OUTPUT
+          echo "MSI=$($msi.FullName)"       >> $env:GITHUB_OUTPUT
+          echo "NSIS_SIG=$($nsisig.FullName)" >> $env:GITHUB_OUTPUT
+          echo "MSI_SIG=$($msisig.FullName)"  >> $env:GITHUB_OUTPUT
+          echo "NSIS_NAME=$($nsis.Name)"    >> $env:GITHUB_OUTPUT
+          echo "MSI_NAME=$($msi.Name)"      >> $env:GITHUB_OUTPUT
+
+      - name: Build latest.json
+        id: updater
+        shell: pwsh
+        run: |
+          $version  = "${{ steps.version.outputs.VERSION }}"
+          $tag      = "${{ github.ref_name }}"
+          $repo     = "${{ github.repository }}"
+          $sig      = Get-Content "${{ steps.files.outputs.NSIS_SIG }}" -Raw
+          $sig      = $sig.Trim()
+          $url      = "https://github.com/$repo/releases/download/$tag/${{ steps.files.outputs.NSIS_NAME }}"
+          $pubDate  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $json = @{
+            version  = $version
+            pub_date = $pubDate
+            notes    = "See the release page for details."
+            platforms = @{
+              "windows-x86_64" = @{
+                url       = $url
+                signature = $sig
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $json | Out-File -FilePath "latest.json" -Encoding utf8
+          echo "Created latest.json:"
+          cat latest.json
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Pos-app ${{ github.ref_name }}'
-          releaseBody: |
+          tag_name: ${{ github.ref_name }}
+          name: Pos-app ${{ github.ref_name }}
+          body: |
             ## What's new in ${{ github.ref_name }}
 
             See the full changelog for details.
-          releaseDraft: false
+          draft: false
           prerelease: false
-          projectPath: './src/server'
-          includeUpdaterJson: true
-          updaterJsonPreferNsis: true
+          files: |
+            ${{ steps.files.outputs.NSIS }}
+            ${{ steps.files.outputs.MSI }}
+            ${{ steps.files.outputs.NSIS_SIG }}
+            ${{ steps.files.outputs.MSI_SIG }}
+            latest.json
