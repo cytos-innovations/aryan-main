@@ -291,7 +291,7 @@ export default function Dashboard() {
       <Can perm="billing:view">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
-            title="Total Sales"
+            title="T S "
             value={restLoad ? null : fmt(sales?.total_sales)}
             prefix="₹"
             icon={ReceiptIndianRupeeIcon}

@@ -1,17 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-// Single shared state so the bell and dialog stay in sync
 let _updateInfo = null;
 let _listeners = new Set();
 
-function notify() {
-  _listeners.forEach((fn) => fn(_updateInfo));
-}
+function notify() { _listeners.forEach((fn) => fn(_updateInfo)); }
 
 export function useUpdater() {
   const [updateInfo, setUpdateInfo] = useState(_updateInfo);
   const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState(null);
   const [popupDismissed, setPopupDismissed] = useState(false);
 
   useEffect(() => {
@@ -19,10 +17,9 @@ export function useUpdater() {
     return () => _listeners.delete(setUpdateInfo);
   }, []);
 
-  // Check once on first mount of any consumer
   useEffect(() => {
-    if (_updateInfo !== null) return; // already checked
-    _updateInfo = undefined; // mark as "checking"
+    if (_updateInfo !== null) return;
+    _updateInfo = undefined;
     invoke("check_for_update")
       .then((res) => {
         _updateInfo = res.available
@@ -38,20 +35,23 @@ export function useUpdater() {
 
   const installUpdate = useCallback(async () => {
     setInstalling(true);
+    setInstallError(null);
     try {
-      await invoke("install_update");
-      // app restarts — this line never reached
-    } catch {
+      await invoke("download_and_install_update");
+      // app restarts — never reached
+    } catch (e) {
       setInstalling(false);
+      setInstallError(String(e));
     }
   }, []);
 
   const dismissPopup = useCallback(() => setPopupDismissed(true), []);
 
   return {
-    updateInfo,                          // false | undefined | { version, body }
+    updateInfo,
     hasUpdate: !!updateInfo,
     installing,
+    installError,
     popupDismissed,
     installUpdate,
     dismissPopup,

@@ -1809,6 +1809,27 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn download_and_install_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    use std::process::Command;
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        // Download to temp file
+        let data = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+        let temp_path = std::env::temp_dir().join("pos-app-update.msi");
+        std::fs::write(&temp_path, &data).map_err(|e| e.to_string())?;
+        // Run MSI silently
+        Command::new("msiexec")
+            .args(["/i", temp_path.to_str().unwrap(), "/quiet", "/norestart"])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        app.restart();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_db_config(app: tauri::AppHandle) -> Result<Option<DbConfig>, String> {
     let path = config_path(&app)?;
     if !path.exists() {
@@ -1874,6 +1895,7 @@ pub fn run() {
             // Updater
             check_for_update,
             install_update,
+            download_and_install_update,
             // DB config
             get_db_config,
             save_db_config,

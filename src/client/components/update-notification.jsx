@@ -17,7 +17,7 @@ import {
 import { useUpdater } from "@/hooks/use-updater";
 
 // ── Top banner (replaces AlertDialog) ────────────────────────────────────────
-function UpdateBanner({ updateInfo, installing, onInstall, onDismiss }) {
+function UpdateBanner({ updateInfo, installing, installError, onInstall, onDismiss }) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -82,7 +82,7 @@ function UpdateBanner({ updateInfo, installing, onInstall, onDismiss }) {
 }
 
 // ── Notification drawer ──────────────────────────────────────────────────────
-function UpdateDrawer({ open, onClose, updateInfo, installing, onInstall }) {
+function UpdateDrawer({ open, onClose, updateInfo, installing, installError, onInstall }) {
   return (
     <Sheet open={open} onOpenChange={onClose}>
       <SheetContent side="right" className="w-80 flex flex-col gap-0 p-0">
@@ -112,9 +112,7 @@ function UpdateDrawer({ open, onClose, updateInfo, installing, onInstall }) {
               <Button
                 size="sm"
                 className="w-full h-8 text-xs gap-1.5"
-                onClick={() => {
-                  onInstall();
-                }}
+                onClick={onInstall}
                 disabled={installing}
               >
                 {installing ? (
@@ -129,6 +127,10 @@ function UpdateDrawer({ open, onClose, updateInfo, installing, onInstall }) {
                   </>
                 )}
               </Button>
+
+              {installError && (
+                <p className="text-xs text-destructive break-all">{installError}</p>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-14 text-center gap-3 text-muted-foreground">
@@ -149,7 +151,7 @@ function UpdateDrawer({ open, onClose, updateInfo, installing, onInstall }) {
 
 // ── Bell icon button (goes in the header) ────────────────────────────────────
 export function UpdateBell() {
-  const { updateInfo, hasUpdate, installing, popupDismissed, installUpdate, dismissPopup } =
+  const { updateInfo, hasUpdate, installing, installError, popupDismissed, installUpdate, dismissPopup } =
     useUpdater();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -161,6 +163,7 @@ export function UpdateBell() {
       <UpdateBanner
         updateInfo={showBanner ? updateInfo : null}
         installing={installing}
+        installError={installError}
         onInstall={installUpdate}
         onDismiss={dismissPopup}
       />
@@ -188,6 +191,7 @@ export function UpdateBell() {
         onClose={() => setDrawerOpen(false)}
         updateInfo={updateInfo || null}
         installing={installing}
+        installError={installError}
         onInstall={installUpdate}
       />
     </>
