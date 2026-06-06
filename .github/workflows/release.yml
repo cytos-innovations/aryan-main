@@ -33,18 +33,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Write .env for signing
-        shell: pwsh
-        run: |
-          $key = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
-          $pass = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
-          $content = "TAURI_SIGNING_PRIVATE_KEY=$key`nTAURI_SIGNING_PRIVATE_KEY_PASSWORD=$pass"
-          [System.IO.File]::WriteAllText("$PWD\.env", $content)
-          Write-Host "Written .env, key length: $($key.Length)"
-
       - name: Build Tauri app
         shell: pwsh
-        run: npm run tauri build
+        run: |
+          $env:TAURI_SIGNING_PRIVATE_KEY = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
+          $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
+          Write-Host "Key length: $($env:TAURI_SIGNING_PRIVATE_KEY.Length)"
+          npm run tauri build
 
       - name: Check for sig files
         shell: pwsh
