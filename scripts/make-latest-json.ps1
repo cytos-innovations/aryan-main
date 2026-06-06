@@ -5,17 +5,24 @@ $version = (Get-Content "src/server/tauri.conf.json" | ConvertFrom-Json).version
 $tag     = "v$version"
 $repo    = "cytos-innovations/aryan-main"
 
-# Find the MSI sig file
-$msisig = Get-ChildItem -Recurse "src/server/target/release/bundle/msi" -Filter "*.msi.sig" | Select-Object -First 1
-$msi    = Get-ChildItem -Recurse "src/server/target/release/bundle/msi" -Filter "*.msi"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
+# Find newest sig file (prefer NSIS .exe.sig, fall back to MSI .msi.sig)
+$bundle  = "src/server/target/release/bundle"
 
-if (-not $msisig) {
-    Write-Host "ERROR: No .msi.sig file found. Run 'npm run tauri build' first." -ForegroundColor Red
+$nsisig  = Get-ChildItem -Recurse "$bundle/nsis" -Filter "*.exe.sig" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$nsis    = Get-ChildItem -Recurse "$bundle/nsis"  -Filter "*.exe"     -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*.sig" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$msisig  = Get-ChildItem -Recurse "$bundle/msi"   -Filter "*.msi.sig" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$msi     = Get-ChildItem -Recurse "$bundle/msi"   -Filter "*.msi"     -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*.sig" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+$chosenSig       = if ($nsisig) { $nsisig } elseif ($msisig) { $msisig } else { $null }
+$chosenInstaller = if ($nsisig) { $nsis   } elseif ($msi)    { $msi    } else { $null }
+
+if (-not $chosenSig) {
+    Write-Host "ERROR: No .sig file found. Run 'npm run tauri build' with signing keys set first." -ForegroundColor Red
     exit 1
 }
 
-$sig     = (Get-Content $msisig.FullName -Raw).Trim()
-$url     = "https://github.com/$repo/releases/download/$tag/$($msi.Name)"
+$sig     = (Get-Content $chosenSig.FullName -Raw).Trim()
+$url     = "https://github.com/$repo/releases/download/$tag/$($chosenInstaller.Name)"
 $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 $json = [ordered]@{
@@ -30,7 +37,7 @@ $json = [ordered]@{
     }
 } | ConvertTo-Json -Depth 5
 
-$json | Out-File -FilePath "latest.json" -Encoding utf8NoBOM
+[System.IO.File]::WriteAllText("$PWD\latest.json", $json)
 
 Write-Host "latest.json created for v$version" -ForegroundColor Green
 Write-Host ""
