@@ -36,7 +36,8 @@ jobs:
       - name: Build Tauri app
         shell: pwsh
         run: |
-          $env:TAURI_SIGNING_PRIVATE_KEY = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
+          $key = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" -replace "`n","" -replace "`r",""
+          $env:TAURI_SIGNING_PRIVATE_KEY = $key
           $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
           Write-Host "Key length: $($env:TAURI_SIGNING_PRIVATE_KEY.Length)"
           npm run tauri build
