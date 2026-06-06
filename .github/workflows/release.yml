@@ -40,61 +40,39 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      - name: List bundle output
+      - name: Upload installers to release
         shell: pwsh
         run: |
-          Get-ChildItem -Recurse "src/server/target/release/bundle" | Select-Object FullName
+          $bundle = "src/server/target/release/bundle"
+          $msi    = Get-ChildItem -Recurse "$bundle" -Filter "*.msi"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
+          $nsis   = Get-ChildItem -Recurse "$bundle" -Filter "*.exe"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
+          $msisig = Get-ChildItem -Recurse "$bundle" -Filter "*.msi.sig" | Select-Object -First 1
+          $nsisig = Get-ChildItem -Recurse "$bundle" -Filter "*.exe.sig" | Select-Object -First 1
 
-      - name: Find installers and build latest.json
-        id: build_json
-        shell: pwsh
-        run: |
-          $bundle  = "src/server/target/release/bundle"
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          $tag     = "${{ github.ref_name }}"
-          $repo    = "${{ github.repository }}"
-          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          Write-Host "Files found:"
+          Write-Host "MSI:      $($msi?.Name)"
+          Write-Host "NSIS:     $($nsis?.Name)"
+          Write-Host "MSI SIG:  $($msisig?.Name)"
+          Write-Host "NSIS SIG: $($nsisig?.Name)"
 
-          # Find installer files
-          $msi     = Get-ChildItem -Recurse "$bundle" -Filter "*.msi"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
-          $msisig  = Get-ChildItem -Recurse "$bundle" -Filter "*.msi.sig" | Select-Object -First 1
-          $nsis    = Get-ChildItem -Recurse "$bundle" -Filter "*.exe"     | Where-Object { $_.Name -notlike "*.sig" } | Select-Object -First 1
-          $nsisig  = Get-ChildItem -Recurse "$bundle" -Filter "*.exe.sig" | Select-Object -First 1
+          # Build file list
+          $files = @($msi.FullName, $nsis.FullName)
+          if ($msisig)  { $files += $msisig.FullName }
+          if ($nsisig)  { $files += $nsisig.FullName }
 
-          Write-Host "MSI:      $($msi?.FullName)"
-          Write-Host "MSI SIG:  $($msisig?.FullName)"
-          Write-Host "NSIS:     $($nsis?.FullName)"
-          Write-Host "NSIS SIG: $($nsisig?.FullName)"
+          # Print sig content for manual latest.json creation
+          if ($msisig) {
+            Write-Host "`nMSI Signature:"
+            Get-Content $msisig.FullName
+          }
+          if ($nsisig) {
+            Write-Host "`nNSIS Signature:"
+            Get-Content $nsisig.FullName
+          }
 
-          # Pick best available sig
-          $chosenInstaller = if ($nsisig) { $nsis } else { $msi }
-          $chosenSig       = if ($nsisig) { $nsisig } else { $msisig }
-
-          # Build latest.json — sig is empty string if not available
-          $sig = if ($chosenSig) { (Get-Content $chosenSig.FullName -Raw).Trim() } else { "" }
-          $url = "https://github.com/$repo/releases/download/$tag/$($chosenInstaller.Name)"
-
-          $json = [ordered]@{
-            version  = $version
-            pub_date = $pubDate
-            notes    = "See the release page for details."
-            platforms = [ordered]@{
-              "windows-x86_64" = [ordered]@{
-                url       = $url
-                signature = $sig
-              }
-            }
-          } | ConvertTo-Json -Depth 5
-
-          $json | Out-File -FilePath "latest.json" -Encoding utf8NoBOM
-          Write-Host "latest.json:"
-          Get-Content "latest.json"
-
-          # Outputs
-          echo "MSI=$($msi.FullName)"   >> $env:GITHUB_OUTPUT
-          echo "NSIS=$($nsis.FullName)" >> $env:GITHUB_OUTPUT
-          if ($msisig)  { echo "MSI_SIG=$($msisig.FullName)"  >> $env:GITHUB_OUTPUT }
-          if ($nsisig)  { echo "NSIS_SIG=$($nsisig.FullName)" >> $env:GITHUB_OUTPUT }
+          $fileList = $files -join "`n"
+          echo "FILES=$fileList" >> $env:GITHUB_OUTPUT
+        id: files
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -108,6 +86,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            ${{ steps.build_json.outputs.MSI }}
-            ${{ steps.build_json.outputs.NSIS }}
-            latest.json
+            src/server/target/release/bundle/msi/*.msi
+            src/server/target/release/bundle/nsis/*.exe
+            src/server/target/release/bundle/msi/*.sig
+            src/server/target/release/bundle/nsis/*.sig
