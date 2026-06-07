@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Exchange01Icon,
@@ -43,8 +43,11 @@ const STATUS_DOT = {
 // scrollable, filterable option list.
 
 function TablePicker({ value, onChange, options, placeholder, disabled, emptyText }) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ]       = useState("");
+  const [open, setOpen]       = useState(false);
+  const [q, setQ]             = useState("");
+  const [cursor, setCursor]   = useState(-1);
+  const listRef               = useRef(null);
+  const itemRefs              = useRef([]);
 
   const selected = options.find((o) => o.value === value) ?? null;
 
@@ -59,8 +62,41 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
     );
   }, [options, q]);
 
-  // Reset the query each time the popover opens
-  useEffect(() => { if (open) setQ(""); }, [open]);
+  // Reset query and cursor each time the popover opens
+  useEffect(() => {
+    if (open) { setQ(""); setCursor(-1); }
+  }, [open]);
+
+  // Reset cursor when filtered list changes
+  useEffect(() => { setCursor(-1); }, [filtered]);
+
+  // Scroll the highlighted item into view
+  useEffect(() => {
+    if (cursor >= 0 && itemRefs.current[cursor]) {
+      itemRefs.current[cursor].scrollIntoView({ block: "nearest" });
+    }
+  }, [cursor]);
+
+  function handleKeyDown(e) {
+    if (!open) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setCursor((c) => Math.min(c + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setCursor((c) => Math.max(c - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (cursor >= 0 && filtered[cursor]) {
+        onChange(filtered[cursor].value);
+        setOpen(false);
+      }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  function pick(val) { onChange(val); setOpen(false); }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -88,7 +124,7 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
         </button>
       </PopoverTrigger>
 
-      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0 gap-0 overflow-hidden">
+      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0 gap-0">
         {/* Search box */}
         <div className="flex items-center gap-2 border-b px-3">
           <HugeiconsIcon icon={Search01Icon} size={14} strokeWidth={2} className="shrink-0 text-muted-foreground" />
@@ -96,28 +132,38 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={handleKeyDown}
             placeholder="Search by name or code…"
             className="h-10 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
         </div>
 
         {/* Options */}
-        <div className="max-h-60 overflow-y-auto p-1">
+        <div
+          ref={listRef}
+          className="max-h-60 overflow-y-auto p-1"
+          onWheel={(e) => {
+            e.stopPropagation();
+            listRef.current.scrollTop += e.deltaY;
+          }}
+        >
           {filtered.length === 0 ? (
             <div className="px-2 py-6 text-center text-xs text-muted-foreground">
               {emptyText ?? "No tables found."}
             </div>
           ) : (
-            filtered.map((o) => {
-              const active = o.value === value;
+            filtered.map((o, idx) => {
+              const active      = o.value === value;
+              const highlighted = idx === cursor;
               return (
                 <button
                   type="button"
                   key={o.value}
-                  onClick={() => { onChange(o.value); setOpen(false); }}
+                  ref={(el) => (itemRefs.current[idx] = el)}
+                  onClick={() => pick(o.value)}
                   className={[
                     "flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm",
-                    active ? "bg-muted" : "hover:bg-muted/50",
+                    highlighted ? "bg-accent text-accent-foreground" : active ? "bg-muted" : "hover:bg-muted/50",
                   ].join(" ")}
                 >
                   {o.dot && <span className={`size-2 shrink-0 rounded-full ${o.dot}`} />}

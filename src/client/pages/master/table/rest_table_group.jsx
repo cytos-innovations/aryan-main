@@ -352,7 +352,7 @@ export default function TableGroup() {
                 <FieldLabel>Applicable Rate <span className="text-destructive">*</span></FieldLabel>
                 <Select value={form.applicable_rate}
                   onValueChange={(v) => setForm((f) => ({ ...f, applicable_rate: v }))}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full" onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {RATE_OPTIONS.map((r) => (
                       <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
@@ -390,7 +390,7 @@ export default function TableGroup() {
                     <FieldLabel>Service Printer</FieldLabel>
                     <Select value={form.service_printer_name}
                       onValueChange={(v) => setForm((f) => ({ ...f, service_printer_name: v }))}>
-                      <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectTrigger className="w-full" onKeyDown={enterNav.select}><SelectValue placeholder="None" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__none__">None</SelectItem>
                         {kitchenSections.map((ks) => (
@@ -403,7 +403,7 @@ export default function TableGroup() {
                     <FieldLabel>Printer Location</FieldLabel>
                     <Select value={form.printer_location}
                       onValueChange={(v) => setForm((f) => ({ ...f, printer_location: v }))}>
-                      <SelectTrigger className="w-full"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectTrigger className="w-full" onKeyDown={enterNav.select}><SelectValue placeholder="None" /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__none__">None</SelectItem>
                         {kitchenSections.map((ks) => (

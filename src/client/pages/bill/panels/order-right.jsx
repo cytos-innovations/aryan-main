@@ -44,7 +44,9 @@ const QUICK_REASONS = [
   "Duplicate entry",
 ];
 
-function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
+function VoidReasonDialog({ item, quantityToVoid: initialQty, onConfirm, onClose }) {
+  const maxQty = Number(item.quantity) || 1;
+  const [qty, setQty] = useState(initialQty);
   const [reason, setReason] = useState("");
   const inputRef = useRef(null);
 
@@ -55,7 +57,7 @@ function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
   function handleConfirm() {
     const trimmed = reason.trim();
     if (!trimmed) return;
-    onConfirm(trimmed);
+    onConfirm(trimmed, qty);
   }
 
   function handleKey(e) {
@@ -63,7 +65,7 @@ function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
     if (e.key === "Escape") onClose();
   }
 
-  const isFullRemove = quantityToVoid >= (Number(item.quantity) || 1);
+  const isFullRemove = qty >= maxQty;
 
   return (
     <div
@@ -80,11 +82,6 @@ function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
             </p>
             <p className="text-[11px] text-muted-foreground truncate mt-0.5">
               {item.item_name}
-              {!isFullRemove && (
-                <span className="ml-1 text-destructive font-medium">
-                  (−{quantityToVoid} of {item.quantity})
-                </span>
-              )}
             </p>
           </div>
         </div>
@@ -94,6 +91,51 @@ function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
           <p className="text-xs text-muted-foreground">
             This item has already been sent to the kitchen. Select or type a reason to proceed.
           </p>
+
+          {/* Qty selector */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground shrink-0">Qty to remove:</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setQty((q) => Math.max(1, q - 1))}
+                disabled={qty <= 1}
+                className="h-7 w-7 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 transition-colors"
+              >
+                <HugeiconsIcon icon={MinusSignIcon} size={10} strokeWidth={2.5} />
+              </button>
+              <input
+                type="number"
+                min="1"
+                max={maxQty}
+                value={qty}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (!isNaN(v)) setQty(Math.min(maxQty, Math.max(1, v)));
+                }}
+                className="w-12 h-7 text-center text-sm font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-destructive px-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              />
+              <button
+                type="button"
+                onClick={() => setQty((q) => Math.min(maxQty, q + 1))}
+                disabled={qty >= maxQty}
+                className="h-7 w-7 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 transition-colors"
+              >
+                <HugeiconsIcon icon={Add01Icon} size={10} strokeWidth={2.5} />
+              </button>
+            </div>
+            <span className="text-[11px] text-muted-foreground/60">of {maxQty}</span>
+            {/* Quick-select all */}
+            {qty < maxQty && (
+              <button
+                type="button"
+                onClick={() => setQty(maxQty)}
+                className="ml-auto text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                All
+              </button>
+            )}
+          </div>
 
           {/* Quick pick */}
           <div className="flex flex-wrap gap-1.5">
@@ -138,7 +180,7 @@ function VoidReasonDialog({ item, quantityToVoid, onConfirm, onClose }) {
             disabled={!reason.trim()}
             className="h-8 px-4 text-xs bg-destructive hover:bg-destructive/90 text-destructive-foreground border-0 disabled:opacity-40"
           >
-            {isFullRemove ? "Remove Item" : "Reduce Qty"}
+            {isFullRemove ? "Remove Item" : `Reduce Qty (−${qty})`}
           </Button>
         </div>
       </div>
@@ -168,7 +210,7 @@ function KotDot({ status }) {
 
 // ─── Order item row ───────────────────────────────────────────
 
-function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActive, onQtyEnter }) {
+function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter }) {
   const { auth } = useAuth();
   const updateQty       = useUpdateOrderItemQty(sessionId);
   const cancelItem      = useCancelOrderItem(sessionId);
@@ -192,9 +234,9 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
   if (item.item_status === "CANCELLED") return null;
 
   const isKotSent = !isDraft && item.kot_status !== "PENDING" && item.item_status === "ACTIVE";
-  const canEdit   = isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE");
-  // KOT-sent items can still be removed/reduced — they just need a reason
-  const canRemove = canEdit || isKotSent;
+  const canEdit   = !isBillPrinted && (isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE"));
+  // KOT-sent items can still be removed/reduced — they just need a reason — but not after bill is printed
+  const canRemove = !isBillPrinted && (canEdit || isKotSent);
 
   const hasPending = !isDraft && Object.prototype.hasOwnProperty.call(pendingItemKotMsgs, item.id);
   const kotMessage = isDraft
@@ -289,6 +331,7 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
   }
 
   function handleIncrement() {
+    if (!canEdit) return;
     if (isDraft) updateDraftQty(item.menu_id, item.quantity + 1);
     else updateQty.mutate({ id: item.id, qty: item.quantity + 1 });
   }
@@ -300,10 +343,10 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
     if (isKotSent) setVoidDialog({ quantityToVoid: Number(item.quantity) });
   }
 
-  function handleVoidConfirm(reason) {
+  function handleVoidConfirm(reason, qty) {
     cancelWithReason.mutate({
       orderItemId:    item.id,
-      quantityToVoid: voidDialog.quantityToVoid,
+      quantityToVoid: qty,
       voidReason:     reason,
       userId:         auth?.user?.id ?? null,
       voidedBy:       auth?.user?.username ?? null,
@@ -312,7 +355,7 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
   }
 
   function startQtyEdit() {
-    if (!canEdit) return;
+    if (!canEdit || isBillPrinted) return;
     setQtyInput(String(item.quantity));
     setQtyEditing(true);
     setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 30);
@@ -549,7 +592,7 @@ function OrderItemRow({ item, sessionId, isDraft, isF6Active, onF6Close, isActiv
 
 // ─── Order items area ─────────────────────────────────────────
 
-function OrderItemsArea({ sessionId, items, isLoading, isDraft, lastAddedKey, onQtyEnter }) {
+function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, lastAddedKey, onQtyEnter }) {
   const [f6ItemKey, setF6ItemKey] = useState(null);
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
@@ -617,6 +660,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, lastAddedKey, on
           item={item}
           sessionId={sessionId}
           isDraft={isDraft}
+          isBillPrinted={isBillPrinted}
           isActive={lastAddedKey === item.menu_id}
           isF6Active={f6ItemKey === item.menu_id}
           onF6Close={() => setF6ItemKey(null)}
@@ -629,7 +673,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, lastAddedKey, on
 
 // ─── Bill totals section ──────────────────────────────────────
 
-function BillTotals({ items, sessionDisc }) {
+function BillTotals({ items, sessionDisc, menu }) {
   const [taxExpanded, setTaxExpanded] = useState(false);
 
   const totals = useMemo(() => calcBillTotals(items ?? []), [items]);
@@ -650,9 +694,35 @@ function BillTotals({ items, sessionDisc }) {
 
   const taxBreakdown = useMemo(() => calcTaxBreakdown(items ?? []), [items]);
 
-  // Use saved discount from sessionDisc when available for accurate display
-  const totalDiscAmt = sessionDisc
-    ? Math.round(((sessionDisc.discAmt || 0) + (sessionDisc.foodDiscAmt || 0) + (sessionDisc.liquorDiscAmt || 0) + (sessionDisc.tDisc || 0)) * 100) / 100
+  // Build catId → category name: from menu master first (covers draft items), then from order items
+  const catNameMap = useMemo(() => {
+    const map = {};
+    for (const m of menu ?? []) {
+      if (m.category_id != null && m.category_name) map[m.category_id] = m.category_name;
+    }
+    for (const item of items ?? []) {
+      if (item.category_id != null && item.category_name) map[item.category_id] = item.category_name;
+    }
+    return map;
+  }, [menu, items]);
+
+  // Build per-category discount rows from new sessionDisc shape (catDiscAmts + catRows)
+  const catDiscRows = useMemo(() => {
+    if (!sessionDisc?.catDiscAmts) return [];
+    return Object.entries(sessionDisc.catDiscAmts)
+      .filter(([, amt]) => Number(amt) > 0)
+      .map(([catId, amt]) => {
+        const pctVal  = sessionDisc.catRows?.[catId]?.value;
+        const pct     = pctVal !== undefined ? Number(pctVal) : null;
+        const name    = catNameMap[catId] ?? `Category ${catId}`;
+        return { catId, amt: Number(amt), pct, name };
+      });
+  }, [sessionDisc, catNameMap]);
+
+  // Fallback to old shape fields so existing saved sessionDisc still renders
+  const legacyDiscAmt = (sessionDisc?.discAmt || 0) + (sessionDisc?.foodDiscAmt || 0) + (sessionDisc?.liquorDiscAmt || 0);
+  const totalDiscAmt  = sessionDisc
+    ? ((sessionDisc.totalCatDisc || 0) + (sessionDisc.billDiscAmt || 0) || legacyDiscAmt)
     : 0;
   const netAmount = sessionDisc?.netAmt ?? totals.finalAmount;
   const roundOff  = Math.round(netAmount) - netAmount;
@@ -709,7 +779,20 @@ function BillTotals({ items, sessionDisc }) {
         {/* Bill discount breakdown from saved sessionDisc */}
         {sessionDisc && totalDiscAmt > 0 && (
           <div className="space-y-0.5">
-            {sessionDisc.foodDiscAmt > 0 && (
+            {/* New shape: per-category rows */}
+            {catDiscRows.map(({ catId, amt, pct, name }) => (
+              <div key={catId} className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  {name} Disc{pct != null && pct > 0 ? ` (${pct}%)` : ""}
+                </span>
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
+                  -₹{fmtAmount(amt)}
+                </span>
+              </div>
+            ))}
+            {/* Legacy shape fallback */}
+            {!sessionDisc.catDiscAmts && sessionDisc.foodDiscAmt > 0 && (
               <div className="flex items-center justify-between text-[11px]">
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
@@ -718,7 +801,7 @@ function BillTotals({ items, sessionDisc }) {
                 <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
               </div>
             )}
-            {sessionDisc.liquorDiscAmt > 0 && (
+            {!sessionDisc.catDiscAmts && sessionDisc.liquorDiscAmt > 0 && (
               <div className="flex items-center justify-between text-[11px]">
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
@@ -727,13 +810,15 @@ function BillTotals({ items, sessionDisc }) {
                 <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
               </div>
             )}
-            {sessionDisc.discAmt > 0 && (
+            {sessionDisc.billDiscAmt > 0 && (
               <div className="flex items-center justify-between text-[11px]">
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Discount
+                  Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}
                 </span>
-                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.discAmt)}</span>
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
+                  -₹{fmtAmount(sessionDisc.billDiscAmt)}
+                </span>
               </div>
             )}
             {sessionDisc.sCharge > 0 && (
@@ -743,6 +828,24 @@ function BillTotals({ items, sessionDisc }) {
                   Service Charge
                 </span>
                 <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.sCharge)}</span>
+              </div>
+            )}
+            {sessionDisc.miscMinus > 0 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  Misc Deduct
+                </span>
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.miscMinus)}</span>
+              </div>
+            )}
+            {sessionDisc.misc > 0 && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                  Misc Add
+                </span>
+                <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.misc)}</span>
               </div>
             )}
           </div>
@@ -777,7 +880,7 @@ function TotalsRow({ label, value, accent, small }) {
 
 // ─── Session top bar ──────────────────────────────────────────
 
-function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCovers, onSetDraftConfig }) {
+function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCovers, onSetDraftConfig, tableName }) {
   const updateInfo  = useUpdateSessionInfo(sessionId);
   const updateParty = useUpdateSessionParty(sessionId);
   const {
@@ -825,8 +928,7 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
 
   return (
     <div className="shrink-0 border-b bg-card">
-      {/* Party + covers row */}
-      <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
+      <div className="flex items-center gap-2 px-3 py-2 min-w-0">
         <CustomerPicker
           customerId={customerId}
           customerName={customerName}
@@ -839,10 +941,13 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
           disabled={isPartyLocked}
           onSelect={handleSelectWaiter}
         />
+        {tableName && (
+          <span className="text-sm font-bold tracking-tight shrink-0">{tableName}</span>
+        )}
 
-        {/* Covers — DINE_IN only */}
+        {/* Covers — pushed to the right, never wraps */}
         {currentOrderType === ORDER_TYPE.DINE_IN && (
-          <div className="flex items-center gap-1 ml-auto">
+          <div className="flex items-center gap-1 ml-auto shrink-0">
             <HugeiconsIcon icon={UserGroupIcon} size={13} strokeWidth={2} className="text-muted-foreground" />
             <button
               type="button"
@@ -852,9 +957,21 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
             >
               <HugeiconsIcon icon={MinusSignIcon} size={8} strokeWidth={2.5} />
             </button>
-            <span className="w-5 text-center text-xs font-mono font-medium tabular-nums">
-              {currentCovers}
-            </span>
+            <input
+              type="number"
+              min="1"
+              max="99"
+              value={currentCovers}
+              disabled={isClosed}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v >= 1) {
+                  if (isDraft) onSetDraftConfig({ covers: v });
+                  else if (session) updateInfo.mutate({ sessionId, orderType: session.order_type, covers: v, customerName: session.customer_name ?? null });
+                }
+              }}
+              className="w-8 h-5 text-center text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary px-0.5 disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
             <button
               type="button"
               onClick={() => adjustCovers(1)}
@@ -879,9 +996,14 @@ export default function OrderRightPanel({
   items, isLoadingItems,
   discountPercent,
   sessionDisc,
+  menu,
   lastAddedKey,
   onQtyEnter,
+  selectedTableName,
 }) {
+  const tableName     = session?.table_name ?? selectedTableName ?? null;
+  const isBillPrinted = !isDraft && session?.session_status === "BILL_PRINTED";
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-card">
       {/* Session type + meta bar */}
@@ -892,6 +1014,7 @@ export default function OrderRightPanel({
         draftOrderType={draftOrderType}
         draftCovers={draftCovers}
         onSetDraftConfig={onSetDraftConfig}
+        tableName={tableName}
       />
 
       {/* Order items (scrollable) */}
@@ -901,6 +1024,7 @@ export default function OrderRightPanel({
           items={items}
           isLoading={isLoadingItems}
           isDraft={isDraft}
+          isBillPrinted={isBillPrinted}
           lastAddedKey={lastAddedKey}
           onQtyEnter={onQtyEnter}
         />
@@ -911,6 +1035,7 @@ export default function OrderRightPanel({
         items={items}
         discountPercent={discountPercent}
         sessionDisc={sessionDisc}
+        menu={menu}
       />
     </div>
   );

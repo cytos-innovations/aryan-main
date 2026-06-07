@@ -308,7 +308,7 @@ export default function AccDayBook() {
                 value={form.groupCode ? String(form.groupCode) : ""}
                 onValueChange={(v) => setF("groupCode", v || null)}
               >
-                <SelectTrigger>
+                <SelectTrigger onKeyDown={enterNav.select}>
                   <SelectValue placeholder="Select account group" />
                 </SelectTrigger>
                 <SelectContent>
@@ -325,7 +325,7 @@ export default function AccDayBook() {
                 value={form.genLegCode ? String(form.genLegCode) : ""}
                 onValueChange={(v) => setF("genLegCode", v || null)}
               >
-                <SelectTrigger>
+                <SelectTrigger onKeyDown={enterNav.select}>
                   <SelectValue placeholder="Select general ledger" />
                 </SelectTrigger>
                 <SelectContent>

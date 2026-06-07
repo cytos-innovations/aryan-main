@@ -66,8 +66,8 @@ function CategoryChips({ menu }) {
       </button>
 
       {categories.map((cat) => {
-        const active     = selectedMenuCategoryId === cat.id;
-        const hasGroups  = cat.groups.length > 0;
+        const active    = selectedMenuCategoryId === cat.id;
+        const hasGroups = cat.groups.length > 0;
 
         if (!hasGroups) {
           return (
@@ -88,8 +88,7 @@ function CategoryChips({ menu }) {
               <button
                 type="button"
                 className={chipClass(active)}
-                onMouseEnter={() => setOpenCat(cat.id)}
-                onClick={() => { selectMenuCategory(cat.id); selectMenuGroup(null); }}
+                onClick={() => { selectMenuCategory(cat.id); selectMenuGroup(null); setOpenCat(openCat === cat.id ? null : cat.id); }}
               >
                 {cat.name}
                 <HugeiconsIcon icon={ArrowDown01Icon} size={11} strokeWidth={2} />
@@ -100,7 +99,6 @@ function CategoryChips({ menu }) {
               sideOffset={4}
               avoidCollisions={false}
               className="w-48 p-1 z-50"
-              onMouseLeave={() => setOpenCat(null)}
             >
               <button
                 type="button"

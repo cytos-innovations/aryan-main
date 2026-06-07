@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -107,7 +108,11 @@ function isToday(dateStr) {
 function fmtDate(dateStr) {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", weekday: "short" });
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const weekday = d.toLocaleDateString("en-IN", { weekday: "short" });
+  return `${dd}/${mm}/${yyyy} ${weekday}`;
 }
 
 function fmtTime(timeStr) {
@@ -449,10 +454,8 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
             <div className="grid grid-cols-2 gap-3">
               <Field>
                 <FieldLabel>Date <span className="text-destructive">*</span></FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.reservationDate}
-                  min={getTodayStr()}
                   onChange={(e) => set("reservationDate", e.target.value)}
                   className={cn(errors.reservationDate && "border-destructive")}
                 />
@@ -690,8 +693,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
             <div className="grid grid-cols-2 gap-3">
               <Field>
                 <FieldLabel>Date <span className="text-destructive">*</span></FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.reservationDate}
                   onChange={(e) => set("reservationDate", e.target.value)}
                   className={cn(errors.reservationDate && "border-destructive")}

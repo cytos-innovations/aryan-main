@@ -70,6 +70,7 @@ export const TABLE_STATUS = {
   AVAILABLE: "AVAILABLE",
   OCCUPIED:  "OCCUPIED",
   RESERVED:  "RESERVED",
+  ON_HOLD:   "ON_HOLD",
 };
 
 export const BILLING_VIEW = {

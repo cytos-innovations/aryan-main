@@ -289,7 +289,7 @@ export default function AccAccountGroups() {
                 value={form.categoryId ? String(form.categoryId) : ""}
                 onValueChange={(v) => setF("categoryId", v || null)}
               >
-                <SelectTrigger>
+                <SelectTrigger onKeyDown={enterNav.select}>
                   <SelectValue placeholder="Select account category" />
                 </SelectTrigger>
                 <SelectContent>

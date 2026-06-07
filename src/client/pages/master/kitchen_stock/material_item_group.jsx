@@ -365,7 +365,7 @@ export default function MaterialItemGroup() {
               <Field>
                 <FieldLabel>Payable</FieldLabel>
                 <Select value={form.payable} onValueChange={(v) => setF("payable", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="1">Yes</SelectItem>
                     <SelectItem value="0">No</SelectItem>
@@ -375,7 +375,7 @@ export default function MaterialItemGroup() {
               <Field>
                 <FieldLabel>Service Tax Applicable</FieldLabel>
                 <Select value={form.appliServiceTax} onValueChange={(v) => setF("appliServiceTax", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="0">No</SelectItem>
                     <SelectItem value="1">Yes</SelectItem>
@@ -385,7 +385,7 @@ export default function MaterialItemGroup() {
               <Field>
                 <FieldLabel>Restaurant Sale Mode</FieldLabel>
                 <Select value={form.resSaleMode} onValueChange={(v) => setF("resSaleMode", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="0">No</SelectItem>
                     <SelectItem value="1">Yes</SelectItem>
@@ -418,7 +418,7 @@ export default function MaterialItemGroup() {
                 <FieldLabel>Units</FieldLabel>
                 <Select value={form.unitsId ? String(form.unitsId) : ""}
                   onValueChange={(v) => setF("unitsId", v || null)}>
-                  <SelectTrigger><SelectValue placeholder="Select unit" /></SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}><SelectValue placeholder="Select unit" /></SelectTrigger>
                   <SelectContent>
                     {units.map((u) => (
                       <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>

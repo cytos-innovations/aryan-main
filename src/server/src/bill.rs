@@ -41,8 +41,9 @@ pub struct MenuItemForBilling {
     pub rate_5:               f64,
     pub tax_name:             Option<String>,
     pub tax_percentage:       f64,
-    pub allow_discount:       bool,
-    pub max_discount_percent: f64,
+    pub allow_discount:        bool,
+    pub max_discount_percent:  f64,
+    pub auto_discount_percent: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +83,11 @@ pub struct OrderItemRow {
     pub food_type_id:         Option<i32>,
     pub kitchen_section_id:   Option<i32>,
     pub is_liquor:            bool,
+    pub category_id:          Option<i32>,
+    pub category_name:        Option<String>,
+    pub allow_discount:       bool,
+    pub max_discount_percent: f64,
+    pub auto_discount_percent: f64,
     pub kot_status:           String,
     pub item_status:          String,
     pub special_instruction:  Option<String>,
@@ -266,7 +272,9 @@ pub async fn get_menu_for_billing(
         "SELECT mc.id, mc.code, mc.name AS item_name, mc.menu_alias,
                 mc.menu_group_id AS group_id, mg.name AS group_name,
                 mg.category_id, cat.name AS category_name,
-                cat.allow_discount, cat.max_discount_percent,
+                cat.allow_discount,
+                COALESCE(cat.max_discount_percent,  0)::float8 AS max_discount_percent,
+                COALESCE(cat.auto_discount_percent, 0)::float8 AS auto_discount_percent,
                 mc.food_type_id, ft.name AS food_type,
                 mc.kitchen_section_id,
                 (mc.liquor_group_id IS NOT NULL) AS is_liquor,
@@ -315,8 +323,9 @@ pub async fn get_menu_for_billing(
             rate_5:               r.try_get::<f64, _>("rate_5").unwrap_or(0.0),
             tax_name:             if tax_name_raw.is_empty() { None } else { Some(tax_name_raw) },
             tax_percentage:       r.try_get::<f64, _>("tax_percentage").unwrap_or(0.0),
-            allow_discount:       r.try_get("allow_discount").unwrap_or(false),
-            max_discount_percent: r.try_get::<f64, _>("max_discount_percent").unwrap_or(0.0),
+            allow_discount:        r.try_get("allow_discount").unwrap_or(false),
+            max_discount_percent:  r.try_get::<f64, _>("max_discount_percent").unwrap_or(0.0),
+            auto_discount_percent: r.try_get::<f64, _>("auto_discount_percent").unwrap_or(0.0),
         }
     }).collect())
 }
@@ -902,6 +911,11 @@ pub async fn get_order_items(
                 oi.food_type_id, ft.name AS food_type,
                 oi.kitchen_section_id,
                 (mc.liquor_group_id IS NOT NULL) AS is_liquor,
+                mg.category_id,
+                cat.name AS category_name,
+                COALESCE(cat.allow_discount, FALSE) AS allow_discount,
+                COALESCE(cat.max_discount_percent, 0)::float8 AS max_discount_percent,
+                COALESCE(cat.auto_discount_percent, 0)::float8 AS auto_discount_percent,
                 oi.kot_status, oi.item_status,
                 oi.special_instruction,
                 (SELECT string_agg(oim.modifier_name, ', ' ORDER BY oim.id)
@@ -909,8 +923,10 @@ pub async fn get_order_items(
                  WHERE  oim.order_item_id = oi.id AND oim.is_active = 1) AS kot_messages,
                 oi.ordered_at
          FROM   order_item oi
-         LEFT JOIN food_type ft  ON ft.id  = oi.food_type_id
-         LEFT JOIN menu_card mc  ON mc.id  = oi.menu_id
+         LEFT JOIN food_type ft   ON ft.id  = oi.food_type_id
+         LEFT JOIN menu_card mc   ON mc.id  = oi.menu_id
+         LEFT JOIN menu_group mg  ON mg.id  = mc.menu_group_id
+         LEFT JOIN menu_category cat ON cat.id = mg.category_id
          WHERE  oi.order_session_id = $1
          ORDER  BY oi.ordered_at, oi.id",
     )
@@ -939,6 +955,11 @@ pub async fn get_order_items(
         food_type_id:         r.try_get("food_type_id").ok().flatten(),
         kitchen_section_id:   r.try_get("kitchen_section_id").ok().flatten(),
         is_liquor:            r.try_get("is_liquor").unwrap_or(false),
+        category_id:          r.try_get("category_id").ok().flatten(),
+        category_name:        r.try_get("category_name").ok().flatten(),
+        allow_discount:       r.try_get("allow_discount").unwrap_or(false),
+        max_discount_percent: r.try_get::<f64, _>("max_discount_percent").unwrap_or(0.0),
+        auto_discount_percent:r.try_get::<f64, _>("auto_discount_percent").unwrap_or(0.0),
         kot_status:           r.try_get("kot_status").unwrap_or_else(|_| "PENDING".to_string()),
         item_status:          r.try_get("item_status").unwrap_or_else(|_| "ACTIVE".to_string()),
         special_instruction:  r.try_get("special_instruction").ok().flatten(),

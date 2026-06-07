@@ -222,9 +222,8 @@ export default function Dashboard() {
     return "Good evening";
   })();
 
-  const todayLabel = new Date().toLocaleDateString("en-IN", {
-    weekday: "long", day: "numeric", month: "long", year: "numeric",
-  });
+  const _d = new Date();
+  const todayLabel = `${String(_d.getDate()).padStart(2, "0")}/${String(_d.getMonth() + 1).padStart(2, "0")}/${_d.getFullYear()} — ${_d.toLocaleDateString("en-IN", { weekday: "long" })}`;
 
   const adminQuery = useQuery({
     queryKey: ["dashboard-stats"],

@@ -596,7 +596,7 @@ export default function MenuCategory() {
                   value={form.unitId ? String(form.unitId) : ""}
                   onValueChange={(v) => setF("unitId", v || null)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}>
                     <SelectValue placeholder="Select unit" />
                   </SelectTrigger>
                   <SelectContent>
@@ -645,7 +645,7 @@ export default function MenuCategory() {
                   value={form.allowDiscount}
                   onValueChange={(v) => setF("allowDiscount", v)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

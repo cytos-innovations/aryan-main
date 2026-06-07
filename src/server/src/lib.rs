@@ -1554,6 +1554,34 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
 
     seed_applications(pool).await?;
     seed_module_permissions(pool).await?;
+    sync_sequences(pool).await?;
+
+    Ok(())
+}
+
+async fn sync_sequences(pool: &PgPool) -> Result<(), String> {
+    let tables: &[(&str, &str, &str)] = &[
+        ("food_type",          "food_type_id_seq",          "food_type_code_seq"),
+        ("menu_category",      "menu_category_id_seq",      "menu_category_code_seq"),
+        ("menu_group",         "menu_group_id_seq",         "menu_group_code_seq"),
+        ("menu_card",          "menu_card_id_seq",          "menu_card_code_seq"),
+        ("kitchen_section",    "kitchen_section_id_seq",    "kitchen_section_code_seq"),
+        ("table_group",        "table_group_id_seq",        "table_group_code_seq"),
+        ("restaurant_table",   "restaurant_table_id_seq",   "restaurant_table_code_seq"),
+        ("bill_message",       "bill_message_id_seq",       "bill_message_code_seq"),
+        ("kot_message",        "kot_message_id_seq",        "kot_message_code_seq"),
+    ];
+
+    for (table, id_seq, code_seq) in tables {
+        let sql = format!(
+            "SELECT setval('{id_seq}', GREATEST((SELECT COALESCE(MAX(id), 1) FROM {table}), 1)); \
+             SELECT setval('{code_seq}', GREATEST((SELECT COALESCE(MAX(code), 1) FROM {table}), 1));"
+        );
+        sqlx::raw_sql(&sql)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Sequence sync failed for {table}: {e}"))?;
+    }
 
     Ok(())
 }

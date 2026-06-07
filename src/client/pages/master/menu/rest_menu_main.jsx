@@ -593,7 +593,7 @@ export default function MenuCardPage() {
                     value={form.menu_group_id}
                     onValueChange={(v) => { setF("menu_group_id", v); setRecipeRows([]); }}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full" data-required="true" onKeyDown={enterNav.select}>
                       <SelectValue placeholder="Select a group…" />
                     </SelectTrigger>
                     <SelectContent>
@@ -624,7 +624,7 @@ export default function MenuCardPage() {
                     value={form.food_type_id}
                     onValueChange={(v) => setF("food_type_id", v)}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full" data-required="true" onKeyDown={enterNav.select}>
                       <SelectValue placeholder="Select a type…" />
                     </SelectTrigger>
                     <SelectContent>
@@ -643,7 +643,7 @@ export default function MenuCardPage() {
                     value={form.kitchen_section_id}
                     onValueChange={(v) => setF("kitchen_section_id", v)}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full" onKeyDown={enterNav.select}>
                       <SelectValue placeholder="Select section…" />
                     </SelectTrigger>
                     <SelectContent>

@@ -75,8 +75,35 @@ pub async fn get_menu_cards(
 ) -> Result<PagedMenuCards, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    let search_pattern = format!("%{}%", qs.search.trim());
+    let raw_search = qs.search.trim().to_string();
+    let search_pattern = format!("%{}%", raw_search);
     let offset = qs.page * qs.per_page;
+
+    // Build a PostgreSQL regex for initials matching.
+    // "mks" or "m k s" → each char becomes a word anchor: "(?i)^m\S*\s+k\S*\s+s"
+    // Only activate when every whitespace-stripped token is a single char OR the whole
+    // thing is all letters with no spaces (pure initials like "mks").
+    let initials_regex: Option<String> = {
+        let stripped = raw_search.to_lowercase().replace(|c: char| c.is_whitespace(), "");
+        let tokens: Vec<&str> = raw_search.split_whitespace().collect();
+        let looks_like_initials = !stripped.is_empty()
+            && stripped.chars().all(|c| c.is_alphabetic())
+            && (tokens.iter().all(|t| t.len() == 1) || (tokens.len() == 1 && stripped.len() <= 6));
+        if looks_like_initials {
+            // Build regex: each initial letter must start a word
+            let parts: Vec<String> = stripped
+                .chars()
+                .map(|c| format!(r"{}[^\s]*", c))
+                .collect();
+            Some(format!(r"(?i)^{}", parts.join(r"\s+")))
+        } else {
+            None
+        }
+    };
+
+    // $1 = search_pattern (ILIKE), $2 = initials_regex (or dummy that never matches),
+    // $3 = LIMIT, $4 = OFFSET, $5/$6 = optional filter ids
+    let regex_bind = initials_regex.clone().unwrap_or_else(|| "(?!x)x".to_string());
 
     let order_col = match qs.sort_by.as_deref() {
         Some("code") => "mc.code",
@@ -101,24 +128,28 @@ pub async fn get_menu_cards(
                   LEFT JOIN menu_group mg ON mg.id = mc.menu_group_id \
                   LEFT JOIN food_type ft ON ft.id = mc.food_type_id";
 
-    // Build WHERE conditions dynamically
-    let (where_clause, bind_count, extra_binds): (&str, usize, Vec<i32>) = match (menu_group_id, food_type_id) {
-        (None, None) => ("WHERE mc.name ILIKE $1", 3, vec![]),
-        (Some(gid), None) => ("WHERE mc.name ILIKE $1 AND mc.menu_group_id = $4", 4, vec![gid]),
-        (None, Some(fid)) => ("WHERE mc.name ILIKE $1 AND mc.food_type_id = $4", 4, vec![fid]),
-        (Some(gid), Some(fid)) => ("WHERE mc.name ILIKE $1 AND mc.menu_group_id = $4 AND mc.food_type_id = $5", 5, vec![gid, fid]),
+    // $1=ilike, $2=initials regex, $3=LIMIT, $4=OFFSET, then optional filter binds at $5/$6
+    let name_cond = "(mc.name ILIKE $1 OR mc.name ~* $2)";
+
+    let (where_clause, extra_binds): (String, Vec<i32>) = match (menu_group_id, food_type_id) {
+        (None, None)         => (format!("WHERE {}", name_cond), vec![]),
+        (Some(gid), None)    => (format!("WHERE {} AND mc.menu_group_id = $5", name_cond), vec![gid]),
+        (None, Some(fid))    => (format!("WHERE {} AND mc.food_type_id = $5", name_cond), vec![fid]),
+        (Some(gid), Some(fid)) => (format!("WHERE {} AND mc.menu_group_id = $5 AND mc.food_type_id = $6", name_cond), vec![gid, fid]),
     };
 
-    let count_where = match (menu_group_id, food_type_id) {
-        (None, None) => "WHERE mc.name ILIKE $1".to_string(),
-        (Some(_), None) => "WHERE mc.name ILIKE $1 AND mc.menu_group_id = $2".to_string(),
-        (None, Some(_)) => "WHERE mc.name ILIKE $1 AND mc.food_type_id = $2".to_string(),
-        (Some(_), Some(_)) => "WHERE mc.name ILIKE $1 AND mc.menu_group_id = $2 AND mc.food_type_id = $3".to_string(),
+    let count_where: String = match (menu_group_id, food_type_id) {
+        (None, None)         => format!("WHERE {}", name_cond),
+        (Some(_), None)      => format!("WHERE {} AND mc.menu_group_id = $3", name_cond),
+        (None, Some(_))      => format!("WHERE {} AND mc.food_type_id = $3", name_cond),
+        (Some(_), Some(_))   => format!("WHERE {} AND mc.menu_group_id = $3 AND mc.food_type_id = $4", name_cond),
     };
 
-    // Count query
+    // Count query — binds: $1=ilike, $2=regex, then optional filter ids
     let count_sql = format!("SELECT COUNT(*) AS count FROM menu_card mc {}", count_where);
-    let mut count_q = sqlx::query(&count_sql).bind(&search_pattern);
+    let mut count_q = sqlx::query(&count_sql)
+        .bind(&search_pattern)
+        .bind(&regex_bind);
     for b in &extra_binds {
         count_q = count_q.bind(*b);
     }
@@ -128,19 +159,19 @@ pub async fn get_menu_cards(
         .map_err(|e| format!("Count query failed: {e}"))?;
     let total: i64 = total_row.try_get("count").unwrap_or(0);
 
-    // Data query
+    // Data query — binds: $1=ilike, $2=regex, $3=LIMIT, $4=OFFSET, then optional filter ids
     let data_sql = format!(
-        "{} {} ORDER BY {} {} LIMIT $2 OFFSET $3",
+        "{} {} ORDER BY {} {} LIMIT $3 OFFSET $4",
         select, where_clause, order_col, dir
     );
     let mut data_q = sqlx::query(&data_sql)
         .bind(&search_pattern)
+        .bind(&regex_bind)
         .bind(qs.per_page)
         .bind(offset);
     for b in &extra_binds {
         data_q = data_q.bind(*b);
     }
-    let _ = bind_count; // used implicitly in SQL placeholders
 
     let rows = data_q
         .fetch_all(&pool)

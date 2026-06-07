@@ -11,6 +11,7 @@ import {
 } from "@hugeicons/core-free-icons";
 
 import { Can } from "@/lib/auth";
+import { fmtDatetime } from "@/lib/date-format";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -144,7 +145,7 @@ export default function UserMain() {
       header: ({ column }) => <DataTableColumnHeader column={column} title="Last Login" />,
       cell: ({ row }) =>
         row.original.last_login
-          ? new Date(row.original.last_login).toLocaleString()
+          ? fmtDatetime(row.original.last_login)
           : <span className="text-muted-foreground text-xs">Never</span>,
       meta: { label: "Last Login" },
     },

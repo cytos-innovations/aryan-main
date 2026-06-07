@@ -29,6 +29,7 @@ const initialState = {
   draftCustomerMobile: null,
   draftWaiterId:       null,  // assigned waiter
   draftWaiterName:     null,
+  isRestoredFromHold:  false, // true when this draft was restored from a hold (Hold btn → Release)
 
   // KOT messages for existing-session PENDING items, held in UI until KOT punch.
   // Keyed by order_item_id → message string (null = cleared).
@@ -47,16 +48,17 @@ function billingReducer(state, action) {
         selectedTableId:      action.payload.tableId,
         selectedTableName:    action.payload.tableName,
         view:                 action.payload.view ?? BILLING_VIEW.ORDER_ENTRY,
-        // Reset draft slate whenever we enter order entry
-        draftItems:          [],
-        draftOrderType:      action.payload.orderType       ?? ORDER_TYPE.DINE_IN,
-        draftCovers:         action.payload.draftCovers     ?? 2,
-        draftApplicableRate: action.payload.applicableRate  ?? 1,
+        // Restore held draft items if provided, otherwise start fresh
+        draftItems:          action.payload.draftItems        ?? [],
+        draftOrderType:      action.payload.orderType         ?? ORDER_TYPE.DINE_IN,
+        draftCovers:         action.payload.draftCovers       ?? 2,
+        draftApplicableRate: action.payload.applicableRate    ?? 1,
         draftCustomerName:   action.payload.draftCustomerName ?? null,
-        draftCustomerId:     null,
+        draftCustomerId:     action.payload.draftCustomerId   ?? null,
         draftCustomerMobile: null,
-        draftWaiterId:       null,
+        draftWaiterId:       action.payload.draftWaiterId     ?? null,
         draftWaiterName:     null,
+        isRestoredFromHold:  action.payload.isRestoredFromHold ?? false,
       };
 
     case "SET_VIEW":

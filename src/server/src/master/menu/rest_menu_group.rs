@@ -189,7 +189,13 @@ pub async fn create_menu_group(
     let map_err = |e: sqlx::Error| {
         let m = e.to_string();
         if m.contains("23505") || m.contains("unique") || m.contains("duplicate") {
-            "Group name already exists".to_string()
+            if m.contains("menu_group_name") || m.contains("_name_") {
+                "A menu group with this name already exists".to_string()
+            } else if m.contains("menu_group_code") || m.contains("_code_") {
+                "A menu group with this code already exists".to_string()
+            } else {
+                "A menu group with this name or code already exists".to_string()
+            }
         } else {
             format!("Failed to create group: {e}")
         }
@@ -197,25 +203,22 @@ pub async fn create_menu_group(
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    let id: i32 = if let Some(c) = code.filter(|&c| c > 0) {
+    let resolved_code: i64 = if let Some(c) = code.filter(|&c| c > 0) {
+        c
+    } else {
+        let max: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(code), 0) FROM menu_group")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| format!("Failed to get max code: {e}"))?;
+        max + 1
+    };
+
+    let id: i32 = {
         sqlx::query_scalar(
             "INSERT INTO menu_group (code, name, category_id, multiple_recipe, as_per_size, menu_grp_image) \
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
         )
-        .bind(c)
-        .bind(&name)
-        .bind(category_id)
-        .bind(&multiple_recipe)
-        .bind(&as_per_size)
-        .bind(&menu_grp_image)
-        .fetch_one(&pool)
-        .await
-        .map_err(map_err)?
-    } else {
-        sqlx::query_scalar(
-            "INSERT INTO menu_group (name, category_id, multiple_recipe, as_per_size, menu_grp_image) \
-             VALUES ($1, $2, $3, $4, $5) RETURNING id",
-        )
+        .bind(resolved_code)
         .bind(&name)
         .bind(category_id)
         .bind(&multiple_recipe)
@@ -279,7 +282,7 @@ pub async fn update_menu_group(
     .map_err(|e| {
         let m = e.to_string();
         if m.contains("23505") || m.contains("unique") || m.contains("duplicate") {
-            "Group name already exists".to_string()
+            "A menu group with this name already exists".to_string()
         } else {
             format!("Failed to update group: {e}")
         }

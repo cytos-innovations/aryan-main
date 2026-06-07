@@ -16,6 +16,7 @@ import { Can } from "@/lib/auth";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -769,7 +770,7 @@ export default function LodgeCustomerInfo() {
               <Field className="col-span-1">
                 <FieldLabel>Prefix</FieldLabel>
                 <Select value={form.prefix} onValueChange={(v) => setF("prefix", v)}>
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}>
                     <SelectValue placeholder="Select…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -803,7 +804,7 @@ export default function LodgeCustomerInfo() {
                   value={form.ledger_id}
                   onValueChange={(v) => setF("ledger_id", v)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select} data-required="true">
                     <SelectValue placeholder="Select segment…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -820,8 +821,7 @@ export default function LodgeCustomerInfo() {
                 <FieldLabel>
                   Date of Birth <span className="text-destructive">*</span>
                 </FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.dob}
                   onChange={(e) => setF("dob", e.target.value)}
                 />
@@ -975,8 +975,7 @@ export default function LodgeCustomerInfo() {
 
               <Field className="col-span-1">
                 <FieldLabel>Passport Issue Date</FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.passport_issue_date}
                   onChange={(e) => setF("passport_issue_date", e.target.value)}
                 />
@@ -984,8 +983,7 @@ export default function LodgeCustomerInfo() {
 
               <Field className="col-span-1">
                 <FieldLabel>Passport Expiry Date</FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.passport_expiry_date}
                   onChange={(e) => setF("passport_expiry_date", e.target.value)}
                 />
@@ -1005,8 +1003,7 @@ export default function LodgeCustomerInfo() {
 
               <Field className="col-span-1">
                 <FieldLabel>Visa Issue Date</FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.visa_issue_date}
                   onChange={(e) => setF("visa_issue_date", e.target.value)}
                 />
@@ -1014,8 +1011,7 @@ export default function LodgeCustomerInfo() {
 
               <Field className="col-span-1">
                 <FieldLabel>Visa Expiry Date</FieldLabel>
-                <Input
-                  type="date"
+                <DateInput
                   value={form.visa_expiry_date}
                   onChange={(e) => setF("visa_expiry_date", e.target.value)}
                 />

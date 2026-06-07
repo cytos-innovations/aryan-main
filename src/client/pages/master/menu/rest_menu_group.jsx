@@ -372,7 +372,7 @@ export default function MenuGroup() {
                   value={form.category_id}
                   onValueChange={(v) => setF("category_id", v)}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full" onKeyDown={enterNav.select}>
                     <SelectValue placeholder="Select a category…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -393,7 +393,7 @@ export default function MenuGroup() {
                     value={form.multiple_recipe}
                     onValueChange={(v) => setF("multiple_recipe", v)}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full" onKeyDown={enterNav.select}>
                       <SelectValue placeholder="Select…" />
                     </SelectTrigger>
                     <SelectContent>
@@ -411,7 +411,7 @@ export default function MenuGroup() {
                     value={form.as_per_size}
                     onValueChange={(v) => setF("as_per_size", v)}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger className="w-full" onKeyDown={enterNav.select}>
                       <SelectValue placeholder="Select…" />
                     </SelectTrigger>
                     <SelectContent>

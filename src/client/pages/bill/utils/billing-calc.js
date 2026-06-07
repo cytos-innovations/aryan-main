@@ -108,6 +108,58 @@ export function validatePayments(payments, netAmount) {
 }
 
 /**
+ * Build two lookup Maps from the menu master array:
+ *   menuIdToCatId : menu_id  → category_id
+ *   catIdToInfo   : cat_id   → { id, name, allow_discount, max_discount, auto_discount }
+ * max_discount is null when not configured (treat as uncapped).
+ */
+export function buildMenuLookups(menu) {
+  const menuIdToCatId = new Map();
+  const catIdToInfo   = new Map();
+  for (const m of menu ?? []) {
+    const catId = m.category_id ?? 0;
+    menuIdToCatId.set(m.id, catId);
+    if (!catIdToInfo.has(catId)) {
+      catIdToInfo.set(catId, {
+        id:             catId,
+        name:           m.category_name        ?? "Uncategorised",
+        allow_discount: m.allow_discount        ?? false,
+        max_discount:   (m.max_discount_percent  != null && m.max_discount_percent  > 0) ? m.max_discount_percent  : null,
+        auto_discount:  (m.auto_discount_percent != null && m.auto_discount_percent > 0) ? m.auto_discount_percent : 0,
+      });
+    }
+  }
+  return { menuIdToCatId, catIdToInfo };
+}
+
+/**
+ * Derive the unique category list from active bill items.
+ * Uses menu lookups as authoritative source (works for draft/optimistic items too).
+ */
+export function buildCategories(items, menuIdToCatId, catIdToInfo) {
+  const seen = new Map();
+  for (const item of items) {
+    if (item.item_status !== "ACTIVE") continue;
+    const catId = (item.menu_id != null ? menuIdToCatId.get(item.menu_id) : null)
+                  ?? item.category_id
+                  ?? 0;
+    if (!seen.has(catId)) {
+      const fromInfo = catIdToInfo.get(catId);
+      seen.set(catId, {
+        id:             catId,
+        name:           fromInfo?.name           ?? item.category_name        ?? "Uncategorised",
+        allow_discount: fromInfo?.allow_discount ?? item.allow_discount        ?? false,
+        max_discount:   fromInfo?.max_discount   ?? (item.max_discount_percent > 0 ? item.max_discount_percent : null),
+        auto_discount:  fromInfo?.auto_discount  ?? item.auto_discount_percent ?? 0,
+        total:          0,
+      });
+    }
+    seen.get(catId).total += Number(item.final_amount) || 0;
+  }
+  return [...seen.values()];
+}
+
+/**
  * Format a NUMERIC value for display (2 decimal places, INR style).
  */
 export function fmtAmount(n) {

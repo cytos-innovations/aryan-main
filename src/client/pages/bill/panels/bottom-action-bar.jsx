@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { toast } from "sonner";
 import {
@@ -17,7 +17,8 @@ import { useAuth } from "@/lib/auth";
 import { useBillingContext } from "../state/billing-context";
 import { useGenerateKot, useGenerateBill } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
-import { fmtAmount, calcBillTotals } from "../utils/billing-calc";
+import { fmtAmount, calcBillTotals, buildMenuLookups, buildCategories } from "../utils/billing-calc";
+import { BQK } from "../constants/billing";
 
 // ─── Panel mode enum ──────────────────────────────────────────
 
@@ -81,7 +82,7 @@ function BillingModePanel({
   canBill, billPending,
   canSettle,
   netAmount,
-  onKot, onBill, onSettle, onSwitchMode,
+  onKot, onBill, onSettle, onSwitchMode, onHold, canHold, isRestoredFromHold,
 }) {
   return (
     <div className="flex items-stretch gap-1.5 px-2 py-1.5">
@@ -117,7 +118,14 @@ function BillingModePanel({
         shortcut="/"
         onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.DISCOUNT)}
       />
-      <ActionBtn icon={Hold01Icon} label="Hold" shortcut="F6" disabled />
+      <ActionBtn
+        icon={Hold01Icon}
+        label={isRestoredFromHold ? "Release" : "Hold"}
+        shortcut="F6"
+        onClick={onHold}
+        disabled={!canHold}
+        className={isRestoredFromHold ? "text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-700" : ""}
+      />
 
       {/* Settle — prominent, carries the running total */}
       <Button
@@ -158,7 +166,7 @@ function DiscField({ label, value, onChange, readOnly, autoFocus, onKeyDown, inp
         // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus={autoFocus}
         className={[
-          "w-18 h-7 rounded border text-xs text-right tabular-nums px-2",
+          "w-20 h-7 rounded border text-xs text-right tabular-nums px-2",
           "bg-muted/30 border-border/60",
           "focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary",
           readOnly
@@ -170,185 +178,337 @@ function DiscField({ label, value, onChange, readOnly, autoFocus, onKeyDown, inp
   );
 }
 
-function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onApply, onBack }) {
+
+function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply, onBack }) {
   const billAmt = totals.finalAmount || 0;
   const taxAmt  = totals.taxAmount   || 0;
 
   const { auth } = useAuth();
   const capsQuery = useQuery({
     queryKey: ["discount-cap", auth?.user?.id],
-    queryFn: () => invoke("get_user_discount_cap", { userId: auth.user.id }),
-    enabled: !!auth?.user?.id,
+    queryFn:  () => invoke("get_user_discount_cap", { userId: auth.user.id }),
+    enabled:  !!auth?.user?.id,
     staleTime: 60_000,
   });
-  const maxFood   = capsQuery.data?.food_discount   ?? 100;
-  const maxLiquor = capsQuery.data?.liquor_discount ?? 100;
-  const maxTotal  = capsQuery.data?.total_discount  ?? 100;
+  const userTotalCap = capsQuery.data?.total_discount ?? 100;
 
-  // Pre-fill from saved discount if available
-  const [discAmt,   setDiscAmt]   = useState(() => String(sessionDisc?.discAmt   ?? 0));
+  // Always fetch fresh menu data when the discount panel opens so caps are never stale
+  const freshMenuQuery = useQuery({
+    queryKey: [...BQK.MENU, "discount-fresh"],
+    queryFn:  () => invoke("get_menu_for_billing"),
+    staleTime: 0,
+  });
+  // Use fresh data if available, fall back to prop
+  const menu = freshMenuQuery.data ?? menuProp;
+
+  // Menu master lookups (authoritative source for category caps)
+  const { menuIdToCatId, catIdToInfo } = useMemo(() => buildMenuLookups(menu), [menu]);
+
+  // Derive categories from current bill items, enriched via menu master
+  const categories = useMemo(
+    () => buildCategories(items ?? [], menuIdToCatId, catIdToInfo),
+    [items, menuIdToCatId, catIdToInfo],
+  );
+
+  // ── Per-category discount state ─────────────────────────
+  // discMode: "pct" | "flat"  — one mode for the whole form (mutually exclusive)
+  const [discMode, setDiscMode] = useState(
+    () => sessionDisc?.discMode ?? "pct"
+  );
+
+  // catRows: { [catId]: { value: string } }
+  // Pre-fill with auto_discount if no saved value — auto_discount > 0 means apply immediately
+  const [catRows, setCatRows] = useState(() => {
+    const saved = sessionDisc?.catRows ?? {};
+    const { menuIdToCatId: mid2cat, catIdToInfo: cat2info } = buildMenuLookups(menuProp);
+    const rows  = {};
+    for (const cat of buildCategories(items ?? [], mid2cat, cat2info)) {
+      const savedVal = saved[cat.id]?.value;
+      rows[cat.id] = { value: savedVal !== undefined ? savedVal : String(cat.auto_discount ?? 0) };
+    }
+    return rows;
+  });
+
+  // When fresh menu data arrives, update catRows with correct auto_discount values.
+  // Only overwrite rows that are still at "0" (untouched by user) and have no saved value.
+  const freshMenuApplied = useRef(false);
+  useEffect(() => {
+    if (!freshMenuQuery.data || freshMenuApplied.current) return;
+    freshMenuApplied.current = true;
+    const saved = sessionDisc?.catRows ?? {};
+    const { menuIdToCatId: mid2cat, catIdToInfo: cat2info } = buildMenuLookups(freshMenuQuery.data);
+    const freshCats = buildCategories(items ?? [], mid2cat, cat2info);
+    setCatRows(prev => {
+      const next = { ...prev };
+      for (const cat of freshCats) {
+        const savedVal = saved[cat.id]?.value;
+        // Add rows for newly discovered categories
+        if (!(cat.id in next)) {
+          next[cat.id] = { value: savedVal !== undefined ? savedVal : String(cat.auto_discount ?? 0) };
+        } else if (savedVal === undefined && next[cat.id]?.value === "0" && cat.auto_discount > 0) {
+          // Row exists but was initialised with 0 from stale menu — now we have real auto_discount
+          next[cat.id] = { value: String(cat.auto_discount) };
+        }
+      }
+      return next;
+    });
+  }, [freshMenuQuery.data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Misc fields
   const [misc,      setMisc]      = useState(() => String(sessionDisc?.misc      ?? 0));
   const [miscMinus, setMiscMinus] = useState(() => String(sessionDisc?.miscMinus ?? 0));
-  // Food & Liquor stored as percent (0–100)
-  const [foodPct,   setFoodPct]   = useState(() => String(sessionDisc?.foodPct   ?? 0));
-  const [liquorPct, setLiquorPct] = useState(() => String(sessionDisc?.liquorPct ?? 0));
   const [sCharge,   setSCharge]   = useState(() => String(sessionDisc?.sCharge   ?? 0));
-  const [tDisc,     setTDisc]     = useState(() => String(sessionDisc?.tDisc     ?? 0));
 
-  // Clamp pre-filled values when caps load
-  useEffect(() => {
-    if (!capsQuery.data) return;
-    setFoodPct((prev) => {
-      const n = parseFloat(prev) || 0;
-      return n > maxFood ? String(maxFood) : prev;
-    });
-    setLiquorPct((prev) => {
-      const n = parseFloat(prev) || 0;
-      return n > maxLiquor ? String(maxLiquor) : prev;
-    });
-  }, [capsQuery.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Overall bill discount % applied directly on net (after category discounts)
+  const [billDiscPct, setBillDiscPct] = useState(() => String(sessionDisc?.billDiscPct ?? 0));
 
-  // Block individual cap on every keystroke; enforce total cap on blur
-  function handleFoodChange(val) {
-    const num = parseFloat(val) || 0;
-    if (num > maxFood) {
-      toast.warning(`Food discount cannot exceed ${maxFood}%`);
-      setFoodPct(String(maxFood));
-    } else {
-      setFoodPct(val);
-    }
+  // Effective cap = min(category max, user's total_discount cap).
+  // cat.max_discount is null when not configured in DB → no category-level restriction.
+  function effectiveCap(cat) {
+    if (!cat.allow_discount) return 0;
+    const catMax = cat.max_discount != null ? cat.max_discount : 100;
+    return Math.min(catMax, userTotalCap);
   }
 
-  function handleLiquorChange(val) {
-    const num = parseFloat(val) || 0;
-    if (num > maxLiquor) {
-      toast.warning(`Liquor discount cannot exceed ${maxLiquor}%`);
-      setLiquorPct(String(maxLiquor));
-    } else {
-      setLiquorPct(val);
+  // ── Validation: error message per category ──────────────
+  const catErrors = useMemo(() => {
+    const errs = {};
+    for (const cat of categories) {
+      const val = parseFloat(catRows[cat.id]?.value) || 0;
+      if (!cat.allow_discount && val > 0) {
+        errs[cat.id] = "Discount not allowed";
+        continue;
+      }
+      const cap = effectiveCap(cat);
+      if (discMode === "pct" && val > cap) {
+        errs[cat.id] = `Max ${cap}%`;
+      } else if (discMode === "flat") {
+        const maxFlat = r2((cat.total * cap) / 100);
+        if (val > maxFlat) errs[cat.id] = `Max ₹${fmtAmount(maxFlat)}`;
+      }
     }
-  }
+    return errs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catRows, discMode, categories, userTotalCap]);
 
-  function handleFoodBlur() {
-    const food   = parseFloat(foodPct) || 0;
-    const liquor = parseFloat(liquorPct) || 0;
-    if (food + liquor > maxTotal) {
-      const allowed = Math.max(0, maxTotal - liquor);
-      toast.warning(`Total discount cannot exceed ${maxTotal}%. Food reduced to ${allowed}%`);
-      setFoodPct(String(allowed));
+  const hasErrors = Object.keys(catErrors).length > 0;
+
+  // ── Per-category discount amounts ───────────────────────
+  const catDiscAmts = useMemo(() => {
+    const amts = {};
+    for (const cat of categories) {
+      const val = parseFloat(catRows[cat.id]?.value) || 0;
+      if (discMode === "pct") {
+        amts[cat.id] = r2((cat.total * Math.min(val, effectiveCap(cat))) / 100);
+      } else {
+        const maxFlat = r2((cat.total * effectiveCap(cat)) / 100);
+        amts[cat.id] = r2(Math.min(val, maxFlat));
+      }
     }
-  }
+    return amts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catRows, discMode, categories, userTotalCap]);
 
-  function handleLiquorBlur() {
-    const liquor = parseFloat(liquorPct) || 0;
-    const food   = parseFloat(foodPct) || 0;
-    if (food + liquor > maxTotal) {
-      const allowed = Math.max(0, maxTotal - food);
-      toast.warning(`Total discount cannot exceed ${maxTotal}%. Liquor reduced to ${allowed}%`);
-      setLiquorPct(String(allowed));
-    }
-  }
-
-  // Discount amounts derived from percentages
-  const foodDiscAmt   = r2((foodTotal   * Math.min(100, Math.max(0, Number(foodPct)   || 0))) / 100);
-  const liquorDiscAmt = r2((liquorTotal * Math.min(100, Math.max(0, Number(liquorPct) || 0))) / 100);
+  const totalCatDisc  = r2(Object.values(catDiscAmts).reduce((s, v) => s + v, 0));
+  const afterCatDisc  = r2(billAmt - totalCatDisc);
+  const billDiscAmt   = r2(afterCatDisc * (Math.min(parseFloat(billDiscPct) || 0, 100)) / 100);
 
   const net = r2(
-    billAmt
-    - (Number(discAmt)   || 0)
-    - foodDiscAmt
-    - liquorDiscAmt
+    afterCatDisc
+    - billDiscAmt
     + (Number(misc)      || 0)
     - (Number(miscMinus) || 0)
     + (Number(sCharge)   || 0)
-    - (Number(tDisc)     || 0)
   );
 
-  const r0 = useRef(null), r1 = useRef(null), r2ref = useRef(null),
-        r3 = useRef(null), r4 = useRef(null), r5    = useRef(null), r6 = useRef(null);
-  const fieldRefs = [r0, r1, r2ref, r3, r4, r5, r6];
-  function next(i) { fieldRefs[i + 1]?.current?.focus(); }
-  function kd(i)   { return (e) => { if (e.key === "Enter") { e.preventDefault(); next(i); } }; }
+  // ── Mode switch — reset values (% keeps auto_discount, flat resets to 0) ──
+  function switchMode(mode) {
+    setDiscMode(mode);
+    const reset = {};
+    for (const cat of categories) {
+      reset[cat.id] = { value: mode === "pct" ? String(cat.auto_discount ?? 0) : "0" };
+    }
+    setCatRows(reset);
+    setApplyAllVal("");
+  }
 
+  // ── Save ─────────────────────────────────────────────────
   function handleSave() {
-    const totalDiscAmt = r2(
-      (Number(discAmt) || 0) + foodDiscAmt + liquorDiscAmt + (Number(tDisc) || 0)
-    );
-    const discPct = billAmt > 0 ? r2((totalDiscAmt / billAmt) * 100) : 0;
+    if (hasErrors) return;
+    const totalDisc = r2(totalCatDisc + billDiscAmt);
+    const discPct   = billAmt > 0 ? r2((totalDisc / billAmt) * 100) : 0;
     onApply({
-      discAmt:    Number(discAmt)   || 0,
-      misc:       Number(misc)      || 0,
-      miscMinus:  Number(miscMinus) || 0,
-      foodPct:    Number(foodPct)   || 0,
-      foodDiscAmt,
-      liquorPct:  Number(liquorPct) || 0,
-      liquorDiscAmt,
-      sCharge:    Number(sCharge)   || 0,
-      tDisc:      Number(tDisc)     || 0,
-      netAmt:     net,
+      discMode,
+      catRows,
+      catDiscAmts,
+      totalCatDisc,
+      billDiscPct:  Number(billDiscPct) || 0,
+      billDiscAmt,
+      misc:         Number(misc)      || 0,
+      miscMinus:    Number(miscMinus) || 0,
+      sCharge:      Number(sCharge)   || 0,
+      netAmt:       net,
       discPct,
     });
     onBack();
   }
 
+  const miscRef    = useRef(null);
+  const minusRef   = useRef(null);
+  const sChargeRef = useRef(null);
+
   return (
-    <div className="px-3 py-2 bg-card border-t space-y-1.5">
-      {/* Row 1 */}
-      <div className="flex items-center gap-2.5 flex-wrap">
+    <div className="px-3 py-2 bg-card border-t space-y-2">
+      {/* ── Header row: totals + mode toggle + apply-all ── */}
+      <div className="flex items-center gap-3 flex-wrap">
         <DiscField label="Tax Amt. :"  value={fmtAmount(taxAmt)}  readOnly />
         <DiscField label="Bill Amt. :" value={fmtAmount(billAmt)} readOnly />
-        <DiscField label="+ Misc :"    value={misc}      autoFocus inputRef={r0} onChange={setMisc}      onKeyDown={kd(0)} />
-        <DiscField label="- Misc :"    value={miscMinus}           inputRef={r1} onChange={setMiscMinus} onKeyDown={kd(1)} />
-        {/* Food % — shows derived amount beside the input */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[10px] font-bold text-foreground whitespace-nowrap">Food % :</span>
-          <input
-            ref={r2ref}
-            inputMode="decimal"
-            value={foodPct}
-            onChange={(e) => handleFoodChange(sanitizeNum(e.target.value))}
-            onBlur={handleFoodBlur}
-            onFocus={(e) => e.target.select()}
-            onKeyDown={kd(2)}
-            className="w-14 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
-          />
-          <span className="text-[10px] font-mono text-muted-foreground">%</span>
-          {foodDiscAmt > 0 && (
-            <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(foodDiscAmt)}</span>
-          )}
+
+        {/* % / Flat toggle */}
+        <div className="flex items-center gap-0.5 rounded-md border border-border/60 overflow-hidden shrink-0">
+          <button
+            type="button"
+            onClick={() => switchMode("pct")}
+            className={[
+              "h-7 px-2.5 text-[10px] font-semibold transition-colors",
+              discMode === "pct"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/30 text-muted-foreground hover:bg-muted/50",
+            ].join(" ")}
+          >
+            %
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode("flat")}
+            className={[
+              "h-7 px-2.5 text-[10px] font-semibold transition-colors",
+              discMode === "flat"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/30 text-muted-foreground hover:bg-muted/50",
+            ].join(" ")}
+          >
+            ₹
+          </button>
         </div>
-        {/* Liquor % */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[10px] font-bold text-foreground whitespace-nowrap">Liquor % :</span>
+
+        {/* Bill-level discount % on net (extra on top of category discounts) */}
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-[10px] font-bold text-foreground whitespace-nowrap">
+            Bill Disc % :
+          </span>
           <input
-            ref={r3}
             inputMode="decimal"
-            value={liquorPct}
-            onChange={(e) => handleLiquorChange(sanitizeNum(e.target.value))}
-            onBlur={handleLiquorBlur}
-            onFocus={(e) => e.target.select()}
-            onKeyDown={kd(3)}
-            className="w-14 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
+            value={billDiscPct}
+            onChange={(e) => setBillDiscPct(sanitizeNum(e.target.value))}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
+            className="w-16 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
           />
-          <span className="text-[10px] font-mono text-muted-foreground">%</span>
-          {liquorDiscAmt > 0 && (
-            <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(liquorDiscAmt)}</span>
-          )}
         </div>
       </div>
-      {/* Row 2 */}
-      <div className="flex items-center gap-2.5 flex-wrap">
-        <DiscField label="Disc Amt :"         value={discAmt} inputRef={r4} onChange={setDiscAmt}  onKeyDown={kd(4)} />
-        <DiscField label="+ Service Charge :" value={sCharge} inputRef={r5} onChange={setSCharge}  onKeyDown={kd(5)} />
-        <DiscField label="Total Discount :"   value={tDisc}   inputRef={r6} onChange={setTDisc}
+
+      {/* ── Per-category rows ── */}
+      <div className="space-y-1">
+        {categories.map((cat, idx) => {
+          const val  = catRows[cat.id]?.value ?? "0";
+          const err  = catErrors[cat.id];
+          const disc = catDiscAmts[cat.id] ?? 0;
+          const cap  = effectiveCap(cat);
+          // Show cap label: if category has no configured max, show user cap as the limit
+          const capLabel = !cat.allow_discount
+            ? "No discount"
+            : discMode === "pct"
+              ? `Max ${cap}%`
+              : `Max ₹${fmtAmount(r2((cat.total * cap) / 100))}`;
+
+          return (
+            <div key={cat.id} className="flex items-center gap-2 flex-wrap">
+              {/* Category name */}
+              <span className="text-[10px] font-bold text-foreground w-28 truncate shrink-0" title={cat.name}>
+                {cat.name}
+              </span>
+              {/* Category total */}
+              <span className="text-[10px] tabular-nums text-muted-foreground w-16 text-right shrink-0">
+                ₹{fmtAmount(cat.total)}
+              </span>
+              {/* Cap badge */}
+              <span className="text-[9px] text-muted-foreground/70 shrink-0 w-20">{capLabel}</span>
+              {/* Auto badge — shown when auto_discount > 0 */}
+              {cat.auto_discount > 0 && (
+                <span className="text-[9px] text-blue-500 shrink-0">Auto:{cat.auto_discount}%</span>
+              )}
+              {/* Discount input */}
+              <input
+                inputMode="decimal"
+                value={val}
+                disabled={!cat.allow_discount}
+                onChange={(e) => {
+                  const v = sanitizeNum(e.target.value);
+                  setCatRows((prev) => ({ ...prev, [cat.id]: { value: v } }));
+                }}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  // Focus next category input or misc field
+                  const next = categories[idx + 1];
+                  if (next) {
+                    document.querySelector(`[data-cat-input="${next.id}"]`)?.focus();
+                  } else {
+                    miscRef.current?.focus();
+                  }
+                }}
+                data-cat-input={cat.id}
+                className={[
+                  "w-20 h-7 rounded border text-xs text-right tabular-nums px-2",
+                  "focus:outline-none focus:ring-1 focus:border-primary",
+                  !cat.allow_discount
+                    ? "bg-muted/10 border-border/20 text-muted-foreground cursor-not-allowed"
+                    : err
+                      ? "border-destructive bg-destructive/5 focus:ring-destructive text-foreground"
+                      : "bg-muted/30 border-border/60 focus:ring-primary text-foreground",
+                ].join(" ")}
+              />
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {discMode === "pct" ? "%" : "₹"}
+              </span>
+              {/* Derived discount amount */}
+              {disc > 0 && !err && (
+                <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400 shrink-0">
+                  −₹{fmtAmount(disc)}
+                </span>
+              )}
+              {/* Inline error */}
+              {err && (
+                <span className="text-[10px] text-destructive font-medium shrink-0">{err}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Misc / service charge row ── */}
+      <div className="flex items-center gap-2.5 flex-wrap border-t border-border/30 pt-1.5">
+        <DiscField label="+ Misc :"    value={misc}      inputRef={miscRef}    onChange={setMisc}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); minusRef.current?.focus(); } }} />
+        <DiscField label="- Misc :"    value={miscMinus} inputRef={minusRef}   onChange={setMiscMinus}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sChargeRef.current?.focus(); } }} />
+        <DiscField label="+ Svc Chg :" value={sCharge}   inputRef={sChargeRef} onChange={setSCharge}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }} />
         <DiscField label="Net Amt :" value={fmtAmount(net)} readOnly />
+        {totalCatDisc > 0 && (
+          <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
+            Total Disc: −₹{fmtAmount(totalCatDisc)}
+          </span>
+        )}
+
         <div className="flex items-center gap-1.5 ml-auto">
           <Button
             type="button"
             size="sm"
             onClick={handleSave}
-            className="h-8 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground border-0"
+            disabled={hasErrors}
+            className="h-8 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground border-0 disabled:opacity-50"
           >
             Save
           </Button>
@@ -357,9 +517,13 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
             variant="outline"
             size="sm"
             onClick={() => {
-              setDiscAmt("0"); setMisc("0"); setMiscMinus("0");
-              setFoodPct("0"); setLiquorPct("0");
-              setSCharge("0"); setTDisc("0");
+              const reset = {};
+              for (const cat of categories) {
+                reset[cat.id] = { value: discMode === "pct" ? String(cat.auto_discount ?? 0) : "0" };
+              }
+              setCatRows(reset);
+              setBillDiscPct("0");
+              setMisc("0"); setMiscMinus("0"); setSCharge("0");
             }}
             className="h-8 px-4 text-xs"
           >
@@ -377,11 +541,12 @@ function DiscountModePanel({ totals, foodTotal, liquorTotal, sessionDisc, onAppl
 // ─── Main bottom action bar ───────────────────────────────────
 
 export default function BottomActionBar({
-  sessionId, session, items, isDraft,
+  sessionId, session, items, menu, isDraft,
   isKotting, isNearReservation,
   netAmount, billId, isSettling,
   onRequestSettle, settleDialogOpen,
-  onKotDraft, onCancel,
+  onKotDraft, onCancel, onHold,
+  isRestoredFromHold,
   sessionDisc, onDiscountChange,
 }) {
   const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
@@ -392,8 +557,6 @@ export default function BottomActionBar({
   // ── Derived state ─────────────────────────────────────────
   const activeItems  = (items ?? []).filter((i) => i.item_status === "ACTIVE");
   const billTotals   = calcBillTotals(items ?? []);
-  const foodTotal    = activeItems.filter((i) => !i.is_liquor).reduce((s, i) => s + (Number(i.final_amount) || 0), 0);
-  const liquorTotal  = activeItems.filter((i) =>  i.is_liquor).reduce((s, i) => s + (Number(i.final_amount) || 0), 0);
   const pendingKot  = activeItems.filter((i) => i.kot_status === "PENDING").length;
   const hasItems    = activeItems.length > 0;
   const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED";
@@ -403,6 +566,8 @@ export default function BottomActionBar({
   const canBill   = !isDraft && hasItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
   const canSettle = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
   const kotPending = isDraft ? isKotting : generateKot.isPending;
+  // Hold is only meaningful in draft mode. When restored from hold, always enable (to release).
+  const canHold   = isDraft && (activeItems.length > 0 || isRestoredFromHold);
 
   // Persist UI-held KOT messages for existing pending items into the DB
   async function flushPendingKotMsgs() {
@@ -435,13 +600,7 @@ export default function BottomActionBar({
 
   const handleBill = useCallback(() => {
     const payload = sessionDisc ? {
-      // Total of all discount types: disc amt + food disc + liquor disc + total disc
-      billDiscountAmount: Math.round((
-        (sessionDisc.discAmt      || 0) +
-        (sessionDisc.foodDiscAmt  || 0) +
-        (sessionDisc.liquorDiscAmt|| 0) +
-        (sessionDisc.tDisc        || 0)
-      ) * 100) / 100,
+      billDiscountAmount: Math.round((sessionDisc.totalCatDisc || 0) * 100) / 100,
       billNetAmount: sessionDisc.netAmt ?? undefined,
     } : {};
     generateBill.mutate(payload, { onSuccess: clearSession });
@@ -456,34 +615,31 @@ export default function BottomActionBar({
 
   // ── Ref: always holds the LATEST values without stale closure ─
   const live = useRef({});
-  // Sync ref every render (no effect needed — runs synchronously before paint)
-  live.current = { canKot, kotPending, canBill, billPending: generateBill.isPending, canSettle, panelMode, settleDialogOpen, handleKot, handleBill, handleSettle, switchMode };
+  live.current = { canKot, kotPending, canBill, billPending: generateBill.isPending, canSettle, canHold, onHold, panelMode, settleDialogOpen, handleKot, handleBill, handleSettle, switchMode };
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
-    const POS_KEYS = new Set(["Home", "F11", "/"]);
+    const POS_KEYS = new Set(["Home", "F11", "F6", "/"]);
 
     function onKey(e) {
       const tag = e.target.tagName;
       const isInput    = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       const isSearchBar = isInput && e.target.hasAttribute("data-pos-search");
       const isCharKey  = e.key === "/";
-      // Block char-key shortcuts in non-search inputs (e.g. payment amount field)
-      // but allow them through from the search bar (search bar prevents typing them already)
       if (isInput && !isSearchBar && isCharKey) return;
 
       const cur = live.current;
 
-      // Escape: return to billing mode from any sub-panel
+      // Escape: return to billing mode from any sub-panel (stop propagation so order-entry Esc doesn't also fire)
       if (e.key === "Escape" && cur.panelMode !== BOTTOM_PANEL_MODE.BILLING) {
         e.preventDefault();
+        e.stopPropagation();
         setPanelMode(BOTTOM_PANEL_MODE.BILLING);
         return;
       }
 
       if (cur.panelMode !== BOTTOM_PANEL_MODE.BILLING) return;
 
-      // Prevent browser defaults for all POS keys (F11 fullscreen, etc.)
       if (POS_KEYS.has(e.key)) e.preventDefault();
 
       switch (e.key) {
@@ -493,8 +649,10 @@ export default function BottomActionBar({
         case "/":
           setPanelMode(BOTTOM_PANEL_MODE.DISCOUNT);
           break;
+        case "F6":
+          if (cur.canHold && cur.onHold) cur.onHold();
+          break;
         case "F11":
-          // When the settle dialog is already open, it owns F11 (confirm)
           if (!cur.settleDialogOpen && cur.canSettle) cur.handleSettle();
           break;
         case "*":
@@ -533,14 +691,17 @@ export default function BottomActionBar({
             onBill={handleBill}
             onSettle={handleSettle}
             onSwitchMode={switchMode}
+            onHold={onHold}
+            canHold={canHold}
+            isRestoredFromHold={isRestoredFromHold}
           />
         )}
 
         {panelMode === BOTTOM_PANEL_MODE.DISCOUNT && (
           <DiscountModePanel
             totals={billTotals}
-            foodTotal={foodTotal}
-            liquorTotal={liquorTotal}
+            items={items}
+            menu={menu}
             sessionDisc={sessionDisc}
             onApply={onDiscountChange}
             onBack={() => setPanelMode(BOTTOM_PANEL_MODE.BILLING)}
@@ -548,11 +709,12 @@ export default function BottomActionBar({
         )}
       </div>
 
-      <div className="px-3 pb-1.5 flex justify-center">
+      {/* Discard Draft / Cancel Order — prominently visible */}
+      <div className="px-3 pb-2 flex justify-center">
         <button
           type="button"
           onClick={onCancel}
-          className="text-[10px] text-muted-foreground/40 hover:text-destructive transition-colors"
+          className="text-xs font-medium text-muted-foreground hover:text-destructive border border-dashed border-muted-foreground/30 hover:border-destructive/50 rounded px-3 py-1 transition-colors"
         >
           {isDraft ? "Discard Draft" : "Cancel Order"}
         </button>

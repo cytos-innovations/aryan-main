@@ -40,6 +40,7 @@ import {
 import { useBillingContext } from "../state/billing-context";
 import { useFloorView } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
+import { loadHold, clearHold, saveHold, getHeldTableIds } from "../utils/hold-storage";
 import { minsUntilReservation, getReservationPhase } from "../utils/billing-calc";
 import {
   getReminderSettings,
@@ -90,6 +91,7 @@ const STATUS_RING = {
   BILL_PRINTED:     "ring-emerald-400 dark:ring-emerald-600",
   RESERVED:         "ring-blue-300 dark:ring-blue-600",
   NEAR_RESERVATION: "ring-blue-400 dark:ring-blue-500",
+  ON_HOLD:          "ring-purple-300 dark:ring-purple-600",
 };
 
 const STATUS_BG = {
@@ -98,6 +100,7 @@ const STATUS_BG = {
   BILL_PRINTED:     "bg-emerald-50/80 dark:bg-emerald-950/40 hover:bg-emerald-100/80 dark:hover:bg-emerald-950/60",
   RESERVED:         "bg-blue-50/60 dark:bg-blue-950/30",
   NEAR_RESERVATION: "bg-blue-50/80 dark:bg-blue-950/40 hover:bg-blue-100/80 dark:hover:bg-blue-950/60",
+  ON_HOLD:          "bg-purple-50/80 dark:bg-purple-950/40 hover:bg-purple-100/80 dark:hover:bg-purple-950/60",
 };
 
 const STATUS_ACCENT = {
@@ -106,6 +109,7 @@ const STATUS_ACCENT = {
   BILL_PRINTED:     "bg-emerald-500",
   RESERVED:         "bg-blue-500",
   NEAR_RESERVATION: "bg-blue-500",
+  ON_HOLD:          "bg-purple-500",
 };
 
 const STATUS_LABEL = {
@@ -114,6 +118,7 @@ const STATUS_LABEL = {
   BILL_PRINTED:     { text: "Bill Out",      cls: "text-emerald-700 dark:text-emerald-400" },
   RESERVED:         { text: "Reserved",      cls: "text-blue-700 dark:text-blue-400" },
   NEAR_RESERVATION: { text: "Reserved Soon", cls: "text-blue-700 dark:text-blue-400" },
+  ON_HOLD:          { text: "On Hold",       cls: "text-purple-700 dark:text-purple-400" },
 };
 
 const ORDER_TYPE_PILL = {
@@ -146,8 +151,8 @@ function useNow(intervalMs = 60_000) {
 
 // ─── Table Card ──────────────────────────────────────────────────
 
-function TableCard({ table, onClick, now }) {
-  const status      = getTableStatus(table, now);
+function TableCard({ table, onClick, now, isOnHold }) {
+  const status      = isOnHold ? "ON_HOLD" : getTableStatus(table, now);
   const phase       = getReservationPhase(table, now);
   const isOccupied  = status === "OCCUPIED" || status === "BILL_PRINTED";
   const isReserved  = status === "RESERVED";           // permanently blocked (no timing)
@@ -217,6 +222,20 @@ function TableCard({ table, onClick, now }) {
         )}
       </div>
 
+      {/* On Hold details */}
+      {isOnHold && (() => {
+        const held = loadHold(table.id);
+        const itemCount = held?.draftItems?.length ?? 0;
+        if (itemCount === 0) return null;
+        return (
+          <div className="mt-2.5 border-t border-purple-200/60 dark:border-purple-800/40 pt-2">
+            <span className="text-[11px] text-purple-600 dark:text-purple-400 font-medium">
+              {itemCount} item{itemCount !== 1 ? "s" : ""} held · tap to resume
+            </span>
+          </div>
+        );
+      })()}
+
       {/* Occupied details */}
       {isOccupied && (
         <div className="mt-2.5 space-y-1.5 border-t border-black/5 dark:border-white/5 pt-2">
@@ -282,7 +301,7 @@ function TableCard({ table, onClick, now }) {
 
 // ─── Table Group Section ──────────────────────────────────────────
 
-function TableGroupSection({ groupName, tables, onTableClick, now }) {
+function TableGroupSection({ groupName, tables, onTableClick, now, heldTableIds }) {
   return (
     <div>
       <div className="flex items-center gap-2 mb-2.5">
@@ -294,7 +313,7 @@ function TableGroupSection({ groupName, tables, onTableClick, now }) {
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3">
         {tables.map((t) => (
-          <TableCard key={t.id} table={t} onClick={onTableClick} now={now} />
+          <TableCard key={t.id} table={t} onClick={onTableClick} now={now} isOnHold={heldTableIds?.has(t.id)} />
         ))}
       </div>
     </div>
@@ -444,14 +463,20 @@ function ReminderSettingsDialog({ open, onOpenChange }) {
 export default function TableSelectView({ onOpenReprint }) {
   const navigate = useNavigate();
   const { setSession } = useBillingContext();
+
   const [search,          setSearch]          = useState("");
   const [reservationOpen, setReservationOpen] = useState(false);
   const [reminderOpen,    setReminderOpen]    = useState(false);
   const [tableShiftOpen,  setTableShiftOpen]  = useState(false);
+  // Re-render trigger when hold state changes
+  const [holdVersion, setHoldVersion] = useState(0);
   const searchRef = useRef(null);
 
-  // Auto-focus search on mount
-  useEffect(() => { searchRef.current?.focus(); }, []);
+  // Auto-focus search on mount; also refresh held-table snapshot when this view becomes active
+  useEffect(() => {
+    searchRef.current?.focus();
+    setHoldVersion((v) => v + 1); // force re-read of localStorage on every mount
+  }, []);
 
   // Table Shift — open the shift dialog (shortcut F7)
   const handleTableShift = useCallback(() => {
@@ -505,17 +530,30 @@ export default function TableSelectView({ onOpenReprint }) {
     return [...map.entries()];
   }, [filtered]);
 
+  // Which table IDs have held drafts in localStorage
+  const heldTableIds = useMemo(
+    () => new Set(getHeldTableIds()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [holdVersion],
+  );
+
   const stats = useMemo(() => {
-    let available = 0, occupied = 0, billPrinted = 0, reserved = 0;
+    let available = 0, occupied = 0, billPrinted = 0, reserved = 0, onHold = 0;
     for (const t of tables) {
-      const s = getTableStatus(t, now);
+      const s = heldTableIds.has(t.id) ? "ON_HOLD" : getTableStatus(t, now);
       if (s === "AVAILABLE" || s === "NEAR_RESERVATION") available++;
       else if (s === "OCCUPIED")     occupied++;
       else if (s === "BILL_PRINTED") billPrinted++;
       else if (s === "RESERVED")     reserved++;
+      else if (s === "ON_HOLD")      onHold++;
     }
-    return { available, occupied, billPrinted, reserved };
-  }, [tables, now]);
+    return { available, occupied, billPrinted, reserved, onHold };
+  }, [tables, now, heldTableIds]);
+
+  // Auto-hold current draft when navigating to a different table
+  // (the table-select view is shown while the user is in draft mode if they press Esc or Back)
+  // We save the draft here whenever the component renders with an active draft that is being "abandoned".
+  // The actual save happens in order-entry handleBack / handleHold; this is just a safety net.
 
   // Clicking any table opens the billing screen — no DB writes at this point.
   // Session is only created when the user sends a KOT.
@@ -530,22 +568,44 @@ export default function TableSelectView({ onOpenReprint }) {
       // NEAR_RESERVATION: two sub-cases based on phase
       if (status === "NEAR_RESERVATION") {
         if (phase === "NEAR") {
-          // Guest not yet arrived — KOT will be blocked
           const mins = Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, Date.now())));
           toast.warning(
             `Reserved in ${mins} minute${mins !== 1 ? "s" : ""}. KOT is blocked until reservation time.`,
             { duration: 4000 },
           );
         }
-        // ARRIVED phase → no toast, navigate normally
-        // fall through to navigate in both cases
+        // fall through in both cases
       }
 
       // WARNING phase: table looks available but has a near reservation
       if (phase === "WARNING") {
         const mins = Math.max(0, Math.ceil(minsUntilReservation(table.reservation_time, Date.now())));
         toast.info(`This table has a reservation in ${mins} minutes.`);
-        // fall through — navigation is allowed, no visual change
+      }
+
+      // ON_HOLD: restore draft and navigate
+      if (status === "ON_HOLD") {
+        const held = loadHold(table.id);
+        if (held) {
+          clearHold(table.id);
+          setHoldVersion((v) => v + 1);
+          setSession(null, table.id, table.table_name, undefined,
+            held.draftApplicableRate ?? table.applicable_rate ?? 1,
+            held.draftOrderType,
+            {
+              draftCovers:        held.draftCovers,
+              draftCustomerName:  held.draftCustomerName  ?? null,
+              draftCustomerId:    held.draftCustomerId    ?? null,
+              draftWaiterId:      held.draftWaiterId      ?? null,
+              draftItems:         held.draftItems         ?? [],
+              isRestoredFromHold: true,
+            },
+          );
+        } else {
+          // Hold expired or cleared — treat as available
+          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1);
+        }
+        return;
       }
 
       // Navigate to order entry (all non-blocked statuses land here)
@@ -579,12 +639,12 @@ export default function TableSelectView({ onOpenReprint }) {
       if (!q || !/^\d+$/.test(q) || tables.length === 0) return;
       const match = tables.find((t) => String(t.code ?? "") === q);
       if (!match) return;
-      const status = getTableStatus(match, Date.now());
+      const status = heldTableIds.has(match.id) ? "ON_HOLD" : getTableStatus(match, Date.now());
       const phase  = getReservationPhase(match, Date.now());
       setSearch("");
       handleTableClick(match, status, phase);
     },
-    [search, tables, handleTableClick],
+    [search, tables, handleTableClick, heldTableIds],
   );
 
   // Pickup: also enters draft mode, no table
@@ -642,11 +702,12 @@ export default function TableSelectView({ onOpenReprint }) {
       <div className="shrink-0 border-b bg-muted/20 px-4 py-1.5 flex items-center gap-4">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 shrink-0">Legend</span>
         {[
-          { dot: "bg-border ring-1 ring-border",  label: "Available",    count: stats.available,   countCls: "text-foreground"                              },
-          { dot: "bg-amber-400 dark:bg-amber-500", label: "KOT Sent",    count: stats.occupied,    countCls: "text-amber-600 dark:text-amber-400"           },
-          { dot: "bg-emerald-500",                 label: "Bill Out",     count: stats.billPrinted, countCls: "text-emerald-600 dark:text-emerald-400"       },
-          { dot: "bg-blue-500",                    label: "Reserved Soon",count: null,              countCls: ""                                             },
-          { dot: "bg-blue-400 opacity-50",         label: "Reserved",     count: stats.reserved > 0 ? stats.reserved : null, countCls: "text-blue-600 dark:text-blue-400" },
+          { dot: "bg-border ring-1 ring-border",    label: "Available",    count: stats.available,                                countCls: "text-foreground"                              },
+          { dot: "bg-amber-400 dark:bg-amber-500",  label: "KOT Sent",     count: stats.occupied,                                 countCls: "text-amber-600 dark:text-amber-400"           },
+          { dot: "bg-emerald-500",                  label: "Bill Out",     count: stats.billPrinted,                              countCls: "text-emerald-600 dark:text-emerald-400"       },
+          { dot: "bg-purple-500",                   label: "On Hold",      count: stats.onHold > 0 ? stats.onHold : null,         countCls: "text-purple-600 dark:text-purple-400"         },
+          { dot: "bg-blue-500",                     label: "Reserved Soon",count: null,                                           countCls: ""                                             },
+          { dot: "bg-blue-400 opacity-50",          label: "Reserved",     count: stats.reserved > 0 ? stats.reserved : null,    countCls: "text-blue-600 dark:text-blue-400"             },
         ].map(({ dot, label, count, countCls }) => (
           <div key={label} className="flex items-center gap-1.5 shrink-0">
             <span className={`inline-block h-2.5 w-2.5 rounded-sm shrink-0 ${dot}`} />
@@ -702,6 +763,7 @@ export default function TableSelectView({ onOpenReprint }) {
                 tables={groupTables}
                 onTableClick={handleTableClick}
                 now={now}
+                heldTableIds={heldTableIds}
               />
             ))}
           </div>

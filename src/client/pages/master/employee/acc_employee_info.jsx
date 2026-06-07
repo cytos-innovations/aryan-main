@@ -14,6 +14,7 @@ import { Can } from "@/lib/auth";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -391,7 +392,7 @@ export default function AccEmployeeInfo() {
                     value={form.desigId ? String(form.desigId) : ""}
                     onValueChange={(v) => setF("desigId", v || null)}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger onKeyDown={enterNav.select}>
                       <SelectValue placeholder="Select designation" />
                     </SelectTrigger>
                     <SelectContent>
@@ -407,11 +408,11 @@ export default function AccEmployeeInfo() {
                 </Field>
                 <Field>
                   <FieldLabel>Date of Joining</FieldLabel>
-                  <Input type="date" value={form.doj} onChange={(e) => setF("doj", e.target.value)} />
+                  <DateInput value={form.doj} onChange={(e) => setF("doj", e.target.value)} />
                 </Field>
                 <Field>
                   <FieldLabel>Date of Leaving</FieldLabel>
-                  <Input type="date" value={form.dol} onChange={(e) => setF("dol", e.target.value)} />
+                  <DateInput value={form.dol} onChange={(e) => setF("dol", e.target.value)} />
                 </Field>
               </div>
             </div>

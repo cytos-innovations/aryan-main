@@ -292,7 +292,7 @@ export default function RestaurantTable() {
                   onValueChange={handleGroupChange}
                   disabled={dialog.mode === "edit" && form.table_group_id !== "__none__"}
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full" onKeyDown={enterNav.select}>
                     <SelectValue placeholder="Select group…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -313,7 +313,7 @@ export default function RestaurantTable() {
                 <FieldLabel>Rate Apply</FieldLabel>
                 <Select value={form.applicable_rate}
                   onValueChange={(v) => setForm((f) => ({ ...f, applicable_rate: v }))}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full" onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {RATE_OPTIONS.map((r) => (
                       <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>

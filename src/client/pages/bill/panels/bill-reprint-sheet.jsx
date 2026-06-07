@@ -24,11 +24,13 @@ import {
 } from "@/components/ui/sheet";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Skeleton }  from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 
 import { useSettledBills, useBillForReprint } from "../hooks/use-billing-queries";
 import { fmtAmount } from "../utils/billing-calc";
+import { fmtDate, fmtDatetime } from "@/lib/date-format";
 
 // ─── Date helpers ─────────────────────────────────────────────
 
@@ -37,18 +39,6 @@ function daysAgoStr(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
-}
-
-function fmtDatetime(s) {
-  if (!s) return "—";
-  const d = new Date(s.replace(" ", "T"));
-  return d.toLocaleString([], { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function fmtDate(s) {
-  if (!s) return "—";
-  const d = new Date(s.replace(" ", "T"));
-  return d.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" });
 }
 
 // ─── Filter presets ───────────────────────────────────────────
@@ -423,37 +413,37 @@ export default function BillReprintSheet({ open, onOpenChange }) {
             </div>
 
             {/* Date filter tabs */}
-            <div className="shrink-0 flex items-center gap-1 px-4 py-2 border-b">
-              {FILTER_PRESETS.map(({ key, label }) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setPreset(key)}
-                  className={[
-                    "text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors",
-                    preset === key
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-muted",
-                  ].join(" ")}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="shrink-0 border-b">
+              <div className="flex items-center gap-1 px-4 py-2">
+                {FILTER_PRESETS.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setPreset(key)}
+                    className={[
+                      "text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors",
+                      preset === key
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted",
+                    ].join(" ")}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               {preset === "CUSTOM" && (
-                <div className="flex items-center gap-1.5 ml-2">
-                  <HugeiconsIcon icon={Calendar01Icon} size={12} strokeWidth={2} className="text-muted-foreground" />
-                  <Input
-                    type="date"
+                <div className="flex items-center gap-2 px-4 pb-2">
+                  <HugeiconsIcon icon={Calendar01Icon} size={12} strokeWidth={2} className="text-muted-foreground shrink-0" />
+                  <DateInput
                     value={customFrom}
                     onChange={(e) => setCustomFrom(e.target.value)}
-                    className="h-7 text-xs w-32"
+                    className="h-7 text-xs flex-1"
                   />
-                  <span className="text-muted-foreground text-xs">–</span>
-                  <Input
-                    type="date"
+                  <span className="text-muted-foreground text-xs shrink-0">–</span>
+                  <DateInput
                     value={customTo}
                     onChange={(e) => setCustomTo(e.target.value)}
-                    className="h-7 text-xs w-32"
+                    className="h-7 text-xs flex-1"
                   />
                 </div>
               )}

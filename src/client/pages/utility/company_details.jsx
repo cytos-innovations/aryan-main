@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Can } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -242,11 +243,11 @@ export default function CompanyDetails() {
                 <div />
                 <Field>
                   <FieldLabel>Start Date</FieldLabel>
-                  <Input type="date" value={form.start_date ?? ""} onChange={(e) => setF("start_date", e.target.value)} />
+                  <DateInput value={form.start_date ?? ""} onChange={(e) => setF("start_date", e.target.value)} />
                 </Field>
                 <Field>
                   <FieldLabel>End Date</FieldLabel>
-                  <Input type="date" value={form.end_date ?? ""} onChange={(e) => setF("end_date", e.target.value)} />
+                  <DateInput value={form.end_date ?? ""} onChange={(e) => setF("end_date", e.target.value)} />
                 </Field>
                 <TextRow label="Address 1" fieldKey="address_line1" form={form} setF={setF} />
                 <TextRow label="Address 2" fieldKey="address_line2" form={form} setF={setF} />
@@ -257,7 +258,7 @@ export default function CompanyDetails() {
                 <TextRow label="SMS Sender" fieldKey="sms_sender" form={form} setF={setF} />
                 <Field>
                   <FieldLabel>Licenses Date</FieldLabel>
-                  <Input type="date" value={form.licenses_date ?? ""} onChange={(e) => setF("licenses_date", e.target.value)} />
+                  <DateInput value={form.licenses_date ?? ""} onChange={(e) => setF("licenses_date", e.target.value)} />
                 </Field>
                 <TextRow label="Licenses No" fieldKey="licenses_no" form={form} setF={setF} />
                 <TextRow label="GST Serial No" fieldKey="gst_serial_no" form={form} setF={setF} />

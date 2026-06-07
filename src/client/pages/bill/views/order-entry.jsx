@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
-  PencilEdit01Icon,
   Clock01Icon,
   AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
@@ -11,15 +10,6 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,14 +20,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 
 import { useBillingContext } from "../state/billing-context";
 import {
@@ -46,14 +28,14 @@ import {
   useFloorView,
   useAddOrderItem,
   useCancelOrderSession,
-  useUpdateSessionInfo,
   useOrderItems,
   useBillSummary,
   useSettleBill,
 } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
-import { ORDER_TYPE, ORDER_TYPE_LABELS, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
-import { selectItemRate, getReservationPhase, calcBillTotals } from "../utils/billing-calc";
+import { ORDER_TYPE, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
+import { saveHold, clearHold } from "../utils/hold-storage";
+import { selectItemRate, getReservationPhase, calcBillTotals, buildMenuLookups, buildCategories } from "../utils/billing-calc";
 
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
@@ -107,84 +89,9 @@ const ORDER_TYPE_CFG = {
   PICKUP:   { label: "Pickup",   cls: "bg-sky-100    text-sky-700    dark:bg-sky-900/50    dark:text-sky-300"    },
 };
 
-// ─── Edit Session Dialog ──────────────────────────────────────
-
-function EditSessionDialog({ session, sessionId, open, onOpenChange }) {
-  const [form, setForm] = useState({ orderType: ORDER_TYPE.DINE_IN, covers: "1", customerName: "" });
-  const updateMut = useUpdateSessionInfo(sessionId);
-
-  useEffect(() => {
-    if (open && session) {
-      setForm({
-        orderType:    session.order_type    ?? ORDER_TYPE.DINE_IN,
-        covers:       String(session.covers ?? 1),
-        customerName: session.customer_name ?? "",
-      });
-    }
-  }, [open, session]);
-
-  function handleSubmit(e) {
-    e.preventDefault();
-    const covers = parseInt(form.covers, 10);
-    if (!covers || covers < 1) { toast.error("Covers must be ≥ 1"); return; }
-    updateMut.mutate(
-      { sessionId, orderType: form.orderType, covers, customerName: form.customerName.trim() || null },
-      { onSuccess: () => onOpenChange(false) },
-    );
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Edit Session — {session?.order_no}</DialogTitle>
-          <DialogDescription>Update order type, covers, or guest name.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          <FieldGroup>
-            <Field>
-              <FieldLabel>Order Type</FieldLabel>
-              <Select value={form.orderType} onValueChange={(v) => setForm((f) => ({ ...f, orderType: v }))}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(ORDER_TYPE_LABELS).map(([k, lbl]) => (
-                    <SelectItem key={k} value={k}>{lbl}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field>
-                <FieldLabel>Covers</FieldLabel>
-                <Input type="number" min="1" max="99" value={form.covers}
-                  onChange={(e) => setForm((f) => ({ ...f, covers: e.target.value }))} />
-              </Field>
-              <Field>
-                <FieldLabel>
-                  Guest Name{" "}
-                  <span className="text-muted-foreground font-normal text-xs">(optional)</span>
-                </FieldLabel>
-                <Input value={form.customerName} maxLength={100}
-                  onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
-                  placeholder="Guest / company" />
-              </Field>
-            </div>
-          </FieldGroup>
-          <DialogFooter className="mt-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={updateMut.isPending}>
-              {updateMut.isPending ? "Saving…" : "Save Changes"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Session header bar ───────────────────────────────────────
 
-function SessionHeader({ session, isDraft, selectedTableName, onBack, onEdit }) {
+function SessionHeader({ session, isDraft, selectedTableName, onBack }) {
   const now        = useNow();
   const elapsed    = useMemo(() => calcElapsed(session?.opened_at, now), [session?.opened_at, now]);
   const openedTime = useMemo(() => fmtTime(session?.opened_at),          [session?.opened_at]);
@@ -243,19 +150,6 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, onEdit }) 
           </div>
         )}
 
-        {/* Edit */}
-        {!isDraft && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1 text-xs px-2"
-            onClick={onEdit}
-            disabled={isClosed || !session}
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} size={13} strokeWidth={2} />
-            Edit
-          </Button>
-        )}
       </div>
     </div>
   );
@@ -293,6 +187,7 @@ export default function OrderEntryView() {
     draftCustomerName,
     draftCustomerId,
     draftWaiterId,
+    isRestoredFromHold,
     addDraftItem,
     updateDraftQty,
     removeDraftItem,
@@ -305,7 +200,6 @@ export default function OrderEntryView() {
   const qc  = useQueryClient();
   const now = useNow();
 
-  const [editOpen,   setEditOpen]   = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [settleOpen, setSettleOpen] = useState(false);
   const [addingId,   setAddingId]   = useState(null);
@@ -388,15 +282,94 @@ export default function OrderEntryView() {
   // Use the full saved netAmt (incl. misc, service charge, etc.) when available
   const netAmount = sessionDisc?.netAmt ?? (afterDisc + roundOff);
 
+  // Auto-apply category auto_discount whenever items or menu change.
+  // Only updates categories that the user hasn't manually touched (their value matches auto_discount).
+  useEffect(() => {
+    if (!menu.length || !items.length) return;
+    const { menuIdToCatId, catIdToInfo } = buildMenuLookups(menu);
+    const cats = buildCategories(items, menuIdToCatId, catIdToInfo);
+    const hasAuto = cats.some(c => c.auto_discount > 0 && c.allow_discount);
+    if (!hasAuto) return;
+
+    const saved = sessionDisc?.catRows ?? {};
+    const catRows = {};
+    for (const cat of cats) {
+      const savedVal = saved[cat.id]?.value;
+      // Keep user's manual value if set; otherwise use auto_discount
+      catRows[cat.id] = {
+        value: savedVal !== undefined ? savedVal : String(cat.auto_discount > 0 ? cat.auto_discount : 0),
+      };
+    }
+
+    // Compute discount amounts and net
+    let totalCatDisc = 0;
+    const catDiscAmts = {};
+    for (const cat of cats) {
+      const val = parseFloat(catRows[cat.id]?.value) || 0;
+      const catMax = cat.max_discount != null ? cat.max_discount : 100;
+      const cap = cat.allow_discount ? catMax : 0;
+      const disc = Math.round((cat.total * Math.min(val, cap)) / 100 * 100) / 100;
+      catDiscAmts[cat.id] = disc;
+      totalCatDisc += disc;
+    }
+    totalCatDisc = Math.round(totalCatDisc * 100) / 100;
+
+    const misc      = Number(sessionDisc?.misc)      || 0;
+    const miscMinus = Number(sessionDisc?.miscMinus) || 0;
+    const sCharge   = Number(sessionDisc?.sCharge)   || 0;
+    const newNet    = Math.round((totals.finalAmount - totalCatDisc + misc - miscMinus + sCharge) * 100) / 100;
+    const discPct   = totals.finalAmount > 0
+      ? Math.round((totalCatDisc / totals.finalAmount) * 10000) / 100
+      : 0;
+
+    saveSessionDisc({
+      ...(sessionDisc ?? {}),
+      discMode:     sessionDisc?.discMode ?? "pct",
+      catRows,
+      catDiscAmts,
+      totalCatDisc,
+      netAmt:       newNet,
+      discPct,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, menu]);
+
   // ── Actions ───────────────────────────────────────────────
 
+  // Auto-hold current draft when navigating back to table view
   function handleBack() {
+    if (isDraft && selectedTableId && draftItems.length > 0) {
+      saveHold(selectedTableId, {
+        draftItems,
+        draftOrderType,
+        draftCovers,
+        draftApplicableRate,
+        draftCustomerName,
+        draftCustomerId,
+        draftWaiterId,
+      });
+    }
     clearSession();
     setView(BILLING_VIEW.TABLE_SELECT);
   }
 
+  // Hold button:
+  // • Normal draft  → save to hold and go back (same as Back)
+  // • Restored from hold → RELEASE: clear hold, go back WITHOUT re-saving
+  function handleHold() {
+    if (isRestoredFromHold && selectedTableId) {
+      clearHold(selectedTableId);
+      clearSession();
+      setView(BILLING_VIEW.TABLE_SELECT);
+    } else {
+      handleBack();
+    }
+  }
+
   function handleConfirmCancel() {
     if (isDraft) {
+      // Discard Draft: explicitly clear any saved hold state for this table
+      if (selectedTableId) clearHold(selectedTableId);
       setCancelOpen(false);
       clearSession();
       setView(BILLING_VIEW.TABLE_SELECT);
@@ -416,6 +389,7 @@ export default function OrderEntryView() {
   }
 
   function handleAddItem(menuItem) {
+    if (!isDraft && session?.session_status === "BILL_PRINTED") return;
     if (isDraft) {
       const rate = selectItemRate(menuItem, applicableRate);
       addDraftItem(menuItem, rate);
@@ -515,6 +489,8 @@ export default function OrderEntryView() {
       qc.invalidateQueries({ queryKey: BQK.TABLES });
       qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
 
+      // Clear any hold state for this table since KOT has been committed
+      if (selectedTableId) clearHold(selectedTableId);
       toast.success("KOT generated");
       clearSession();
     } catch (e) {
@@ -523,6 +499,23 @@ export default function OrderEntryView() {
       setIsKotting(false);
     }
   }
+
+  // Live ref so Esc handler always calls the current handleBack without stale closure
+  const handleBackRef = useRef(handleBack);
+  handleBackRef.current = handleBack;
+
+  // Esc key → go back to table select from order entry
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== "Escape") return;
+      // Skip if a Radix dialog or alert-dialog overlay is visible
+      if (document.querySelector("[data-radix-dialog-overlay]") ||
+          document.querySelector("[data-state='open'][role='dialog']")) return;
+      handleBackRef.current();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Guards
   useEffect(() => {
@@ -557,7 +550,6 @@ export default function OrderEntryView() {
         isDraft={isDraft}
         selectedTableName={selectedTableName}
         onBack={handleBack}
-        onEdit={() => setEditOpen(true)}
       />
 
       {/* ── Main body: center+right workspace ── */}
@@ -594,8 +586,10 @@ export default function OrderEntryView() {
                 isLoadingItems={isLoadingItems}
                 discountPercent={discountPercent}
                 sessionDisc={sessionDisc}
+                menu={menu}
                 lastAddedKey={lastAddedKey}
                 onQtyEnter={focusSearch}
+                selectedTableName={selectedTableName}
               />
             </div>
           </div>
@@ -605,6 +599,7 @@ export default function OrderEntryView() {
             sessionId={activeSessionId}
             session={session}
             items={items}
+            menu={menu}
             isDraft={isDraft}
             isKotting={isKotting}
             isNearReservation={isNearReservation}
@@ -615,6 +610,8 @@ export default function OrderEntryView() {
             settleDialogOpen={settleOpen}
             onKotDraft={handleKotDraft}
             onCancel={() => setCancelOpen(true)}
+            onHold={handleHold}
+            isRestoredFromHold={isRestoredFromHold}
             discountPercent={discountPercent}
             sessionDisc={sessionDisc}
             onDiscountChange={saveSessionDisc}
@@ -630,19 +627,11 @@ export default function OrderEntryView() {
           session={session}
           netAmount={netAmount}
           billTotals={totals}
+          items={items}
+          menu={menu}
           sessionDisc={sessionDisc}
           onSettle={handleSettle}
           isSettling={settleBillMut.isPending}
-        />
-      )}
-
-      {/* ── Edit dialog ── */}
-      {!isDraft && (
-        <EditSessionDialog
-          session={session}
-          sessionId={activeSessionId}
-          open={editOpen}
-          onOpenChange={setEditOpen}
         />
       )}
 

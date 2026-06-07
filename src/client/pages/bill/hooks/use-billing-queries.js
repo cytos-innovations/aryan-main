@@ -48,7 +48,7 @@ export function useMenuForBilling() {
   return useQuery({
     queryKey: BQK.MENU,
     queryFn:  billingService.getMenuForBilling,
-    staleTime: 60_000,
+    staleTime: 0,
   });
 }
 

@@ -10,6 +10,7 @@ import { Can } from "@/lib/auth";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -247,13 +248,12 @@ export default function BillMessage() {
               <div className="grid grid-cols-2 gap-3">
                 <Field>
                   <FieldLabel>From Date</FieldLabel>
-                  <Input type="date" value={form.valid_from}
+                  <DateInput value={form.valid_from}
                     onChange={(e) => setForm((f) => ({ ...f, valid_from: e.target.value }))} />
                 </Field>
                 <Field>
                   <FieldLabel>To Date</FieldLabel>
-                  <Input type="date" value={form.valid_to}
-                    min={form.valid_from || undefined}
+                  <DateInput value={form.valid_to}
                     onChange={(e) => setForm((f) => ({ ...f, valid_to: e.target.value }))} />
                 </Field>
               </div>

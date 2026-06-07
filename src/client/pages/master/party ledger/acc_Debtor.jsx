@@ -450,7 +450,7 @@ export default function AccDebtor() {
                   value={form.marketId ? String(form.marketId) : ""}
                   onValueChange={(v) => setF("marketId", v || null)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}>
                     <SelectValue placeholder="Select segment" />
                   </SelectTrigger>
                   <SelectContent>
@@ -482,7 +482,7 @@ export default function AccDebtor() {
                     Opening CR/DR <span className="text-destructive">*</span>
                   </FieldLabel>
                   <Select value={form.openingCrdr} onValueChange={(v) => setF("openingCrdr", v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger onKeyDown={enterNav.select} data-required="true"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="C">Credit (C)</SelectItem>
                       <SelectItem value="D">Debit (D)</SelectItem>
@@ -497,7 +497,7 @@ export default function AccDebtor() {
                 <Field>
                   <FieldLabel>Closing CR/DR</FieldLabel>
                   <Select value={form.closingCrdr} onValueChange={(v) => setF("closingCrdr", v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="C">Credit (C)</SelectItem>
                       <SelectItem value="D">Debit (D)</SelectItem>

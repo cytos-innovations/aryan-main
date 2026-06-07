@@ -414,7 +414,7 @@ export default function AccGeneralLedger() {
                   value={form.grpCode ? String(form.grpCode) : ""}
                   onValueChange={(v) => setF("grpCode", v || null)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}>
                     <SelectValue placeholder="Select group" />
                   </SelectTrigger>
                   <SelectContent>
@@ -430,7 +430,7 @@ export default function AccGeneralLedger() {
               <Field>
                 <FieldLabel>Sub Ledger</FieldLabel>
                 <Select value={form.subLed} onValueChange={(v) => setF("subLed", v)}>
-                  <SelectTrigger>
+                  <SelectTrigger onKeyDown={enterNav.select}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
