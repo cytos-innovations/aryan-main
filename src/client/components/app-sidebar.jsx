@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -334,6 +335,9 @@ function NavUser() {
 }
 
 function AppSidebar(props) {
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => { getVersion().then(setAppVersion).catch(() => {}); }, []);
+
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -347,10 +351,11 @@ function AppSidebar(props) {
                 <span className="truncate font-medium">POS App</span>
                 <span className="truncate text-xs">Aryan NxtGen</span>
               </div>
-              <div className="text-right text-xs text-muted-foreground leading-tight shrink-0">
-                <div className="font-medium">v0.2.2</div>
-                <div>Jun 6</div>
-              </div>
+              {appVersion && (
+                <div className="text-right text-xs text-muted-foreground leading-tight shrink-0">
+                  <div className="font-medium">v{appVersion}</div>
+                </div>
+              )}
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
