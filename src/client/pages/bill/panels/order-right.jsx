@@ -14,6 +14,7 @@ import {
   Comment01Icon,
   Cancel01Icon,
   AlertCircleIcon,
+  PrinterIcon,
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
@@ -44,28 +45,49 @@ const QUICK_REASONS = [
   "Duplicate entry",
 ];
 
-function VoidReasonDialog({ item, quantityToVoid: initialQty, onConfirm, onClose }) {
-  const maxQty = Number(item.quantity) || 1;
-  const [qty, setQty] = useState(initialQty);
+function fmtKotTime(ts) {
+  if (!ts) return null;
+  const d = new Date(ts.replace(" ", "T"));
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// kotBatches: array of { item (order_item row), qty (number) }
+// onConfirm: (reason, voids) where voids = [{ orderItemId, qty }, ...]
+function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
+  // qtys keyed by order_item id — how many to remove from each batch
+  const [qtys, setQtys] = useState(() => {
+    const init = {};
+    for (const b of kotBatches) init[b.item.id] = b.qty;
+    return init;
+  });
   const [reason, setReason] = useState("");
   const inputRef = useRef(null);
 
-  useEffect(() => {
-    setTimeout(() => inputRef.current?.focus(), 60);
-  }, []);
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 60); }, []);
+
+  const totalToRemove = Object.values(qtys).reduce((s, v) => s + v, 0);
+  const totalQty = kotBatches.reduce((s, b) => s + Number(b.item.quantity), 0);
+  const isFullRemove = totalToRemove >= totalQty;
+
+  function setKotQty(id, val, max) {
+    const v = Math.min(max, Math.max(0, val));
+    setQtys((prev) => ({ ...prev, [id]: v }));
+  }
 
   function handleConfirm() {
     const trimmed = reason.trim();
-    if (!trimmed) return;
-    onConfirm(trimmed, qty);
+    if (!trimmed || totalToRemove === 0) return;
+    const voids = kotBatches
+      .filter((b) => qtys[b.item.id] > 0)
+      .map((b) => ({ orderItemId: b.item.id, qty: qtys[b.item.id] }));
+    onConfirm(trimmed, voids);
   }
 
   function handleKey(e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleConfirm(); }
     if (e.key === "Escape") onClose();
   }
-
-  const isFullRemove = qty >= maxQty;
 
   return (
     <div
@@ -77,64 +99,76 @@ function VoidReasonDialog({ item, quantityToVoid: initialQty, onConfirm, onClose
         <div className="flex items-center gap-2.5 px-4 py-3 bg-destructive/10 border-b border-destructive/20">
           <HugeiconsIcon icon={AlertCircleIcon} size={16} strokeWidth={2} className="text-destructive shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-destructive">
-              {isFullRemove ? "Remove KOT Item" : "Reduce KOT Item Quantity"}
-            </p>
-            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-              {item.item_name}
-            </p>
+            <p className="text-sm font-semibold text-destructive">Void KOT Item</p>
+            <p className="text-[11px] text-muted-foreground truncate mt-0.5">{itemName}</p>
           </div>
         </div>
 
         {/* Body */}
         <div className="px-4 py-3 space-y-3">
           <p className="text-xs text-muted-foreground">
-            This item has already been sent to the kitchen. Select or type a reason to proceed.
+            Select qty to remove per KOT, then provide a reason.
           </p>
 
-          {/* Qty selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground shrink-0">Qty to remove:</span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setQty((q) => Math.max(1, q - 1))}
-                disabled={qty <= 1}
-                className="h-7 w-7 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 transition-colors"
-              >
-                <HugeiconsIcon icon={MinusSignIcon} size={10} strokeWidth={2.5} />
-              </button>
-              <input
-                type="number"
-                min="1"
-                max={maxQty}
-                value={qty}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v)) setQty(Math.min(maxQty, Math.max(1, v)));
-                }}
-                className="w-12 h-7 text-center text-sm font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-destructive px-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => setQty((q) => Math.min(maxQty, q + 1))}
-                disabled={qty >= maxQty}
-                className="h-7 w-7 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 transition-colors"
-              >
-                <HugeiconsIcon icon={Add01Icon} size={10} strokeWidth={2.5} />
-              </button>
-            </div>
-            <span className="text-[11px] text-muted-foreground/60">of {maxQty}</span>
-            {/* Quick-select all */}
-            {qty < maxQty && (
-              <button
-                type="button"
-                onClick={() => setQty(maxQty)}
-                className="ml-auto text-[10px] px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                All
-              </button>
-            )}
+          {/* Per-KOT rows */}
+          <div className="space-y-1.5">
+            {kotBatches.map((b) => {
+              const maxQ = Number(b.item.quantity);
+              const curQ = qtys[b.item.id] ?? 0;
+              const kotLabel = b.item.kot_no ?? (b.item.kot_id ? `KOT-${b.item.kot_id}` : "KOT");
+              const kotTime  = fmtKotTime(b.item.kot_created_at);
+              return (
+                <div key={b.item.id} className="flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+                  {/* KOT info */}
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <HugeiconsIcon icon={PrinterIcon} size={11} strokeWidth={2} className="text-blue-500 shrink-0" />
+                    <span className="text-[11px] font-semibold text-blue-700 dark:text-blue-300 shrink-0">{kotLabel}</span>
+                    {kotTime && <span className="text-[10px] text-muted-foreground">· {kotTime}</span>}
+                    <span className="ml-auto text-[10px] text-muted-foreground shrink-0">of {maxQ}</span>
+                  </div>
+                  {/* Qty stepper */}
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setKotQty(b.item.id, curQ - 1, maxQ)}
+                      disabled={curQ <= 0}
+                      className="h-6 w-6 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 transition-colors"
+                    >
+                      <HugeiconsIcon icon={MinusSignIcon} size={9} strokeWidth={2.5} />
+                    </button>
+                    <input
+                      type="number"
+                      min="0"
+                      max={maxQ}
+                      value={curQ}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (!isNaN(v)) setKotQty(b.item.id, v, maxQ);
+                      }}
+                      className="w-10 h-6 text-center text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-destructive px-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setKotQty(b.item.id, curQ + 1, maxQ)}
+                      disabled={curQ >= maxQ}
+                      className="h-6 w-6 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-30 transition-colors"
+                    >
+                      <HugeiconsIcon icon={Add01Icon} size={9} strokeWidth={2.5} />
+                    </button>
+                    {/* All */}
+                    {curQ < maxQ && (
+                      <button
+                        type="button"
+                        onClick={() => setKotQty(b.item.id, maxQ, maxQ)}
+                        className="ml-1 text-[9px] px-1.5 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
+                      >
+                        All
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Quick pick */}
@@ -177,10 +211,10 @@ function VoidReasonDialog({ item, quantityToVoid: initialQty, onConfirm, onClose
             type="button"
             size="sm"
             onClick={handleConfirm}
-            disabled={!reason.trim()}
+            disabled={!reason.trim() || totalToRemove === 0}
             className="h-8 px-4 text-xs bg-destructive hover:bg-destructive/90 text-destructive-foreground border-0 disabled:opacity-40"
           >
-            {isFullRemove ? "Remove Item" : `Reduce Qty (−${qty})`}
+            {isFullRemove ? "Remove Item" : `Void (−${totalToRemove})`}
           </Button>
         </div>
       </div>
@@ -208,56 +242,77 @@ function KotDot({ status }) {
   );
 }
 
-// ─── Order item row ───────────────────────────────────────────
+// ─── Merged order item row (groups same menu_id across KOTs) ──
 
-function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter }) {
+function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter }) {
   const { auth } = useAuth();
-  const updateQty       = useUpdateOrderItemQty(sessionId);
-  const cancelItem      = useCancelOrderItem(sessionId);
+  const updateQty        = useUpdateOrderItemQty(sessionId);
+  const cancelItem       = useCancelOrderItem(sessionId);
   const cancelWithReason = useCancelOrderItemWithReason(sessionId);
   const {
     updateDraftQty, removeDraftItem,
     setDraftItemKotMsg, setPendingItemKotMsg, pendingItemKotMsgs,
   } = useBillingContext();
 
-  const [qtyEditing,    setQtyEditing]    = useState(false);
-  const [qtyInput,      setQtyInput]      = useState("");
-  const [kotInput,      setKotInput]      = useState("");
-  const [dropdownOpen,  setDropdownOpen]  = useState(false);
-  const [activeIdx,     setActiveIdx]     = useState(-1);
-  // void dialog state: null = closed, { quantityToVoid } = open
-  const [voidDialog,    setVoidDialog]    = useState(null);
-  const kotInputRef                       = useRef(null);
-  const qtyInputRef                       = useRef(null);
-  const dropdownRef                       = useRef(null);
+  const [qtyEditing,   setQtyEditing]   = useState(false);
+  const [qtyInput,     setQtyInput]     = useState("");
+  const [kotInput,     setKotInput]     = useState("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [activeIdx,    setActiveIdx]    = useState(-1);
+  // void dialog: null = closed, true = open
+  const [voidOpen,     setVoidOpen]     = useState(false);
+  const kotInputRef  = useRef(null);
+  const qtyInputRef  = useRef(null);
+  const dropdownRef  = useRef(null);
 
-  if (item.item_status === "CANCELLED") return null;
+  // Draft uses a single synthetic item; session uses the first item's metadata
+  const representative = group[0];
 
-  const isKotSent = !isDraft && item.kot_status !== "PENDING" && item.item_status === "ACTIVE";
-  const canEdit   = !isBillPrinted && (isDraft || (item.kot_status === "PENDING" && item.item_status === "ACTIVE"));
-  // KOT-sent items can still be removed/reduced — they just need a reason — but not after bill is printed
-  const canRemove = !isBillPrinted && (canEdit || isKotSent);
+  // Totals across the group
+  const totalQty    = isDraft
+    ? representative.quantity
+    : group.reduce((s, i) => s + Number(i.quantity), 0);
+  const totalAmount = group.reduce((s, i) => s + Number(i.final_amount), 0);
 
-  const hasPending = !isDraft && Object.prototype.hasOwnProperty.call(pendingItemKotMsgs, item.id);
+  // Pending (editable) items vs KOT-sent items
+  const pendingItems = isDraft ? group : group.filter((i) => i.kot_status === "PENDING");
+  const sentItems    = isDraft ? []    : group.filter((i) => i.kot_status !== "PENDING");
+
+  const hasPendingQty = pendingItems.length > 0;
+  const hasSentQty    = sentItems.length > 0;
+
+  // For display: highest-priority KOT status in the group
+  const kotStatusPriority = ["SERVED", "READY", "PREPARING", "SENT", "PENDING"];
+  const groupStatus = isDraft ? "PENDING" : (
+    kotStatusPriority.find((s) => group.some((i) => i.kot_status === s)) ?? "PENDING"
+  );
+
+  const canEdit   = !isBillPrinted && hasPendingQty;
+  const canRemove = !isBillPrinted && (hasPendingQty || hasSentQty);
+
+  // KOT message: use last item in group (most recent KOT or draft item)
+  const lastItem = group[group.length - 1];
+  const hasPending = !isDraft && Object.prototype.hasOwnProperty.call(pendingItemKotMsgs, lastItem.id);
   const kotMessage = isDraft
-    ? (item.kot_message ?? null)
-    : (hasPending ? pendingItemKotMsgs[item.id] : (item.kot_messages ?? null));
+    ? (representative.kot_message ?? null)
+    : (hasPending ? pendingItemKotMsgs[lastItem.id] : (lastItem.kot_messages ?? null));
 
-  // Live search against KOT message master
   const kotSearch  = useSearchKotMessages(kotInput, isF6Active);
   const kotResults = kotSearch.data ?? [];
 
-  // Auto-focus and pre-select qty when this row is freshly added
+  // Auto-focus qty when row freshly added — show only the pending item's qty, not the merged total
   useEffect(() => {
     if (isActive && !isF6Active) {
-      setQtyInput(String(item.quantity));
+      const pendingQty = isDraft
+        ? representative.quantity
+        : (pendingItems[pendingItems.length - 1]?.quantity ?? 1);
+      setQtyInput(String(pendingQty));
       setQtyEditing(true);
       setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 60);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
-  // Focus the KOT inline input when F6 activates for this item
   useEffect(() => {
     if (isF6Active) {
       setKotInput(kotMessage ?? "");
@@ -272,8 +327,8 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
   }, [isF6Active]);
 
   function handleKotMsg(message) {
-    if (isDraft) setDraftItemKotMsg(item.menu_id, message);
-    else setPendingItemKotMsg(item.id, message);
+    if (isDraft) setDraftItemKotMsg(representative.menu_id, message);
+    else setPendingItemKotMsg(lastItem.id, message);
   }
 
   function commitKotInput(text) {
@@ -289,34 +344,18 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
   }
 
   function handleKotKeyDown(e) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveIdx((i) => Math.min(i + 1, kotResults.length - 1));
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIdx((i) => Math.max(i - 1, -1));
-      return;
-    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, kotResults.length - 1)); return; }
+    if (e.key === "ArrowUp")   { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, -1)); return; }
     if (e.key === "Enter") {
       e.preventDefault();
       if (activeIdx >= 0 && kotResults[activeIdx]) {
-        // User navigated with arrow keys — pick highlighted
         pickSuggestion(kotResults[activeIdx].message);
       } else {
-        // Auto-match: exact code match takes priority
         const q = kotInput.trim();
         const exactCode = q ? kotResults.find((m) => String(m.code ?? "") === q) : null;
-        if (exactCode) {
-          pickSuggestion(exactCode.message);
-        } else if (kotResults.length === 1) {
-          // Only one result — pick it automatically
-          pickSuggestion(kotResults[0].message);
-        } else {
-          // Save whatever the user typed as a custom message
-          commitKotInput();
-        }
+        if (exactCode) pickSuggestion(exactCode.message);
+        else if (kotResults.length === 1) pickSuggestion(kotResults[0].message);
+        else commitKotInput();
       }
       return;
     }
@@ -324,39 +363,56 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
   }
 
   function handleDecrement() {
-    if (isDraft) { updateDraftQty(item.menu_id, item.quantity - 1); return; }
-    if (canEdit) { updateQty.mutate({ id: item.id, qty: item.quantity - 1 }); return; }
-    // KOT-sent: open void dialog to reduce by 1
-    if (isKotSent) setVoidDialog({ quantityToVoid: 1 });
+    if (isDraft) { updateDraftQty(representative.menu_id, representative.quantity - 1); return; }
+    // If there are pending (unsent) items, decrement those first
+    if (hasPendingQty) {
+      const target = pendingItems[pendingItems.length - 1];
+      if (target.quantity <= 1) cancelItem.mutate(target.id);
+      else updateQty.mutate({ id: target.id, qty: target.quantity - 1 });
+      return;
+    }
+    // All sent — open KOT-wise void dialog
+    setVoidOpen(true);
   }
 
   function handleIncrement() {
     if (!canEdit) return;
-    if (isDraft) updateDraftQty(item.menu_id, item.quantity + 1);
-    else updateQty.mutate({ id: item.id, qty: item.quantity + 1 });
+    if (isDraft) { updateDraftQty(representative.menu_id, representative.quantity + 1); return; }
+    // Increment the last pending item
+    const target = pendingItems[pendingItems.length - 1];
+    updateQty.mutate({ id: target.id, qty: target.quantity + 1 });
   }
 
   function handleRemove() {
-    if (isDraft) { removeDraftItem(item.menu_id); return; }
-    if (canEdit) { cancelItem.mutate(item.id); return; }
-    // KOT-sent: open void dialog to remove the full quantity
-    if (isKotSent) setVoidDialog({ quantityToVoid: Number(item.quantity) });
+    if (isDraft) { removeDraftItem(representative.menu_id); return; }
+    if (hasPendingQty && !hasSentQty) {
+      // All items are still pending — cancel them directly
+      for (const p of pendingItems) cancelItem.mutate(p.id);
+      return;
+    }
+    // Has sent items (with or without pending) — open void dialog for all
+    setVoidOpen(true);
   }
 
-  function handleVoidConfirm(reason, qty) {
-    cancelWithReason.mutate({
-      orderItemId:    item.id,
-      quantityToVoid: qty,
-      voidReason:     reason,
-      userId:         auth?.user?.id ?? null,
-      voidedBy:       auth?.user?.username ?? null,
-    });
-    setVoidDialog(null);
+  function handleVoidConfirm(reason, voids) {
+    for (const v of voids) {
+      cancelWithReason.mutate({
+        orderItemId:    v.orderItemId,
+        quantityToVoid: v.qty,
+        voidReason:     reason,
+        userId:         auth?.user?.id ?? null,
+        voidedBy:       auth?.user?.username ?? null,
+      });
+    }
+    setVoidOpen(false);
   }
 
   function startQtyEdit() {
     if (!canEdit || isBillPrinted) return;
-    setQtyInput(String(item.quantity));
+    const pendingQty = isDraft
+      ? representative.quantity
+      : (pendingItems[pendingItems.length - 1]?.quantity ?? 1);
+    setQtyInput(String(pendingQty));
     setQtyEditing(true);
     setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 30);
   }
@@ -364,8 +420,11 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
   function commitQtyEdit(returnToSearch = false) {
     const parsed = parseInt(qtyInput, 10);
     if (!isNaN(parsed) && parsed > 0) {
-      if (isDraft) updateDraftQty(item.menu_id, parsed);
-      else updateQty.mutate({ id: item.id, qty: parsed });
+      if (isDraft) { updateDraftQty(representative.menu_id, parsed); }
+      else if (pendingItems.length > 0) {
+        const target = pendingItems[pendingItems.length - 1];
+        updateQty.mutate({ id: target.id, qty: parsed });
+      }
     }
     setQtyEditing(false);
     if (returnToSearch) onQtyEnter?.();
@@ -377,30 +436,30 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
   }
 
   const isMutating  = cancelItem.isPending || cancelWithReason.isPending || updateQty.isPending;
-  const decDisabled = isDraft ? item.quantity <= 1 : ((!canRemove) || item.quantity <= 1 || isMutating);
-  const incDisabled = isDraft ? false : (!canEdit || updateQty.isPending);
-  const delDisabled = isDraft ? false : (!canRemove || isMutating);
+  const showTrashLeft = totalQty === 1;
+  const decDisabled = !canRemove || (totalQty <= 1 && !hasSentQty) || isMutating;
+  const incDisabled = !canEdit || updateQty.isPending;
+  const delDisabled = !canRemove || isMutating;
 
-  // qty=1: show trash on left instead of minus
-  const showTrashLeft = item.quantity === 1;
+  // KOT batches passed to void dialog — only sent items (pending are cancelled directly)
+  const kotBatchesForDialog = sentItems.map((i) => ({ item: i, qty: Number(i.quantity) }));
 
   return (
     <div className="group flex flex-col border-b last:border-b-0 hover:bg-muted/20 transition-colors">
       <div className="flex items-center gap-2 px-3 py-2">
         {/* Type dot + KOT status */}
         <div className="flex items-center gap-1 shrink-0">
-          <FoodTypeDot type={item.food_type} size={9} />
-          <KotDot status={item.kot_status} />
+          <FoodTypeDot type={representative.food_type} size={9} />
+          <KotDot status={groupStatus} />
         </div>
 
         {/* Name */}
         <span className="flex-1 min-w-0 text-xs leading-snug truncate font-medium">
-          {item.item_name}
+          {representative.item_name}
         </span>
 
         {/* Qty controls: [trash/minus] [qty] [+] */}
         <div className="flex items-center gap-0.5 shrink-0">
-          {/* Left button: trash when qty=1, minus otherwise */}
           {showTrashLeft ? (
             <button
               type="button"
@@ -422,7 +481,6 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
             </button>
           )}
 
-          {/* Qty — click to edit */}
           {qtyEditing ? (
             <input
               ref={qtyInputRef}
@@ -441,11 +499,10 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
               title="Click to edit quantity"
               className="w-7 h-6 text-center text-xs font-mono font-semibold tabular-nums rounded hover:bg-muted transition-colors"
             >
-              {item.quantity}
+              {totalQty}
             </button>
           )}
 
-          {/* Plus */}
           <button
             type="button"
             onClick={handleIncrement}
@@ -458,10 +515,10 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
 
         {/* Amount */}
         <span className="text-xs font-semibold tabular-nums shrink-0 w-14 text-right">
-          ₹{fmtAmount(item.final_amount)}
+          ₹{fmtAmount(totalAmount)}
         </span>
 
-        {/* KOT message picker — popover (click) or F6 (keyboard) */}
+        {/* KOT message picker */}
         <div className="flex items-center gap-0.5 shrink-0" title="KOT message — press F6">
           <KotMessagePicker
             value={kotMessage}
@@ -474,7 +531,6 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
       {/* F6 inline KOT message input + live dropdown */}
       {isF6Active && canEdit && (
         <div className="px-3 pb-2 -mt-0.5 relative" ref={dropdownRef}>
-          {/* Input row */}
           <div className="flex items-center gap-1.5 rounded border border-primary/40 bg-primary/5 px-2 py-1">
             <HugeiconsIcon icon={Comment01Icon} size={10} strokeWidth={2} className="text-primary/60 shrink-0" />
             <input
@@ -496,11 +552,8 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
               </button>
             )}
           </div>
-
-          {/* Dropdown suggestions */}
           {dropdownOpen && (
             <div className="absolute left-3 right-3 top-full z-50 rounded border bg-popover shadow-md overflow-hidden">
-              {/* Master results first */}
               {kotSearch.isLoading ? (
                 <div className="p-2 space-y-1">
                   {[1, 2, 3].map((i) => <Skeleton key={i} className="h-7 rounded" />)}
@@ -527,8 +580,6 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
                   ))}
                 </div>
               ) : null}
-
-              {/* Custom free-text option — below master results */}
               {kotInput.trim() && (
                 <button
                   type="button"
@@ -540,8 +591,6 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
                   <span className="text-[10px] text-muted-foreground/60 ml-auto shrink-0">custom</span>
                 </button>
               )}
-
-              {/* Clear current message if one is set */}
               {kotMessage && (
                 <button
                   type="button"
@@ -561,29 +610,27 @@ function OrderItemRow({ item, sessionId, isDraft, isBillPrinted, isF6Active, onF
       {!isF6Active && kotMessage && (
         <div className="flex items-start gap-1 px-3 pb-1.5 -mt-0.5">
           <HugeiconsIcon icon={Comment01Icon} size={9} strokeWidth={2} className="text-primary/60 mt-0.5 shrink-0" />
-          <p className="text-[10px] text-primary/80 font-medium leading-snug">
-            {kotMessage}
-          </p>
+          <p className="text-[10px] text-primary/80 font-medium leading-snug">{kotMessage}</p>
         </div>
       )}
 
-      {/* Special instruction */}
-      {item.special_instruction && (
+      {/* Special instruction (from representative) */}
+      {representative.special_instruction && (
         <div className="flex items-start gap-1 px-3 pb-2 -mt-0.5">
           <HugeiconsIcon icon={StickyNote01Icon} size={9} strokeWidth={2} className="text-muted-foreground/50 mt-0.5 shrink-0" />
           <p className="text-[10px] text-muted-foreground italic leading-snug">
-            {item.special_instruction}
+            {representative.special_instruction}
           </p>
         </div>
       )}
 
-      {/* Void reason dialog — portal over the whole screen */}
-      {voidDialog && (
+      {/* KOT-wise void dialog */}
+      {voidOpen && kotBatchesForDialog.length > 0 && (
         <VoidReasonDialog
-          item={item}
-          quantityToVoid={voidDialog.quantityToVoid}
+          itemName={representative.item_name}
+          kotBatches={kotBatchesForDialog}
           onConfirm={handleVoidConfirm}
-          onClose={() => setVoidDialog(null)}
+          onClose={() => setVoidOpen(false)}
         />
       )}
     </div>
@@ -597,21 +644,28 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
 
-  // F6 target = lastAddedKey (menu_id of the item just added, controlled by parent)
-  // Falls back to the last active item's menu_id when nothing freshly added
+  // Group by menu_id (draft) or menu_id (session) to merge same item across KOTs.
+  // Preserve insertion order: first appearance of each menu_id keeps its position.
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const item of activeItems) {
+      const key = item.menu_id ?? item.id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return Array.from(map.entries()); // [[menuId, [items...]], ...]
+  }, [activeItems]);
+
+  // F6 — target last-added group's menu_id
   const lastItem    = activeItems.length > 0 ? activeItems[activeItems.length - 1] : null;
   const lastItemKey = lastAddedKey ?? (lastItem?.menu_id ?? null);
 
-  // Clear any open F6 panel when a new item is added
   const prevCountRef = useRef(activeItems.length);
   useEffect(() => {
-    if (activeItems.length > prevCountRef.current) {
-      setF6ItemKey(null);
-    }
+    if (activeItems.length > prevCountRef.current) setF6ItemKey(null);
     prevCountRef.current = activeItems.length;
   }, [activeItems.length]);
 
-  // Global F6 — opens KOT message input on the active (last-added) item by menu_id
   useEffect(() => {
     function onKeyDown(e) {
       if (e.key !== "F6") return;
@@ -654,15 +708,15 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
           <kbd className="rounded bg-muted px-0.5 text-[8px] font-mono text-muted-foreground/50 leading-tight">F6</kbd>
         </span>
       </div>
-      {activeItems.map((item) => (
-        <OrderItemRow
-          key={item.id}
-          item={item}
+      {groups.map(([menuId, groupItems]) => (
+        <MergedOrderItemRow
+          key={menuId}
+          group={groupItems}
           sessionId={sessionId}
           isDraft={isDraft}
           isBillPrinted={isBillPrinted}
-          isActive={lastAddedKey === item.menu_id}
-          isF6Active={f6ItemKey === item.menu_id}
+          isActive={lastAddedKey === menuId}
+          isF6Active={f6ItemKey === menuId}
           onF6Close={() => setF6ItemKey(null)}
           onQtyEnter={onQtyEnter}
         />
@@ -993,7 +1047,7 @@ export default function OrderRightPanel({
   session, sessionId,
   isDraft, draftOrderType, draftCovers,
   onSetDraftConfig,
-  items, isLoadingItems,
+  items, billedItems, isLoadingItems,
   discountPercent,
   sessionDisc,
   menu,
@@ -1003,6 +1057,8 @@ export default function OrderRightPanel({
 }) {
   const tableName     = session?.table_name ?? selectedTableName ?? null;
   const isBillPrinted = !isDraft && session?.session_status === "BILL_PRINTED";
+  // Totals widget shows only KOT-sent items (what will actually appear on the bill)
+  const totalsItems   = billedItems ?? items;
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-card">
@@ -1030,9 +1086,9 @@ export default function OrderRightPanel({
         />
       </div>
 
-      {/* Bill totals */}
+      {/* Bill totals — based on KOT-sent items only */}
       <BillTotals
-        items={items}
+        items={totalsItems}
         discountPercent={discountPercent}
         sessionDisc={sessionDisc}
         menu={menu}

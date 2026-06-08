@@ -13,8 +13,8 @@ $nsis    = Get-ChildItem -Recurse "$bundle/nsis"  -Filter "*.exe"     -ErrorActi
 $msisig  = Get-ChildItem -Recurse "$bundle/msi"   -Filter "*.msi.sig" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $msi     = Get-ChildItem -Recurse "$bundle/msi"   -Filter "*.msi"     -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*.sig" } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
-$chosenSig       = if ($nsisig) { $nsisig } elseif ($msisig) { $msisig } else { $null }
-$chosenInstaller = if ($nsisig) { $nsis   } elseif ($msi)    { $msi    } else { $null }
+$chosenSig       = if ($msisig) { $msisig } elseif ($nsisig) { $nsisig } else { $null }
+$chosenInstaller = if ($msisig) { $msi    } elseif ($nsis)   { $nsis   } else { $null }
 
 if (-not $chosenSig) {
     Write-Host "ERROR: No .sig file found. Run 'npm run tauri build' with signing keys set first." -ForegroundColor Red

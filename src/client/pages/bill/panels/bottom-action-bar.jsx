@@ -131,7 +131,7 @@ function BillingModePanel({
       <ActionBtn
         icon={Hold01Icon}
         label={isRestoredFromHold ? "Release" : "Hold"}
-        shortcut="F6"
+        shortcut="F2"
         onClick={onHold}
         disabled={!canHold}
         className={isRestoredFromHold ? "text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-700" : ""}
@@ -566,14 +566,19 @@ export default function BottomActionBar({
 
   // ── Derived state ─────────────────────────────────────────
   const activeItems  = (items ?? []).filter((i) => i.item_status === "ACTIVE");
-  const billTotals   = calcBillTotals(items ?? []);
   const pendingKot  = activeItems.filter((i) => i.kot_status === "PENDING").length;
   const hasItems    = activeItems.length > 0;
   const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED";
   const isKotSent   = !isDraft && session?.session_status === "KOT_SENT";
 
+  // Discount panel and bill totals operate on KOT-sent items only
+  const sentItems    = isDraft ? activeItems : activeItems.filter((i) => i.kot_status !== "PENDING");
+  const hasSentItems = sentItems.length > 0;
+  const billTotals   = calcBillTotals(sentItems);
+
   const canKot    = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
-  const canBill   = !isDraft && hasItems && pendingKot === 0 && (isKotSent || session?.session_status === "OPEN") && !isClosed;
+  // Bill+Print is enabled as long as there is at least one KOT-sent item — pending items are excluded from the bill automatically
+  const canBill   = !isDraft && hasSentItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
   const canSettle = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
   const kotPending = isDraft ? isKotting : generateKot.isPending;
   // Hold is only meaningful in draft mode. When restored from hold, always enable (to release).
@@ -610,8 +615,7 @@ export default function BottomActionBar({
 
   const handleBill = useCallback(() => {
     if (pendingKot > 0) {
-      toast.error(`${pendingKot} item${pendingKot > 1 ? "s" : ""} not sent to kitchen — send KOT first or void them before printing the bill.`);
-      return;
+      toast.warning(`${pendingKot} item${pendingKot > 1 ? "s" : ""} not sent to kitchen will be dropped from the bill.`);
     }
     const payload = sessionDisc ? {
       billDiscountAmount: Math.round((sessionDisc.totalCatDisc || 0) * 100) / 100,
@@ -633,7 +637,7 @@ export default function BottomActionBar({
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
-    const POS_KEYS = new Set(["Home", "F11", "F6", "/", "+"]);
+    const POS_KEYS = new Set(["Home", "F11", "F2", "/", "+"]);
 
     function onKey(e) {
       const tag = e.target.tagName;
@@ -664,7 +668,7 @@ export default function BottomActionBar({
         case "/":
           setPanelMode(BOTTOM_PANEL_MODE.DISCOUNT);
           break;
-        case "F6":
+        case "F2":
           if (cur.canHold && cur.onHold) cur.onHold();
           break;
         case "F11":
@@ -716,7 +720,7 @@ export default function BottomActionBar({
         {panelMode === BOTTOM_PANEL_MODE.DISCOUNT && (
           <DiscountModePanel
             totals={billTotals}
-            items={items}
+            items={sentItems}
             menu={menu}
             sessionDisc={sessionDisc}
             onApply={onDiscountChange}

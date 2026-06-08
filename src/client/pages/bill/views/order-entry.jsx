@@ -274,8 +274,16 @@ export default function OrderEntryView() {
   const isLoadingItems = !isDraft && itemsQuery.isLoading;
   const billId         = billSummary.data?.bill_id ?? null;
 
+  // For billing/settlement: only KOT-sent items count. Pending items stay in the order
+  // but are excluded from the bill total and settle amount.
+  const sentItems = useMemo(
+    () => isDraft ? items : (items ?? []).filter((i) => i.kot_status !== "PENDING" && i.item_status === "ACTIVE"),
+    [isDraft, items],
+  );
+
   // Net amount calculation (needed by BottomActionBar + passed to right panel)
-  const totals    = useMemo(() => calcBillTotals(items), [items]);
+  // Uses sentItems so pending (un-KOT'd) items don't inflate the bill total.
+  const totals    = useMemo(() => calcBillTotals(sentItems), [sentItems]);
   const billDisc  = Math.round((totals.finalAmount * (Number(discountPercent) || 0)) / 100 * 100) / 100;
   const afterDisc = Math.round((totals.finalAmount - billDisc) * 100) / 100;
   const roundOff  = Math.round(afterDisc) - afterDisc;
@@ -586,6 +594,7 @@ export default function OrderEntryView() {
                 draftCovers={draftCovers}
                 onSetDraftConfig={setDraftConfig}
                 items={items}
+                billedItems={sentItems}
                 isLoadingItems={isLoadingItems}
                 discountPercent={discountPercent}
                 sessionDisc={sessionDisc}

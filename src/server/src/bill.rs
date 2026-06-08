@@ -93,6 +93,9 @@ pub struct OrderItemRow {
     pub special_instruction:  Option<String>,
     pub kot_messages:         Option<String>,
     pub ordered_at:           Option<String>,
+    pub kot_id:               Option<i32>,
+    pub kot_no:               Option<String>,
+    pub kot_created_at:       Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -921,12 +924,16 @@ pub async fn get_order_items(
                 (SELECT string_agg(oim.modifier_name, ', ' ORDER BY oim.id)
                  FROM   order_item_modifier oim
                  WHERE  oim.order_item_id = oi.id AND oim.is_active = 1) AS kot_messages,
-                oi.ordered_at
+                oi.ordered_at,
+                oi.kot_id,
+                km.kot_no,
+                km.created_at AS kot_created_at
          FROM   order_item oi
          LEFT JOIN food_type ft   ON ft.id  = oi.food_type_id
          LEFT JOIN menu_card mc   ON mc.id  = oi.menu_id
          LEFT JOIN menu_group mg  ON mg.id  = mc.menu_group_id
          LEFT JOIN menu_category cat ON cat.id = mg.category_id
+         LEFT JOIN kot_master km  ON km.id  = oi.kot_id
          WHERE  oi.order_session_id = $1
          ORDER  BY oi.ordered_at, oi.id",
     )
@@ -965,6 +972,11 @@ pub async fn get_order_items(
         special_instruction:  r.try_get("special_instruction").ok().flatten(),
         kot_messages:         r.try_get("kot_messages").ok().flatten(),
         ordered_at:           r.try_get::<Option<chrono::NaiveDateTime>, _>("ordered_at")
+                               .ok().flatten()
+                               .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
+        kot_id:               r.try_get("kot_id").ok().flatten(),
+        kot_no:               r.try_get("kot_no").ok().flatten(),
+        kot_created_at:       r.try_get::<Option<chrono::NaiveDateTime>, _>("kot_created_at")
                                .ok().flatten()
                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
     }).collect())
@@ -1666,10 +1678,10 @@ pub async fn generate_bill(
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    // Validate: must have at least one active item
+    // Validate: must have at least one KOT-sent active item
     let item_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM order_item
-         WHERE  order_session_id = $1 AND item_status = 'ACTIVE'",
+         WHERE  order_session_id = $1 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'",
     )
     .bind(session_id)
     .fetch_one(&pool)
@@ -1677,10 +1689,10 @@ pub async fn generate_bill(
     .map_err(|e| format!("Item count failed: {e}"))?;
 
     if item_count == 0 {
-        return Err("No active items to bill".to_string());
+        return Err("No KOT-sent items to bill".to_string());
     }
 
-    // Aggregate totals from active items
+    // Aggregate totals from KOT-sent active items only (pending items excluded from bill)
     let totals = sqlx::query(
         "SELECT COALESCE(SUM(gross_amount),    0)::float8 AS gross_amount,
                 COALESCE(SUM(discount_amount), 0)::float8 AS discount_amount,
@@ -1688,7 +1700,7 @@ pub async fn generate_bill(
                 COALESCE(SUM(tax_amount),      0)::float8 AS tax_amount,
                 COALESCE(SUM(final_amount),    0)::float8 AS final_amount
          FROM   order_item
-         WHERE  order_session_id = $1 AND item_status = 'ACTIVE'",
+         WHERE  order_session_id = $1 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'",
     )
     .bind(session_id)
     .fetch_one(&pool)
@@ -1749,6 +1761,17 @@ pub async fn generate_bill(
         .await
         .map_err(|e| format!("Bill update failed: {e}"))?;
 
+        // Drop any un-KOT'd items that were added after the previous bill print
+        sqlx::query(
+            "UPDATE order_item
+             SET    item_status = 'CANCELLED', is_active = 0, cancelled_at = NOW(), updated_at = NOW()
+             WHERE  order_session_id = $1 AND item_status = 'ACTIVE' AND kot_status = 'PENDING'",
+        )
+        .bind(session_id)
+        .execute(&pool)
+        .await
+        .ok();
+
         return Ok(bid);
     }
 
@@ -1776,7 +1799,7 @@ pub async fn generate_bill(
         .await
         .ok();
 
-    // Copy order_items → bill_items
+    // Copy KOT-sent order_items → bill_items (pending items not included in bill)
     sqlx::query(
         "INSERT INTO bill_item
             (bill_id, order_item_id, menu_id, item_name, quantity, rate,
@@ -1784,7 +1807,7 @@ pub async fn generate_bill(
          SELECT $1, id, menu_id, item_name, quantity, rate,
                 gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id
          FROM   order_item
-         WHERE  order_session_id = $2 AND item_status = 'ACTIVE'",
+         WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'",
     )
     .bind(bill_id)
     .bind(session_id)
@@ -1792,7 +1815,7 @@ pub async fn generate_bill(
     .await
     .map_err(|e| format!("Failed to copy bill items: {e}"))?;
 
-    // Insert tax breakdown → bill_tax_detail
+    // Insert tax breakdown → bill_tax_detail (KOT-sent items only)
     sqlx::query(
         "INSERT INTO bill_tax_detail (bill_id, tax_name, tax_percentage, taxable_amount, tax_amount)
          SELECT $1,
@@ -1801,7 +1824,7 @@ pub async fn generate_bill(
                 SUM(taxable_amount),
                 SUM(tax_amount)
          FROM   order_item
-         WHERE  order_session_id = $2 AND item_status = 'ACTIVE'
+         WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'
          GROUP  BY tax_name",
     )
     .bind(bill_id)
@@ -1817,6 +1840,17 @@ pub async fn generate_bill(
                 bill_printed_at = NOW(), bill_print_count = bill_print_count + 1,
                 updated_at = NOW()
          WHERE  id = $1",
+    )
+    .bind(session_id)
+    .execute(&pool)
+    .await
+    .ok();
+
+    // Drop any un-KOT'd items — they were never sent to kitchen so excluded from this bill
+    sqlx::query(
+        "UPDATE order_item
+         SET    item_status = 'CANCELLED', is_active = 0, cancelled_at = NOW(), updated_at = NOW()
+         WHERE  order_session_id = $1 AND item_status = 'ACTIVE' AND kot_status = 'PENDING'",
     )
     .bind(session_id)
     .execute(&pool)
