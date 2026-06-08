@@ -496,9 +496,9 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
         <DiscField label="+ Svc Chg :" value={sCharge}   inputRef={sChargeRef} onChange={setSCharge}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }} />
         <DiscField label="Net Amt :" value={fmtAmount(net)} readOnly />
-        {totalCatDisc > 0 && (
+        {(totalCatDisc > 0 || billDiscAmt > 0) && (
           <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
-            Total Disc: −₹{fmtAmount(totalCatDisc)}
+            Total Disc: −₹{fmtAmount(r2(totalCatDisc + billDiscAmt))}
           </span>
         )}
 
