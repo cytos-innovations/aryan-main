@@ -314,12 +314,15 @@ export default function OrderEntryView() {
     }
     totalCatDisc = Math.round(totalCatDisc * 100) / 100;
 
-    const misc      = Number(sessionDisc?.misc)      || 0;
-    const miscMinus = Number(sessionDisc?.miscMinus) || 0;
-    const sCharge   = Number(sessionDisc?.sCharge)   || 0;
-    const newNet    = Math.round((totals.finalAmount - totalCatDisc + misc - miscMinus + sCharge) * 100) / 100;
-    const discPct   = totals.finalAmount > 0
-      ? Math.round((totalCatDisc / totals.finalAmount) * 10000) / 100
+    const misc         = Number(sessionDisc?.misc)         || 0;
+    const miscMinus    = Number(sessionDisc?.miscMinus)    || 0;
+    const sCharge      = Number(sessionDisc?.sCharge)      || 0;
+    const billDiscPct  = Number(sessionDisc?.billDiscPct)  || 0;
+    const afterCatDisc = Math.round((totals.finalAmount - totalCatDisc) * 100) / 100;
+    const billDiscAmt  = Math.round(afterCatDisc * billDiscPct / 100 * 100) / 100;
+    const newNet       = Math.round((afterCatDisc - billDiscAmt + misc - miscMinus + sCharge) * 100) / 100;
+    const discPct      = totals.finalAmount > 0
+      ? Math.round(((totalCatDisc + billDiscAmt) / totals.finalAmount) * 10000) / 100
       : 0;
 
     saveSessionDisc({
@@ -328,6 +331,7 @@ export default function OrderEntryView() {
       catRows,
       catDiscAmts,
       totalCatDisc,
+      billDiscAmt,
       netAmt:       newNet,
       discPct,
     });

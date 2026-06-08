@@ -82,6 +82,7 @@ function BillingModePanel({
   canBill, billPending,
   canSettle,
   netAmount,
+  pendingKot,
   onKot, onBill, onSettle, onSwitchMode, onHold, canHold, isRestoredFromHold,
 }) {
   return (
@@ -97,15 +98,23 @@ function BillingModePanel({
         data-pos-action="kotprint"
         onKeyDown={makePosTabHandler("kotprint")}
       />
-      <ActionBtn
-        icon={PrinterIcon}
-        label="Bill+Print"
-        shortcut="*"
-        onClick={onBill}
-        disabled={!canBill || billPending}
-        data-pos-action="billprint"
-        onKeyDown={makePosTabHandler("billprint")}
-      />
+      <div className="relative flex-1">
+        <ActionBtn
+          icon={PrinterIcon}
+          label="Bill+Print"
+          shortcut="*"
+          onClick={onBill}
+          disabled={!canBill || billPending}
+          className="w-full"
+          data-pos-action="billprint"
+          onKeyDown={makePosTabHandler("billprint")}
+        />
+        {pendingKot > 0 && (
+          <span className="pointer-events-none absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-white">
+            {pendingKot}
+          </span>
+        )}
+      </div>
       <ActionBtn
         icon={CouponPercentIcon}
         label="Pre-Disc"
@@ -563,7 +572,7 @@ export default function BottomActionBar({
   const isKotSent   = !isDraft && session?.session_status === "KOT_SENT";
 
   const canKot    = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
-  const canBill   = !isDraft && hasItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
+  const canBill   = !isDraft && hasItems && pendingKot === 0 && (isKotSent || session?.session_status === "OPEN") && !isClosed;
   const canSettle = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
   const kotPending = isDraft ? isKotting : generateKot.isPending;
   // Hold is only meaningful in draft mode. When restored from hold, always enable (to release).
@@ -599,12 +608,16 @@ export default function BottomActionBar({
   }, [isNearReservation, isDraft, onKotDraft, generateKot, clearSession, pendingItemKotMsgs]);
 
   const handleBill = useCallback(() => {
+    if (pendingKot > 0) {
+      toast.error(`${pendingKot} item${pendingKot > 1 ? "s" : ""} not sent to kitchen — send KOT first or void them before printing the bill.`);
+      return;
+    }
     const payload = sessionDisc ? {
       billDiscountAmount: Math.round((sessionDisc.totalCatDisc || 0) * 100) / 100,
       billNetAmount: sessionDisc.netAmt ?? undefined,
     } : {};
     generateBill.mutate(payload, { onSuccess: clearSession });
-  }, [generateBill, clearSession, sessionDisc]);
+  }, [pendingKot, generateBill, clearSession, sessionDisc]);
 
   // Settle now opens the SettleDialog (customer + payment method + split)
   const handleSettle = useCallback(() => {
@@ -687,6 +700,7 @@ export default function BottomActionBar({
             billPending={generateBill.isPending}
             canSettle={canSettle}
             netAmount={netAmount}
+            pendingKot={pendingKot}
             onKot={handleKot}
             onBill={handleBill}
             onSettle={handleSettle}

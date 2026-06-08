@@ -173,7 +173,7 @@ function TableCard({ table, onClick, now, isOnHold }) {
       onClick={() => onClick(table, status, phase)}
       disabled={isReserved}
       className={[
-        "relative flex flex-col h-27 rounded-xl p-3.5 text-left select-none transition-all duration-150",
+        "relative flex flex-col min-h-27 rounded-xl p-3.5 text-left select-none transition-all duration-150",
         "ring-1 shadow-xs overflow-hidden",
         STATUS_RING[status],
         STATUS_BG[status],
