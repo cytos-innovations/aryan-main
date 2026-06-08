@@ -7,7 +7,6 @@ import {
   Hold01Icon,
   Discount01Icon,
   AlertCircleIcon,
-  CouponPercentIcon,
 } from "@hugeicons/core-free-icons";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -116,10 +115,12 @@ function BillingModePanel({
         )}
       </div>
       <ActionBtn
-        icon={CouponPercentIcon}
-        label="Pre-Disc"
-        shortcut="F8"
-        disabled
+        icon={PrinterIcon}
+        label="KOT"
+        shortcut="+"
+        onClick={onKot}
+        disabled={!canKot || kotPending}
+        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
       />
       <ActionBtn
         icon={Discount01Icon}
@@ -632,7 +633,7 @@ export default function BottomActionBar({
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
-    const POS_KEYS = new Set(["Home", "F11", "F6", "/"]);
+    const POS_KEYS = new Set(["Home", "F11", "F6", "/", "+"]);
 
     function onKey(e) {
       const tag = e.target.tagName;
@@ -657,6 +658,7 @@ export default function BottomActionBar({
 
       switch (e.key) {
         case "Home":
+        case "+":
           if (cur.canKot && !cur.kotPending) cur.handleKot();
           break;
         case "/":

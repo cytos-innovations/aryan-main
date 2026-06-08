@@ -504,17 +504,16 @@ export default function OrderEntryView() {
     }
   }
 
-  // Live ref so Esc handler always calls the current handleBack without stale closure
-  const handleBackRef = useRef(handleBack);
-  handleBackRef.current = handleBack;
 
   // Esc key → go back to table select from order entry
+  const handleBackRef = useRef(handleBack);
+  handleBackRef.current = handleBack;
   useEffect(() => {
     function onKey(e) {
       if (e.key !== "Escape") return;
-      // Skip if a Radix dialog or alert-dialog overlay is visible
       if (document.querySelector("[data-radix-dialog-overlay]") ||
           document.querySelector("[data-state='open'][role='dialog']")) return;
+      e.preventDefault();
       handleBackRef.current();
     }
     window.addEventListener("keydown", onKey);

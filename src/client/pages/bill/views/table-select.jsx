@@ -689,7 +689,7 @@ export default function TableSelectView({ onOpenReprint }) {
         {/* Search */}
         <div className="relative shrink-0">
           <HugeiconsIcon icon={Search01Icon} size={13} strokeWidth={2} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-          <Input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={handleSearchKeyDown} placeholder="Search by name or code…" className="h-8 pl-8 w-48 text-xs" />
+          <Input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value.slice(0, 10))} onKeyDown={handleSearchKeyDown} placeholder="Search by name or code…" className="h-8 pl-8 w-48 text-xs" />
         </div>
 
         {/* Refresh */}
