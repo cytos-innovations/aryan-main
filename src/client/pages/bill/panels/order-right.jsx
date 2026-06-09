@@ -729,22 +729,23 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
 
 function BillTotals({ items, sessionDisc, menu }) {
   const [taxExpanded, setTaxExpanded] = useState(false);
+  const [catExpanded, setCatExpanded] = useState(false);
 
   const totals = useMemo(() => calcBillTotals(items ?? []), [items]);
 
-  const foodTotal = useMemo(
-    () => (items ?? [])
-      .filter((i) => i.item_status === "ACTIVE" && !i.is_liquor)
-      .reduce((s, i) => s + (Number(i.final_amount) || 0), 0),
-    [items],
-  );
-
-  const liquorTotal = useMemo(
-    () => (items ?? [])
-      .filter((i) => i.item_status === "ACTIVE" && i.is_liquor)
-      .reduce((s, i) => s + (Number(i.final_amount) || 0), 0),
-    [items],
-  );
+  // Per-category subtotals — ordered by first appearance
+  const categoryTotals = useMemo(() => {
+    const map = new Map(); // catId → { name, total }
+    for (const item of items ?? []) {
+      if (item.item_status !== "ACTIVE") continue;
+      const catId   = item.category_id ?? "__none__";
+      const catName = item.category_name ?? "Other";
+      const amt     = Number(item.final_amount) || 0;
+      if (!map.has(catId)) map.set(catId, { name: catName, total: 0 });
+      map.get(catId).total += amt;
+    }
+    return Array.from(map.values()).map((c) => ({ ...c, total: Math.round(c.total * 100) / 100 }));
+  }, [items]);
 
   const taxBreakdown = useMemo(() => calcTaxBreakdown(items ?? []), [items]);
 
@@ -784,10 +785,35 @@ function BillTotals({ items, sessionDisc, menu }) {
   return (
     <div className="shrink-0 border-t bg-card">
       <div className="px-4 py-2.5 space-y-1.5">
-        {liquorTotal > 0 && (
+        {/* Category subtotals — only shown when there are 2+ categories */}
+        {categoryTotals.length > 1 && (
           <>
-            <TotalsRow label="Food" value={foodTotal} />
-            <TotalsRow label="Liquor" value={liquorTotal} accent="text-amber-600 dark:text-amber-400" />
+            <button
+              type="button"
+              onClick={() => setCatExpanded((p) => !p)}
+              className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span className="flex items-center gap-1">
+                <HugeiconsIcon icon={StickyNote01Icon} size={10} strokeWidth={2} />
+                Categories
+              </span>
+              <div className="flex items-center gap-1">
+                <span className="tabular-nums text-foreground font-medium">
+                  ₹{fmtAmount(totals.finalAmount)}
+                </span>
+                <HugeiconsIcon icon={catExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
+              </div>
+            </button>
+            {catExpanded && (
+              <div className="pl-2 space-y-0.5">
+                {categoryTotals.map((c) => (
+                  <div key={c.name} className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>{c.name}</span>
+                    <span className="tabular-nums">₹{fmtAmount(c.total)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 

@@ -338,7 +338,8 @@ export default function AccEmployeeInfo() {
           <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
 
             {/* ── Identification ─────────────────────────── */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
+              {/* Code field hidden — not shown in form
               <Field>
                 <FieldLabel>Code</FieldLabel>
                 <Input
@@ -351,6 +352,7 @@ export default function AccEmployeeInfo() {
                   className={isEditMode ? "bg-muted cursor-not-allowed" : ""}
                 />
               </Field>
+              */}
               <Field>
                 <FieldLabel>
                   Employee Name <span className="text-destructive">*</span>

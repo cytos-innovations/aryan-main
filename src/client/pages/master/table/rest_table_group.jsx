@@ -329,8 +329,9 @@ export default function TableGroup() {
           </DialogHeader>
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
-              {/* Row 1 — Code | Group Name */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Row 1 — Group Name */}
+              <div className="grid grid-cols-1 gap-3">
+                {/* Code field hidden — not shown in form
                 <Field>
                   <FieldLabel>Code</FieldLabel>
                   <Input type="number" min="1" value={form.code}
@@ -339,6 +340,7 @@ export default function TableGroup() {
                     readOnly={dialog.mode === "edit"}
                     className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""} />
                 </Field>
+                */}
                 <Field className="col-span-2">
                   <FieldLabel>Group Name <span className="text-destructive">*</span></FieldLabel>
                   <Input value={form.name} maxLength={50} autoFocus

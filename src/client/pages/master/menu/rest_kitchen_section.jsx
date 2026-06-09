@@ -276,8 +276,9 @@ export default function KitchenSection() {
 
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
-              {/* Row 1 — Code (narrow) | Section Name (wide) */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Row 1 — Section Name */}
+              <div className="grid grid-cols-1 gap-3">
+                {/* Code field hidden — not shown in form
                 <Field>
                   <FieldLabel>Code</FieldLabel>
                   <Input
@@ -290,6 +291,7 @@ export default function KitchenSection() {
                     className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""}
                   />
                 </Field>
+                */}
                 <Field className="col-span-2">
                   <FieldLabel>
                     Section Name <span className="text-destructive">*</span>

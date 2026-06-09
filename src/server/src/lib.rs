@@ -4,7 +4,7 @@ mod transaction;
 mod bill;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool, Executor};
 use std::{fs, sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -307,9 +307,23 @@ pub(crate) async fn acquire_pool(
         return Ok(pool.clone());
     }
     let config = get_stored_config(app)?;
+
+    // Detect the local system timezone name (IANA format, e.g. "Asia/Kolkata").
+    // Falls back to "UTC" if detection fails so the app never refuses to start.
+    let tz_name = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(10))
+        .after_connect(move |conn, _meta| {
+            let tz = tz_name.clone();
+            Box::pin(async move {
+                conn.execute(
+                    sqlx::query(&format!("SET TIME ZONE '{}'", tz))
+                ).await?;
+                Ok(())
+            })
+        })
         .connect(&config.to_url())
         .await
         .map_err(|e| format!("Database connection failed: {e}"))?;

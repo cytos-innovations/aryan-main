@@ -25,3 +25,4 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "c
 tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
+iana-time-zone = "0.1"

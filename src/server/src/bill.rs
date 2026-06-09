@@ -2038,6 +2038,7 @@ pub async fn settle_bill(
 
     // For a DUE settlement, ensure the customer exists on record (find/update/
     // create by mobile) and attach them to the session so the due is tracked.
+    let is_nc_method  = payment_type.eq_ignore_ascii_case("NC");
     let is_due_method = payment_type.eq_ignore_ascii_case("DUE");
     let effective_customer_id = if is_due_method {
         let cid = resolve_due_customer(&pool, customer_id, &customer_name, &customer_mobile, &customer_address).await?;
@@ -2057,6 +2058,11 @@ pub async fn settle_bill(
             .collect::<Vec<_>>()
             .join(", ");
         format!("Split payment — {} (total ₹{:.2})", modes, payment_amount)
+    } else if is_nc_method {
+        match reference_no.as_deref().filter(|r| !r.trim().is_empty()) {
+            Some(r) => format!("No Charge — bill ₹{:.2} written off ({})", net_amount, r),
+            None    => format!("No Charge — bill ₹{:.2} written off", net_amount),
+        }
     } else if is_due_method {
         format!("Due — ₹{:.2} paid now", payment_amount)
     } else {
@@ -2095,17 +2101,23 @@ pub async fn settle_bill(
     }
 
     // Determine settlement type
+    // NC: payment_amount = 0, write_off_amount = net_amount (frontend sets this)
     let total_paid   = round2(payment_amount);
-    let pending      = round2((net_amount - total_paid - write_off_amount).max(0.0));
-    let is_due       = is_due_method || pending > 0.5;
-    let settlement_type = if write_off_amount > 0.0 { "WRITE_OFF" }
-                          else if is_due            { "DUE" }
-                          else                      { "FULL" };
+    let pending      = if is_nc_method { 0.0 } else { round2((net_amount - total_paid - write_off_amount).max(0.0)) };
+    let is_due       = !is_nc_method && (is_due_method || pending > 0.5);
+    let settlement_type = if is_nc_method               { "NC" }
+                          else if write_off_amount > 0.0 { "WRITE_OFF" }
+                          else if is_due                 { "DUE" }
+                          else                           { "FULL" };
 
+    let nc_remark_text = reference_no.as_deref().filter(|r| !r.trim().is_empty())
+        .map(|r| format!(" — {}", r))
+        .unwrap_or_default();
     let settlement_remark = match settlement_type {
-        "WRITE_OFF" => format!("Write-off ₹{:.2} · paid ₹{:.2} of ₹{:.2}", write_off_amount, total_paid, net_amount),
-        "DUE"       => format!("Due ₹{:.2} pending · paid ₹{:.2} of ₹{:.2} via {}", pending, total_paid, net_amount, payment_type),
-        _           => format!("Settled in full — ₹{:.2} via {}", total_paid, payment_type),
+        "NC"         => format!("No Charge — ₹{:.2} written off{}", net_amount, nc_remark_text),
+        "WRITE_OFF"  => format!("Write-off ₹{:.2} · paid ₹{:.2} of ₹{:.2}", write_off_amount, total_paid, net_amount),
+        "DUE"        => format!("Due ₹{:.2} pending · paid ₹{:.2} of ₹{:.2} via {}", pending, total_paid, net_amount, payment_type),
+        _            => format!("Settled in full — ₹{:.2} via {}", total_paid, payment_type),
     };
 
     sqlx::query(

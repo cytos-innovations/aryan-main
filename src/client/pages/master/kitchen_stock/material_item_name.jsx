@@ -304,8 +304,9 @@ export default function MaterialItemName() {
           </DialogHeader>
 
           <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
-            {/* Code + Name */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Name */}
+            <div className="grid grid-cols-1 gap-3">
+              {/* Code field hidden — not shown in form
               <Field>
                 <FieldLabel>Code {isEditMode && <span className="text-destructive">*</span>}</FieldLabel>
                 <Input type="number" value={form.code}
@@ -314,6 +315,7 @@ export default function MaterialItemName() {
                   readOnly={isEditMode}
                   className={isEditMode ? "bg-muted cursor-not-allowed" : ""} />
               </Field>
+              */}
               <Field>
                 <FieldLabel>Item Name <span className="text-destructive">*</span></FieldLabel>
                 <Input value={form.name} onChange={(e) => setF("name", e.target.value)}

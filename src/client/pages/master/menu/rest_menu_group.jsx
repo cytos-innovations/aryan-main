@@ -337,8 +337,9 @@ export default function MenuGroup() {
 
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
-              {/* Row 1 — Code | Group Name */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Row 1 — Group Name */}
+              <div className="grid grid-cols-1 gap-3">
+                {/* Code field hidden — not shown in form
                 <Field>
                   <FieldLabel>Code</FieldLabel>
                   <Input
@@ -351,6 +352,7 @@ export default function MenuGroup() {
                     className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""}
                   />
                 </Field>
+                */}
                 <Field>
                   <FieldLabel>
                     Group Name <span className="text-destructive">*</span>

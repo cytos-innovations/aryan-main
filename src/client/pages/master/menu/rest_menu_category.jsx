@@ -554,8 +554,9 @@ export default function MenuCategory() {
           </DialogHeader>
 
           <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
-            {/* ── Row 1: Code | Category Name ─────────────────── */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* ── Row 1: Category Name ─────────────────── */}
+            <div className="grid grid-cols-1 gap-3">
+              {/* Code field hidden — not shown in form
               <Field>
                 <FieldLabel>
                   Code
@@ -574,6 +575,7 @@ export default function MenuCategory() {
                   className={isEditMode ? "bg-muted cursor-not-allowed" : ""}
                 />
               </Field>
+              */}
               <Field>
                 <FieldLabel>
                   Category Name{" "}

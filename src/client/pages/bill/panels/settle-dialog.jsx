@@ -3,6 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { toast } from "sonner";
 import {
   CashIcon,
+  Cash01Icon,
   Add01Icon,
   Cancel01Icon,
   MinusPlusIcon,
@@ -10,6 +11,18 @@ import {
   Location01Icon,
   Clock01Icon,
   AlertCircleIcon,
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  StickyNote01Icon,
+  PercentIcon,
+  CreditCardIcon,
+  BankIcon,
+  QrCode01Icon,
+  Wallet01Icon,
+  Payment01Icon,
+  BarcodeScanIcon,
+  SmartphoneWifiIcon,
+  GiftIcon,
 } from "@hugeicons/core-free-icons";
 
 import {
@@ -35,11 +48,29 @@ import { Separator } from "@/components/ui/separator";
 import { usePaymentMethods } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE } from "../constants/billing";
-import { fmtAmount } from "../utils/billing-calc";
+import { fmtAmount, calcTaxBreakdown } from "../utils/billing-calc";
 
 // Sentinels for the permanent (hard-coded) options in the method dropdown
 const SPLIT_VALUE = "__SPLIT__";
 const DUE_VALUE   = "__DUE__";
+const NC_VALUE    = "__NC__";    // No Charge / Complimentary
+
+// Returns the best-match icon for a payment method name. Never throws.
+function getPaymentIcon(name = "") {
+  const n = (name ?? "").toLowerCase();
+  if (/upi|gpay|phonepe|paytm|bhim/.test(n))         return QrCode01Icon;
+  if (/scan|qr/.test(n))                              return BarcodeScanIcon;
+  if (/credit/.test(n))                               return CreditCardIcon;
+  if (/debit/.test(n))                                return CreditCardIcon;
+  if (/card/.test(n))                                 return CreditCardIcon;
+  if (/net.?bank|neft|rtgs|imps|online/.test(n))     return BankIcon;
+  if (/bank/.test(n))                                 return BankIcon;
+  if (/cheque|check/.test(n))                         return Payment01Icon;
+  if (/mobile|phone|smart/.test(n))                  return SmartphoneWifiIcon;
+  if (/wallet/.test(n))                               return Wallet01Icon;
+  if (/cash/.test(n))                                 return Cash01Icon;
+  return Wallet01Icon; // generic fallback for unknown methods
+}
 
 export default function SettleDialog({ open, onOpenChange, session, netAmount, billTotals, items, menu, sessionDisc, onSettle, isSettling }) {
   const methodsQuery = usePaymentMethods();
@@ -60,6 +91,29 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [duePaidNow,      setDuePaidNow]      = useState("");  // partial due: paid now
   const [priorDue,        setPriorDue]        = useState(null); // customer's existing dues
 
+  // Bill summary expand state
+  const [catExpanded, setCatExpanded] = useState(false);
+  const [taxExpanded, setTaxExpanded] = useState(false);
+
+  // Category subtotals from items
+  const categoryTotals = useMemo(() => {
+    const map = new Map();
+    for (const item of items ?? []) {
+      if (item.item_status !== "ACTIVE") continue;
+      const catId   = item.category_id ?? "__none__";
+      const catName = item.category_name ?? "Other";
+      const amt     = Number(item.final_amount) || 0;
+      if (!map.has(catId)) map.set(catId, { name: catName, total: 0 });
+      map.get(catId).total += amt;
+    }
+    return Array.from(map.values()).map((c) => ({ ...c, total: Math.round(c.total * 100) / 100 }));
+  }, [items]);
+
+  const taxBreakdown = useMemo(() => calcTaxBreakdown(items ?? []), [items]);
+
+  // NC remark state
+  const [ncRemark, setNcRemark] = useState("");
+
   // Split builder state
   const [splitEntries, setSplitEntries] = useState([]);
   const [splitMethod,  setSplitMethod]  = useState("");
@@ -70,6 +124,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
 
   const isSplit = method === SPLIT_VALUE;
   const isDue   = method === DUE_VALUE;
+  const isNc    = method === NC_VALUE;
   // Name + mobile required for delivery/takeaway and for Due; address too for Due.
   const mustCapture = requiresCustomer || isDue;
   const mustAddress = needsAddress || isDue;
@@ -90,6 +145,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
     setCustomerAddress(session?.customer_address ?? "");
     setAmount("");
     setDuePaidNow("");
+    setNcRemark("");
     setPriorDue(null);
     setSplitEntries([]);
     setSplitAmount("");
@@ -180,6 +236,10 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
     } else if (isDue) {
       // Due — customer pays `duePaidNum` now (may be 0) and the rest later.
       entries = [{ payment_mode: "DUE", amount: duePaidNum, reference_no: null }];
+    } else if (isNc) {
+      // No Charge — amount is 0, entire bill written off, remark stored as reference.
+      entries  = [{ payment_mode: "NC", amount: 0, reference_no: ncRemark.trim() || null }];
+      writeOff = netAmount;
     } else {
       if (!method) { toast.error("Select a payment method"); return; }
       // Blank amount → settle the full bill amount
@@ -313,7 +373,12 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
               </SelectTrigger>
               <SelectContent>
                 {methods.map((m) => (
-                  <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                  <SelectItem key={m.id} value={m.name}>
+                    <span className="flex items-center gap-1.5">
+                      <HugeiconsIcon icon={getPaymentIcon(m.name)} size={13} strokeWidth={2} />
+                      {m.name}
+                    </span>
+                  </SelectItem>
                 ))}
                 {/* Permanent hard-coded Due option — customer pays later */}
                 <SelectItem value={DUE_VALUE}>
@@ -329,25 +394,33 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                     Split Payment
                   </span>
                 </SelectItem>
+                {/* Permanent hard-coded No Charge option */}
+                <SelectItem value={NC_VALUE}>
+                  <span className="flex items-center gap-1.5">
+                    <HugeiconsIcon icon={GiftIcon} size={13} strokeWidth={2} />
+                    No Charge (Complimentary)
+                  </span>
+                </SelectItem>
               </SelectContent>
             </Select>
           </Field>
 
-          {/* ── Discount breakdown ── */}
-          {sessionDisc && (() => {
-            // New shape: per-category + bill disc
-            const catEntries = sessionDisc.catDiscAmts
+          {/* ── Bill summary: category subtotals, tax, discount breakdown ── */}
+          {(() => {
+            // Discount shape detection
+            const catEntries = sessionDisc?.catDiscAmts
               ? Object.entries(sessionDisc.catDiscAmts).filter(([, a]) => Number(a) > 0)
               : [];
-            const hasNew = catEntries.length > 0 || sessionDisc.billDiscAmt > 0;
-            // Legacy shape
+            const hasNew = catEntries.length > 0 || (sessionDisc?.billDiscAmt > 0);
             const hasLegacy = !hasNew && (
-              sessionDisc.discAmt > 0 || sessionDisc.foodDiscAmt > 0 ||
-              sessionDisc.liquorDiscAmt > 0
+              (sessionDisc?.discAmt > 0) || (sessionDisc?.foodDiscAmt > 0) ||
+              (sessionDisc?.liquorDiscAmt > 0)
             );
-            const hasAny = hasNew || hasLegacy || sessionDisc.sCharge > 0 ||
-              sessionDisc.misc > 0 || sessionDisc.miscMinus > 0;
-            if (!hasAny) return null;
+            const hasDiscount = hasNew || hasLegacy || (sessionDisc?.sCharge > 0) ||
+              (sessionDisc?.misc > 0) || (sessionDisc?.miscMinus > 0);
+            const hasTax = taxBreakdown.some((t) => t.tax_amount > 0);
+            // Show the block whenever there are multiple categories, tax, or any discount/charge
+            if (!hasDiscount && !hasTax && categoryTotals.length <= 1) return null;
 
             // Build catId → name from menu master first, then from order items
             const catNameMap = {};
@@ -362,16 +435,81 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
 
             return (
               <div className="rounded-lg border bg-muted/20 px-3 py-2.5 space-y-1">
-                <div className="flex justify-between text-[11px] text-muted-foreground">
-                  <span>Bill Total</span>
-                  <span className="tabular-nums font-medium text-foreground">
-                    ₹{fmtAmount(billTotals?.finalAmount ?? netAmount)}
-                  </span>
-                </div>
 
-                {/* New shape: per-category rows */}
+                {/* Category subtotals — expandable when 2+ categories */}
+                {categoryTotals.length > 1 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setCatExpanded((p) => !p)}
+                      className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <span className="flex items-center gap-1">
+                        <HugeiconsIcon icon={StickyNote01Icon} size={10} strokeWidth={2} />
+                        Bill Total
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="tabular-nums font-medium text-foreground">
+                          ₹{fmtAmount(billTotals?.finalAmount ?? netAmount)}
+                        </span>
+                        <HugeiconsIcon icon={catExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
+                      </div>
+                    </button>
+                    {catExpanded && (
+                      <div className="pl-2 space-y-0.5">
+                        {categoryTotals.map((c) => (
+                          <div key={c.name} className="flex justify-between text-[10px] text-muted-foreground">
+                            <span>{c.name}</span>
+                            <span className="tabular-nums">₹{fmtAmount(c.total)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex justify-between text-[11px] text-muted-foreground">
+                    <span>Bill Total</span>
+                    <span className="tabular-nums font-medium text-foreground">
+                      ₹{fmtAmount(billTotals?.finalAmount ?? netAmount)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Tax breakdown — expandable */}
+                {taxBreakdown.length > 0 && taxBreakdown.some((t) => t.tax_amount > 0) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setTaxExpanded((p) => !p)}
+                      className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <span className="flex items-center gap-1">
+                        <HugeiconsIcon icon={PercentIcon} size={10} strokeWidth={2} />
+                        Tax
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="tabular-nums font-medium text-foreground">
+                          ₹{fmtAmount(taxBreakdown.reduce((s, t) => s + t.tax_amount, 0))}
+                        </span>
+                        <HugeiconsIcon icon={taxExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
+                      </div>
+                    </button>
+                    {taxExpanded && (
+                      <div className="pl-2 space-y-0.5">
+                        {taxBreakdown.map((t) => (
+                          <div key={t.tax_name} className="flex justify-between text-[10px] text-muted-foreground">
+                            <span>{t.tax_name}{t.tax_percentage > 0 ? ` (${t.tax_percentage}%)` : ""}</span>
+                            <span className="tabular-nums">₹{fmtAmount(t.tax_amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* New shape: per-category discount rows */}
                 {catEntries.map(([catId, amt]) => {
-                  const pct  = sessionDisc.catRows?.[catId]?.value;
+                  const pct  = sessionDisc?.catRows?.[catId]?.value;
                   const name = catNameMap[catId] ?? `Category ${catId}`;
                   return (
                     <div key={catId} className="flex justify-between text-[11px] text-muted-foreground">
@@ -384,7 +522,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                 })}
 
                 {/* Bill-level discount */}
-                {sessionDisc.billDiscAmt > 0 && (
+                {sessionDisc?.billDiscAmt > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}</span>
                     <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
@@ -394,19 +532,19 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                 )}
 
                 {/* Legacy shape fallback */}
-                {hasLegacy && sessionDisc.foodDiscAmt > 0 && (
+                {hasLegacy && sessionDisc?.foodDiscAmt > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Food Discount ({sessionDisc.foodPct}%)</span>
                     <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
                   </div>
                 )}
-                {hasLegacy && sessionDisc.liquorDiscAmt > 0 && (
+                {hasLegacy && sessionDisc?.liquorDiscAmt > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Liquor Discount ({sessionDisc.liquorPct}%)</span>
                     <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
                   </div>
                 )}
-                {hasLegacy && sessionDisc.discAmt > 0 && (
+                {hasLegacy && sessionDisc?.discAmt > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Discount</span>
                     <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.discAmt)}</span>
@@ -414,19 +552,19 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                 )}
 
                 {/* Misc / Service Charge */}
-                {sessionDisc.miscMinus > 0 && (
+                {sessionDisc?.miscMinus > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Misc Deduct</span>
                     <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.miscMinus)}</span>
                   </div>
                 )}
-                {sessionDisc.misc > 0 && (
+                {sessionDisc?.misc > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Misc Add</span>
                     <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.misc)}</span>
                   </div>
                 )}
-                {sessionDisc.sCharge > 0 && (
+                {sessionDisc?.sCharge > 0 && (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
                     <span>Service Charge</span>
                     <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.sCharge)}</span>
@@ -474,8 +612,33 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
             </Field>
           )}
 
+          {/* ── No Charge (Complimentary) ── */}
+          {isNc && (
+            <div className="rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50/60 dark:bg-violet-950/20 px-3 py-3 space-y-2.5">
+              <div className="flex items-start gap-2">
+                <HugeiconsIcon icon={GiftIcon} size={14} strokeWidth={2} className="text-violet-600 dark:text-violet-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-violet-700 dark:text-violet-300 leading-snug">
+                  This bill of{" "}
+                  <span className="font-semibold tabular-nums">₹{fmtAmount(netAmount)}</span>{" "}
+                  will be marked as <span className="font-semibold">No Charge</span>. Customer pays ₹0 — the full amount is written off.
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-1">Reason / Remark <span className="font-normal opacity-60">(optional)</span></p>
+                <Input
+                  value={ncRemark}
+                  onChange={(e) => setNcRemark(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSettle(); } }}
+                  placeholder="e.g. Staff meal, Owner guest, Complaint compensation…"
+                  maxLength={200}
+                  className="text-sm"
+                />
+              </div>
+            </div>
+          )}
+
           {/* ── Single payment amount ── */}
-          {!isSplit && !isDue && (
+          {!isSplit && !isDue && !isNc && (
             <Field>
               <FieldLabel>
                 Enter Amount{" "}
@@ -521,7 +684,12 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   </SelectTrigger>
                   <SelectContent>
                     {methods.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>
+                      <SelectItem key={m.id} value={m.name}>
+                        <span className="flex items-center gap-1.5">
+                          <HugeiconsIcon icon={getPaymentIcon(m.name)} size={13} strokeWidth={2} />
+                          {m.name}
+                        </span>
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -584,11 +752,11 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
           </Button>
           <Button
             type="button"
-            className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+            className={`flex-1 text-white border-0 ${isNc ? "bg-violet-600 hover:bg-violet-700" : "bg-emerald-600 hover:bg-emerald-700"}`}
             onClick={handleSettle}
             disabled={isSettling}
           >
-            {isSettling ? "Settling…" : (isDue ? "Save as Due" : "Settle")}
+            {isSettling ? "Settling…" : isNc ? "Mark No Charge" : isDue ? "Save as Due" : "Settle"}
             <span className="ml-1 text-[9px] font-mono opacity-70">F11</span>
           </Button>
         </DialogFooter>

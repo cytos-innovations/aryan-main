@@ -343,8 +343,9 @@ export default function MaterialItemGroup() {
           </DialogHeader>
 
           <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
-            {/* Row 1: Code + Name */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Row 1: Name */}
+            <div className="grid grid-cols-1 gap-3">
+              {/* Code field hidden — not shown in form
               <Field>
                 <FieldLabel>Code {isEditMode && <span className="text-destructive">*</span>}</FieldLabel>
                 <Input type="number" value={form.code}
@@ -353,6 +354,7 @@ export default function MaterialItemGroup() {
                   readOnly={isEditMode}
                   className={isEditMode ? "bg-muted cursor-not-allowed" : ""} />
               </Field>
+              */}
               <Field>
                 <FieldLabel>Item Group Name <span className="text-destructive">*</span></FieldLabel>
                 <Input value={form.name} onChange={(e) => setF("name", e.target.value)}

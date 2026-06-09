@@ -176,6 +176,7 @@ export default function FoodType() {
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <div className="flex flex-col gap-3">
+                {/* Code field hidden — not shown in form
                 <Field>
                   <FieldLabel>Code</FieldLabel>
                   <Input
@@ -188,6 +189,7 @@ export default function FoodType() {
                     className={dialog.mode === "edit" ? "bg-muted" : ""}
                   />
                 </Field>
+                */}
                 <Field>
                   <FieldLabel>Food Type <span className="text-destructive">*</span></FieldLabel>
                   <Input
