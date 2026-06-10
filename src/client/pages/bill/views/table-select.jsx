@@ -116,7 +116,6 @@ const STATUS_LABEL = {
   AVAILABLE:        { text: "Available",     cls: "text-muted-foreground" },
   OCCUPIED:         { text: "KOT Sent",      cls: "text-amber-700 dark:text-amber-400" },
   BILL_PRINTED:     { text: "Bill Out",      cls: "text-emerald-700 dark:text-emerald-400" },
-  RESERVED:         { text: "Reserved",      cls: "text-blue-700 dark:text-blue-400" },
   NEAR_RESERVATION: { text: "Reserved Soon", cls: "text-blue-700 dark:text-blue-400" },
   ON_HOLD:          { text: "On Hold",       cls: "text-purple-700 dark:text-purple-400" },
 };
@@ -155,7 +154,6 @@ function TableCard({ table, onClick, now, isOnHold }) {
   const status      = isOnHold ? "ON_HOLD" : getTableStatus(table, now);
   const phase       = getReservationPhase(table, now);
   const isOccupied  = status === "OCCUPIED" || status === "BILL_PRINTED";
-  const isReserved  = status === "RESERVED";           // permanently blocked (no timing)
   const isNear      = status === "NEAR_RESERVATION";   // near-reservation blue state
   const elapsed     = calcElapsed(table.occupied_since, now);
   const orderPill   = isOccupied && table.order_type ? ORDER_TYPE_PILL[table.order_type] : null;
@@ -171,13 +169,11 @@ function TableCard({ table, onClick, now, isOnHold }) {
     <button
       type="button"
       onClick={() => onClick(table, status, phase)}
-      disabled={isReserved}
       className={[
         "relative flex flex-col min-h-27 rounded-xl p-3.5 text-left select-none transition-all duration-150",
-        "ring-1 shadow-xs overflow-hidden",
+        "ring-1 shadow-xs overflow-hidden cursor-pointer active:scale-[0.98]",
         STATUS_RING[status],
         STATUS_BG[status],
-        isReserved ? "cursor-not-allowed opacity-70" : "cursor-pointer active:scale-[0.98]",
       ].join(" ")}
     >
       {/* Top accent strip */}
@@ -538,16 +534,15 @@ export default function TableSelectView({ onOpenReprint }) {
   );
 
   const stats = useMemo(() => {
-    let available = 0, occupied = 0, billPrinted = 0, reserved = 0, onHold = 0;
+    let available = 0, occupied = 0, billPrinted = 0, onHold = 0;
     for (const t of tables) {
       const s = heldTableIds.has(t.id) ? "ON_HOLD" : getTableStatus(t, now);
-      if (s === "AVAILABLE" || s === "NEAR_RESERVATION") available++;
+      if (s === "AVAILABLE" || s === "NEAR_RESERVATION" || s === "RESERVED") available++;
       else if (s === "OCCUPIED")     occupied++;
       else if (s === "BILL_PRINTED") billPrinted++;
-      else if (s === "RESERVED")     reserved++;
       else if (s === "ON_HOLD")      onHold++;
     }
-    return { available, occupied, billPrinted, reserved, onHold };
+    return { available, occupied, billPrinted, onHold };
   }, [tables, now, heldTableIds]);
 
   // Auto-hold current draft when navigating to a different table
@@ -559,12 +554,6 @@ export default function TableSelectView({ onOpenReprint }) {
   // Session is only created when the user sends a KOT.
   const handleTableClick = useCallback(
     (table, status, phase) => {
-      // Permanently blocked (no timing data)
-      if (status === "RESERVED") {
-        toast.info("This table is reserved.");
-        return;
-      }
-
       // NEAR_RESERVATION: two sub-cases based on phase
       if (status === "NEAR_RESERVATION") {
         if (phase === "NEAR") {
@@ -707,7 +696,6 @@ export default function TableSelectView({ onOpenReprint }) {
           { dot: "bg-emerald-500",                  label: "Bill Out",     count: stats.billPrinted,                              countCls: "text-emerald-600 dark:text-emerald-400"       },
           { dot: "bg-purple-500",                   label: "On Hold",      count: stats.onHold > 0 ? stats.onHold : null,         countCls: "text-purple-600 dark:text-purple-400"         },
           { dot: "bg-blue-500",                     label: "Reserved Soon",count: null,                                           countCls: ""                                             },
-          { dot: "bg-blue-400 opacity-50",          label: "Reserved",     count: stats.reserved > 0 ? stats.reserved : null,    countCls: "text-blue-600 dark:text-blue-400"             },
         ].map(({ dot, label, count, countCls }) => (
           <div key={label} className="flex items-center gap-1.5 shrink-0">
             <span className={`inline-block h-2.5 w-2.5 rounded-sm shrink-0 ${dot}`} />

@@ -39,13 +39,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -769,19 +762,12 @@ export default function LodgeCustomerInfo() {
 
               <Field className="col-span-1">
                 <FieldLabel>Prefix</FieldLabel>
-                <Select value={form.prefix} onValueChange={(v) => setF("prefix", v)}>
-                  <SelectTrigger onKeyDown={enterNav.select}>
-                    <SelectValue placeholder="Select…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">None</SelectItem>
-                    {PREFIXES.map((p) => (
-                      <SelectItem key={p} value={p}>
-                        {p}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  options={[{ value: "__none__", label: "None" }, ...PREFIXES.map((p) => ({ value: p, label: p }))]}
+                  value={form.prefix}
+                  onSelect={(v) => setF("prefix", v)}
+                  placeholder="Select…"
+                />
               </Field>
 
               <Field className="col-span-1">
@@ -800,21 +786,12 @@ export default function LodgeCustomerInfo() {
                 <FieldLabel>
                   Market Segment <span className="text-destructive">*</span>
                 </FieldLabel>
-                <Select
+                <SearchableSelect
+                  options={(segmentsQuery.data ?? []).map((s) => ({ value: String(s.id), label: s.name }))}
                   value={form.ledger_id}
-                  onValueChange={(v) => setF("ledger_id", v)}
-                >
-                  <SelectTrigger onKeyDown={enterNav.select} data-required="true">
-                    <SelectValue placeholder="Select segment…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(segmentsQuery.data ?? []).map((s) => (
-                      <SelectItem key={s.id} value={String(s.id)}>
-                        {s.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onSelect={(v) => setF("ledger_id", v)}
+                  placeholder="Type to search segment…"
+                />
               </Field>
 
               <Field className="col-span-1">

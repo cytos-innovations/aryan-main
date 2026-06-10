@@ -34,13 +34,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -73,9 +66,122 @@ function getPaymentIcon(name = "") {
   return Wallet01Icon; // generic fallback for unknown methods
 }
 
+function SearchableSelect({ options, value, onSelect, placeholder = "Select…", inputRef, className = "" }) {
+  const [query, setQuery]   = useState("");
+  const [open, setOpen]     = useState(false);
+  const [active, setActive] = useState(0);
+  const containerRef        = useRef(null);
+  const listRef             = useRef(null);
+  const ownInputRef         = useRef(null);
+  const resolvedRef         = inputRef ?? ownInputRef;
+
+  const selected = options.find((o) => o.value === value) ?? null;
+  const displayText = open ? query : (selected?.label ?? "");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [query, options]);
+
+  useEffect(() => { setActive(0); }, [filtered.length]);
+
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const el = listRef.current.children[active];
+    el?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  useEffect(() => {
+    function onDown(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  function focusNext() {
+    const input = resolvedRef.current;
+    if (!input) return;
+    const focusable = Array.from(
+      document.querySelectorAll(
+        'input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly]), button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.closest("[data-radix-popper-content-wrapper]"));
+    const idx = focusable.indexOf(input);
+    if (idx !== -1 && focusable[idx + 1]) focusable[idx + 1].focus();
+  }
+
+  function pick(opt) {
+    onSelect(opt.value);
+    setOpen(false);
+    setQuery("");
+    setTimeout(focusNext, 0);
+  }
+
+  function onKeyDown(e) {
+    if (!open) {
+      if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); setQuery(""); setOpen(true); setActive(0); }
+      return;
+    }
+    if (e.key === "ArrowDown")    { e.preventDefault(); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter")   { e.preventDefault(); if (filtered[active]) pick(filtered[active]); }
+    else if (e.key === "Escape")  { setOpen(false); setQuery(""); }
+  }
+
+  return (
+    <div ref={containerRef} className={`relative ${className}`}>
+      <input
+        ref={resolvedRef}
+        type="text"
+        value={displayText}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(""); setOpen(true); setActive(0); }}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-muted-foreground"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
+          <div ref={listRef} className="max-h-52 overflow-y-auto">
+            {filtered.map((opt, i) => (
+              <div
+                key={opt.value}
+                onMouseDown={(e) => { e.preventDefault(); pick(opt); }}
+                onMouseEnter={() => setActive(i)}
+                className={[
+                  "flex items-center gap-2 cursor-pointer px-3 py-2 text-sm",
+                  i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                ].join(" ")}
+              >
+                {opt.icon && <HugeiconsIcon icon={opt.icon} size={13} strokeWidth={2} className="shrink-0 text-muted-foreground" />}
+                {opt.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettleDialog({ open, onOpenChange, session, netAmount, billTotals, items, menu, sessionDisc, onSettle, isSettling }) {
   const methodsQuery = usePaymentMethods();
   const methods      = methodsQuery.data ?? [];
+
+  const allMethodOptions = useMemo(() => [
+    ...methods.map((m) => ({ value: m.name, label: m.name, icon: getPaymentIcon(m.name) })),
+    { value: DUE_VALUE,   label: "Due (Pay Later)",        icon: Clock01Icon      },
+    { value: SPLIT_VALUE, label: "Split Payment",          icon: MinusPlusIcon    },
+    { value: NC_VALUE,    label: "No Charge (Complimentary)", icon: GiftIcon      },
+  ], [methods]);
+
+  const splitMethodOptions = useMemo(() =>
+    methods.map((m) => ({ value: m.name, label: m.name, icon: getPaymentIcon(m.name) })),
+    [methods],
+  );
 
   // Delivery / takeaway detection — drives customer requirement
   const isDelivery = session?.order_type === ORDER_TYPE.DELIVERY || !!session?.is_home_delivery;
@@ -369,42 +475,13 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
           {/* ── Payment method ── */}
           <Field>
             <FieldLabel>Payment Method</FieldLabel>
-            <Select value={method} onValueChange={setMethod}>
-              <SelectTrigger ref={methodRef} className="w-full">
-                <SelectValue placeholder={methodsQuery.isLoading ? "Loading…" : "Select method"} />
-              </SelectTrigger>
-              <SelectContent>
-                {methods.map((m) => (
-                  <SelectItem key={m.id} value={m.name}>
-                    <span className="flex items-center gap-1.5">
-                      <HugeiconsIcon icon={getPaymentIcon(m.name)} size={13} strokeWidth={2} />
-                      {m.name}
-                    </span>
-                  </SelectItem>
-                ))}
-                {/* Permanent hard-coded Due option — customer pays later */}
-                <SelectItem value={DUE_VALUE}>
-                  <span className="flex items-center gap-1.5">
-                    <HugeiconsIcon icon={Clock01Icon} size={13} strokeWidth={2} />
-                    Due (Pay Later)
-                  </span>
-                </SelectItem>
-                {/* Permanent hard-coded Split option */}
-                <SelectItem value={SPLIT_VALUE}>
-                  <span className="flex items-center gap-1.5">
-                    <HugeiconsIcon icon={MinusPlusIcon} size={13} strokeWidth={2} />
-                    Split Payment
-                  </span>
-                </SelectItem>
-                {/* Permanent hard-coded No Charge option */}
-                <SelectItem value={NC_VALUE}>
-                  <span className="flex items-center gap-1.5">
-                    <HugeiconsIcon icon={GiftIcon} size={13} strokeWidth={2} />
-                    No Charge (Complimentary)
-                  </span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            <SearchableSelect
+              inputRef={methodRef}
+              options={allMethodOptions}
+              value={method}
+              onSelect={setMethod}
+              placeholder={methodsQuery.isLoading ? "Loading…" : "Type or select method…"}
+            />
           </Field>
 
           {/* ── Bill summary: category subtotals, tax, discount breakdown ── */}
@@ -701,21 +778,13 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
             <div className="space-y-2.5">
               {/* Add row */}
               <div className="flex gap-2">
-                <Select value={splitMethod} onValueChange={setSplitMethod}>
-                  <SelectTrigger className="w-32 shrink-0">
-                    <SelectValue placeholder="Method" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {methods.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>
-                        <span className="flex items-center gap-1.5">
-                          <HugeiconsIcon icon={getPaymentIcon(m.name)} size={13} strokeWidth={2} />
-                          {m.name}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  options={splitMethodOptions}
+                  value={splitMethod}
+                  onSelect={setSplitMethod}
+                  placeholder="Method…"
+                  className="w-36 shrink-0"
+                />
                 <div className="relative flex-1">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
                   <Input

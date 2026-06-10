@@ -102,6 +102,105 @@ function IngredientInput({ value, onChange, placeholder }) {
   );
 }
 
+function SearchableSelect({ options, value, onSelect, placeholder = "Select…", className = "" }) {
+  const [query, setQuery]   = useState("");
+  const [open, setOpen]     = useState(false);
+  const [active, setActive] = useState(0);
+  const containerRef        = useRef(null);
+  const listRef             = useRef(null);
+  const inputRef            = useRef(null);
+
+  const selected = options.find((o) => o.value === value) ?? null;
+  const displayText = open ? query : (selected?.label ?? "");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [query, options]);
+
+  useEffect(() => { setActive(0); }, [filtered.length]);
+
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const el = listRef.current.children[active];
+    el?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  useEffect(() => {
+    function onDown(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  function focusNext() {
+    const input = inputRef.current;
+    if (!input) return;
+    const focusable = Array.from(
+      document.querySelectorAll(
+        'input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly]), button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.closest("[data-radix-popper-content-wrapper]"));
+    const idx = focusable.indexOf(input);
+    if (idx !== -1 && focusable[idx + 1]) focusable[idx + 1].focus();
+  }
+
+  function pick(opt) {
+    onSelect(opt.value);
+    setOpen(false);
+    setQuery("");
+    setTimeout(focusNext, 0);
+  }
+
+  function onKeyDown(e) {
+    if (!open) {
+      if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); setQuery(""); setOpen(true); setActive(0); }
+      return;
+    }
+    if (e.key === "ArrowDown")    { e.preventDefault(); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter")   { e.preventDefault(); if (filtered[active]) pick(filtered[active]); }
+    else if (e.key === "Escape")  { setOpen(false); setQuery(""); }
+  }
+
+  return (
+    <div ref={containerRef} className={`relative ${className}`}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={displayText}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(""); setOpen(true); setActive(0); }}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-muted-foreground"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
+          <div ref={listRef} className="max-h-52 overflow-y-auto">
+            {filtered.map((opt, i) => (
+              <div
+                key={opt.value}
+                onMouseDown={(e) => { e.preventDefault(); pick(opt); }}
+                onMouseEnter={() => setActive(i)}
+                className={[
+                  "cursor-pointer px-3 py-2 text-sm",
+                  i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                ].join(" ")}
+              >
+                {opt.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MenuCardPage() {
   const enterNav = useEnterNav();
   const queryClient = useQueryClient();
@@ -589,19 +688,12 @@ export default function MenuCardPage() {
                   <FieldLabel>
                     Menu Group <span className="text-destructive">*</span>
                   </FieldLabel>
-                  <Select
+                  <SearchableSelect
+                    options={allGroups.map((g) => ({ value: String(g.id), label: g.name }))}
                     value={form.menu_group_id}
-                    onValueChange={(v) => { setF("menu_group_id", v); setRecipeRows([]); }}
-                  >
-                    <SelectTrigger className="w-full" data-required="true" onKeyDown={enterNav.select}>
-                      <SelectValue placeholder="Select a group…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allGroups.map((g) => (
-                        <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onSelect={(v) => { setF("menu_group_id", v); setRecipeRows([]); }}
+                    placeholder="Type to search group…"
+                  />
                 </Field>
                 <Field>
                   <FieldLabel>Category</FieldLabel>
@@ -620,39 +712,27 @@ export default function MenuCardPage() {
                   <FieldLabel>
                     Food Type <span className="text-destructive">*</span>
                   </FieldLabel>
-                  <Select
+                  <SearchableSelect
+                    options={allFoodTypes.map((t) => ({ value: String(t.id), label: t.name }))}
                     value={form.food_type_id}
-                    onValueChange={(v) => setF("food_type_id", v)}
-                  >
-                    <SelectTrigger className="w-full" data-required="true" onKeyDown={enterNav.select}>
-                      <SelectValue placeholder="Select a type…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allFoodTypes.map((t) => (
-                        <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onSelect={(v) => setF("food_type_id", v)}
+                    placeholder="Type to search type…"
+                  />
                 </Field>
                 <Field>
                   <FieldLabel>
                     Kitchen Section{" "}
                     <span className="text-muted-foreground font-normal">(optional)</span>
                   </FieldLabel>
-                  <Select
+                  <SearchableSelect
+                    options={[
+                      { value: "__none__", label: "— None —" },
+                      ...allKitchenSections.map((k) => ({ value: String(k.id), label: k.name })),
+                    ]}
                     value={form.kitchen_section_id}
-                    onValueChange={(v) => setF("kitchen_section_id", v)}
-                  >
-                    <SelectTrigger className="w-full" onKeyDown={enterNav.select}>
-                      <SelectValue placeholder="Select section…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">— None —</SelectItem>
-                      {allKitchenSections.map((k) => (
-                        <SelectItem key={k.id} value={String(k.id)}>{k.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onSelect={(v) => setF("kitchen_section_id", v)}
+                    placeholder="Type to search section…"
+                  />
                 </Field>
               </div>
 
@@ -786,19 +866,12 @@ export default function MenuCardPage() {
                           value={row.quantity}
                           onChange={(e) => updateRecipeRow(idx, "quantity", e.target.value)}
                         />
-                        <Select
+                        <SearchableSelect
+                          options={allUnits.map((u) => ({ value: String(u.id), label: u.name }))}
                           value={row.unit_id}
-                          onValueChange={(v) => updateRecipeRow(idx, "unit_id", v)}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select unit…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {allUnits.map((u) => (
-                              <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          onSelect={(v) => updateRecipeRow(idx, "unit_id", v)}
+                          placeholder="Unit…"
+                        />
                         <Button
                           type="button"
                           variant="ghost"
