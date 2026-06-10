@@ -62,9 +62,10 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
     return init;
   });
   const [reason, setReason] = useState("");
-  const inputRef = useRef(null);
+  const qtyRef    = useRef(null);
+  const reasonRef = useRef(null);
 
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 60); }, []);
+  useEffect(() => { setTimeout(() => qtyRef.current?.focus(), 60); }, []);
 
   const totalToRemove = Object.values(qtys).reduce((s, v) => s + v, 0);
   const totalQty = kotBatches.reduce((s, b) => s + Number(b.item.quantity), 0);
@@ -137,6 +138,7 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
                       <HugeiconsIcon icon={MinusSignIcon} size={9} strokeWidth={2.5} />
                     </button>
                     <input
+                      ref={b.item.id === kotBatches[0].item.id ? qtyRef : undefined}
                       type="number"
                       min="0"
                       max={maxQ}
@@ -145,6 +147,8 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
                         const v = parseInt(e.target.value, 10);
                         if (!isNaN(v)) setKotQty(b.item.id, v, maxQ);
                       }}
+                      onFocus={(e) => e.target.select()}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); reasonRef.current?.focus(); } }}
                       className="w-10 h-6 text-center text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-destructive px-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     />
                     <button
@@ -192,7 +196,7 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
 
           {/* Free-text */}
           <textarea
-            ref={inputRef}
+            ref={reasonRef}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             onKeyDown={handleKey}

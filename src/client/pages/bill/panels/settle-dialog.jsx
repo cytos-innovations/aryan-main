@@ -66,7 +66,7 @@ function getPaymentIcon(name = "") {
   return Wallet01Icon; // generic fallback for unknown methods
 }
 
-function SearchableSelect({ options, value, onSelect, placeholder = "Select…", inputRef, className = "" }) {
+function SearchableSelect({ options, value, onSelect, onSelectDone, placeholder = "Select…", inputRef, className = "" }) {
   const [query, setQuery]   = useState("");
   const [open, setOpen]     = useState(false);
   const [active, setActive] = useState(0);
@@ -116,7 +116,7 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
     onSelect(opt.value);
     setOpen(false);
     setQuery("");
-    setTimeout(focusNext, 0);
+    setTimeout(() => { if (onSelectDone) onSelectDone(); else focusNext(); }, 0);
   }
 
   function onKeyDown(e) {
@@ -229,6 +229,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
 
   const nameRef   = useRef(null);
   const methodRef = useRef(null);
+  const amountRef = useRef(null);
 
   const isSplit = method === SPLIT_VALUE;
   const isDue   = method === DUE_VALUE;
@@ -480,6 +481,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
               options={allMethodOptions}
               value={method}
               onSelect={setMethod}
+              onSelectDone={() => amountRef.current?.focus()}
               placeholder={methodsQuery.isLoading ? "Loading…" : "Type or select method…"}
             />
           </Field>
@@ -747,6 +749,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
               <div className="relative">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
                 <Input
+                  ref={amountRef}
                   type="number"
                   min="0"
                   step="0.01"
