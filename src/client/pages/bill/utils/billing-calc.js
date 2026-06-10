@@ -68,17 +68,27 @@ export function calcBillTotals(items = []) {
 export function calcTaxBreakdown(items = []) {
   const map = {};
   for (const item of items.filter((i) => i.item_status === "ACTIVE")) {
-    const key = item.tax_name ?? "No Tax";
-    if (!map[key]) {
-      map[key] = {
-        tax_name:       key,
-        tax_percentage: Number(item.tax_percentage) || 0,
-        taxable_amount: 0,
-        tax_amount:     0,
-      };
+    const taxable = Number(item.taxable_amount) || 0;
+    const details = Array.isArray(item.tax_details) && item.tax_details.length > 0
+      ? item.tax_details
+      : null;
+
+    if (details) {
+      // Each tax component applies independently to the full taxable amount
+      for (const d of details) {
+        const pct  = Number(d.tax_percentage) || 0;
+        const key  = d.tax_name ?? "No Tax";
+        const tamt = round2(taxable * pct / 100);
+        if (!map[key]) map[key] = { tax_name: key, tax_percentage: pct, taxable_amount: 0, tax_amount: 0 };
+        map[key].taxable_amount = round2(map[key].taxable_amount + taxable);
+        map[key].tax_amount     = round2(map[key].tax_amount     + tamt);
+      }
+    } else {
+      const key = item.tax_name ?? "No Tax";
+      if (!map[key]) map[key] = { tax_name: key, tax_percentage: Number(item.tax_percentage) || 0, taxable_amount: 0, tax_amount: 0 };
+      map[key].taxable_amount = round2(map[key].taxable_amount + taxable);
+      map[key].tax_amount     = round2(map[key].tax_amount     + (Number(item.tax_amount) || 0));
     }
-    map[key].taxable_amount = round2(map[key].taxable_amount + (Number(item.taxable_amount) || 0));
-    map[key].tax_amount     = round2(map[key].tax_amount     + (Number(item.tax_amount)     || 0));
   }
   return Object.values(map);
 }

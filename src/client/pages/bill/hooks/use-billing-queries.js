@@ -203,6 +203,7 @@ export function useAddOrderItem(sessionId) {
               discount_percent:    0,
               tax_name:            menuItem.tax_name ?? null,
               tax_percentage:      menuItem.tax_percentage ?? 0,
+              tax_details:         menuItem.tax_details ?? [],
               food_type:           menuItem.food_type ?? null,
               food_type_id:        menuItem.food_type_id ?? null,
               kitchen_section_id:  menuItem.kitchen_section_id ?? null,
@@ -372,6 +373,22 @@ export function useGenerateKot(sessionId) {
   });
 }
 
+export function useGenerateCheckKot(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ remarks } = {}) => billingService.generateKot(sessionId, remarks ?? "Check KOT"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.KOT_LIST(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
+      toast.success("Check KOT generated");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // Table shift / item transfer mutations
 // ─────────────────────────────────────────────────────────────
@@ -395,6 +412,22 @@ export function useTransferItems() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: billingService.transferOrderItems,
+    onSuccess: (_destSessionId, { sourceSessionId }) => {
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sourceSessionId) });
+      qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sourceSessionId) });
+      toast.success("Items moved");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+export function useTransferItemsWithQty() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.transferOrderItemsWithQty,
     onSuccess: (_destSessionId, { sourceSessionId }) => {
       qc.invalidateQueries({ queryKey: BQK.TABLES });
       qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });

@@ -15,6 +15,7 @@ import {
   ArrowUp01Icon,
   StickyNote01Icon,
   PercentIcon,
+  Discount01Icon,
   CreditCardIcon,
   BankIcon,
   QrCode01Icon,
@@ -92,8 +93,9 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [priorDue,        setPriorDue]        = useState(null); // customer's existing dues
 
   // Bill summary expand state
-  const [catExpanded, setCatExpanded] = useState(false);
-  const [taxExpanded, setTaxExpanded] = useState(false);
+  const [catExpanded,  setCatExpanded]  = useState(false);
+  const [taxExpanded,  setTaxExpanded]  = useState(false);
+  const [discExpanded, setDiscExpanded] = useState(false);
 
   // Category subtotals from items
   const categoryTotals = useMemo(() => {
@@ -507,69 +509,90 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   </>
                 )}
 
-                {/* New shape: per-category discount rows */}
-                {catEntries.map(([catId, amt]) => {
-                  const pct  = sessionDisc?.catRows?.[catId]?.value;
-                  const name = catNameMap[catId] ?? `Category ${catId}`;
+                {/* Discount / charges — collapsible */}
+                {hasDiscount && (() => {
+                  const totalDiscAmt =
+                    catEntries.reduce((s, [, a]) => s + Number(a), 0) +
+                    (sessionDisc?.billDiscAmt  || 0) +
+                    (hasLegacy ? (sessionDisc?.foodDiscAmt || 0) + (sessionDisc?.liquorDiscAmt || 0) + (sessionDisc?.discAmt || 0) : 0) +
+                    (sessionDisc?.miscMinus || 0);
                   return (
-                    <div key={catId} className="flex justify-between text-[11px] text-muted-foreground">
-                      <span>{name} Disc{pct && Number(pct) > 0 ? ` (${pct}%)` : ""}</span>
-                      <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
-                        −₹{fmtAmount(Number(amt))}
-                      </span>
-                    </div>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setDiscExpanded((p) => !p)}
+                        className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <span className="flex items-center gap-1">
+                          <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                          Discount
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
+                            −₹{fmtAmount(totalDiscAmt)}
+                          </span>
+                          <HugeiconsIcon icon={discExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
+                        </div>
+                      </button>
+                      {discExpanded && (
+                        <div className="pl-2 space-y-0.5">
+                          {catEntries.map(([catId, amt]) => {
+                            const pct  = sessionDisc?.catRows?.[catId]?.value;
+                            const name = catNameMap[catId] ?? `Category ${catId}`;
+                            return (
+                              <div key={catId} className="flex justify-between text-[10px] text-muted-foreground">
+                                <span>{name} Disc{pct && Number(pct) > 0 ? ` (${pct}%)` : ""}</span>
+                                <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(Number(amt))}</span>
+                              </div>
+                            );
+                          })}
+                          {sessionDisc?.billDiscAmt > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}</span>
+                              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.billDiscAmt)}</span>
+                            </div>
+                          )}
+                          {hasLegacy && sessionDisc?.foodDiscAmt > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Food Discount ({sessionDisc.foodPct}%)</span>
+                              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
+                            </div>
+                          )}
+                          {hasLegacy && sessionDisc?.liquorDiscAmt > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Liquor Discount ({sessionDisc.liquorPct}%)</span>
+                              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
+                            </div>
+                          )}
+                          {hasLegacy && sessionDisc?.discAmt > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Discount</span>
+                              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.discAmt)}</span>
+                            </div>
+                          )}
+                          {sessionDisc?.miscMinus > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Misc Deduct</span>
+                              <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.miscMinus)}</span>
+                            </div>
+                          )}
+                          {sessionDisc?.misc > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Misc Add</span>
+                              <span className="tabular-nums">+₹{fmtAmount(sessionDisc.misc)}</span>
+                            </div>
+                          )}
+                          {sessionDisc?.sCharge > 0 && (
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>Service Charge</span>
+                              <span className="tabular-nums">+₹{fmtAmount(sessionDisc.sCharge)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
                   );
-                })}
-
-                {/* Bill-level discount */}
-                {sessionDisc?.billDiscAmt > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}</span>
-                    <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
-                      −₹{fmtAmount(sessionDisc.billDiscAmt)}
-                    </span>
-                  </div>
-                )}
-
-                {/* Legacy shape fallback */}
-                {hasLegacy && sessionDisc?.foodDiscAmt > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Food Discount ({sessionDisc.foodPct}%)</span>
-                    <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
-                  </div>
-                )}
-                {hasLegacy && sessionDisc?.liquorDiscAmt > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Liquor Discount ({sessionDisc.liquorPct}%)</span>
-                    <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
-                  </div>
-                )}
-                {hasLegacy && sessionDisc?.discAmt > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Discount</span>
-                    <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.discAmt)}</span>
-                  </div>
-                )}
-
-                {/* Misc / Service Charge */}
-                {sessionDisc?.miscMinus > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Misc Deduct</span>
-                    <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(sessionDisc.miscMinus)}</span>
-                  </div>
-                )}
-                {sessionDisc?.misc > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Misc Add</span>
-                    <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.misc)}</span>
-                  </div>
-                )}
-                {sessionDisc?.sCharge > 0 && (
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Service Charge</span>
-                    <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.sCharge)}</span>
-                  </div>
-                )}
+                })()}
 
                 <div className="flex justify-between text-sm font-semibold border-t pt-1.5 mt-0.5">
                   <span>Net Total</span>

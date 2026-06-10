@@ -97,6 +97,10 @@ export const billingService = {
   transferOrderItems: ({ sourceSessionId, targetTableId, itemIds }) =>
     invoke("transfer_order_items", { sourceSessionId, targetTableId, itemIds }),
 
+  /** Move selected items with per-item quantity (supports partial qty of a row) */
+  transferOrderItemsWithQty: ({ sourceSessionId, targetTableId, items }) =>
+    invoke("transfer_order_items_with_qty", { sourceSessionId, targetTableId, items }),
+
   // ── Bill & payment ────────────────────────────────────────────
 
   getBillSummary: (sessionId) =>

@@ -644,21 +644,58 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
 
-  // Group by menu_id (draft) or menu_id (session) to merge same item across KOTs.
-  // Preserve insertion order: first appearance of each menu_id keeps its position.
+  // Group by menu_id, but split pending vs sent into separate rows when both exist.
+  // Draft: always one group per menu_id.
+  // Session: if an item has both sent and pending DB rows, show pending as its own
+  // row (yellow dot) so the waiter can see what's not yet KOT'd. After KOT is sent
+  // the pending row disappears and everything merges back into one sent row.
   const groups = useMemo(() => {
-    const map = new Map();
+    if (isDraft) {
+      const map = new Map();
+      for (const item of activeItems) {
+        const key = item.menu_id ?? item.id;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(item);
+      }
+      return Array.from(map.entries());
+    }
+
+    // For real sessions: group by menu_id first, then split pending from sent
+    const byMenu = new Map();
     for (const item of activeItems) {
       const key = item.menu_id ?? item.id;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(item);
+      if (!byMenu.has(key)) byMenu.set(key, []);
+      byMenu.get(key).push(item);
     }
-    return Array.from(map.entries()); // [[menuId, [items...]], ...]
-  }, [activeItems]);
 
-  // F6 — target last-added group's menu_id
+    const sentRows    = [];
+    const pendingRows = [];
+    for (const [menuId, menuItems] of byMenu) {
+      const sent    = menuItems.filter((i) => i.kot_status !== "PENDING");
+      const pending = menuItems.filter((i) => i.kot_status === "PENDING");
+      if (sent.length > 0)    sentRows.push([menuId,              sent]);
+      else                    pendingRows.push([menuId,            pending]); // all-pending item (never been sent)
+      if (sent.length > 0 && pending.length > 0) pendingRows.push([`${menuId}:pending`, pending]);
+    }
+    return [...sentRows, ...pendingRows];
+  }, [activeItems, isDraft]);
+
+  // F6 — target last-added group's key (pending row uses `menuId:pending` suffix)
   const lastItem    = activeItems.length > 0 ? activeItems[activeItems.length - 1] : null;
-  const lastItemKey = lastAddedKey ?? (lastItem?.menu_id ?? null);
+  const lastMenuId  = lastAddedKey ?? (lastItem?.menu_id ?? null);
+  // If the last added item is pending and there are also sent items for the same menu,
+  // point F6 at the pending row key so it targets the right row.
+  const lastItemKey = useMemo(() => {
+    if (!lastMenuId || isDraft) return lastMenuId;
+    const hasSentForLastMenu = activeItems.some(
+      (i) => (i.menu_id ?? i.id) === lastMenuId && i.kot_status !== "PENDING"
+    );
+    const hasPendingForLastMenu = activeItems.some(
+      (i) => (i.menu_id ?? i.id) === lastMenuId && i.kot_status === "PENDING"
+    );
+    if (hasSentForLastMenu && hasPendingForLastMenu) return `${lastMenuId}:pending`;
+    return lastMenuId;
+  }, [lastMenuId, isDraft, activeItems]);
 
   const prevCountRef = useRef(activeItems.length);
   useEffect(() => {
@@ -708,15 +745,15 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
           <kbd className="rounded bg-muted px-0.5 text-[8px] font-mono text-muted-foreground/50 leading-tight">F6</kbd>
         </span>
       </div>
-      {groups.map(([menuId, groupItems]) => (
+      {groups.map(([groupKey, groupItems]) => (
         <MergedOrderItemRow
-          key={menuId}
+          key={groupKey}
           group={groupItems}
           sessionId={sessionId}
           isDraft={isDraft}
           isBillPrinted={isBillPrinted}
-          isActive={lastAddedKey === menuId}
-          isF6Active={f6ItemKey === menuId}
+          isActive={lastItemKey === groupKey}
+          isF6Active={f6ItemKey === groupKey}
           onF6Close={() => setF6ItemKey(null)}
           onQtyEnter={onQtyEnter}
         />
@@ -730,6 +767,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
 function BillTotals({ items, sessionDisc, menu }) {
   const [taxExpanded, setTaxExpanded] = useState(false);
   const [catExpanded, setCatExpanded] = useState(false);
+  const [discExpanded, setDiscExpanded] = useState(false);
 
   const totals = useMemo(() => calcBillTotals(items ?? []), [items]);
 
@@ -785,8 +823,8 @@ function BillTotals({ items, sessionDisc, menu }) {
   return (
     <div className="shrink-0 border-t bg-card">
       <div className="px-4 py-2.5 space-y-1.5">
-        {/* Category subtotals — only shown when there are 2+ categories */}
-        {categoryTotals.length > 1 && (
+        {/* Category subtotals — shown whenever there are items */}
+        {categoryTotals.length > 0 && (
           <>
             <button
               type="button"
@@ -818,7 +856,34 @@ function BillTotals({ items, sessionDisc, menu }) {
         )}
 
         {totals.discountAmount > 0 && (
-          <TotalsRow label="Item Discounts" value={-totals.discountAmount} accent="text-emerald-600 dark:text-emerald-400" />
+          <>
+            <button
+              type="button"
+              onClick={() => setDiscExpanded((p) => !p)}
+              className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span className="flex items-center gap-1">
+                <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                Item Discounts
+              </span>
+              <div className="flex items-center gap-1">
+                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
+                  -₹{fmtAmount(totals.discountAmount)}
+                </span>
+                <HugeiconsIcon icon={discExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
+              </div>
+            </button>
+            {discExpanded && (
+              <div className="pl-2 space-y-0.5">
+                {(items ?? []).filter((i) => i.item_status === "ACTIVE" && Number(i.discount_amount) > 0).map((i) => (
+                  <div key={i.id} className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>{i.item_name}{i.discount_percent > 0 ? ` (${i.discount_percent}%)` : ""}</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(Number(i.discount_amount))}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
 
         {totals.taxAmount > 0 && (
@@ -858,77 +923,72 @@ function BillTotals({ items, sessionDisc, menu }) {
 
         {/* Bill discount breakdown from saved sessionDisc */}
         {sessionDisc && totalDiscAmt > 0 && (
-          <div className="space-y-0.5">
-            {/* New shape: per-category rows */}
-            {catDiscRows.map(({ catId, amt, pct, name }) => (
-              <div key={catId} className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  {name} Disc{pct != null && pct > 0 ? ` (${pct}%)` : ""}
-                </span>
+          <>
+            <button
+              type="button"
+              onClick={() => setDiscExpanded((p) => !p)}
+              className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span className="flex items-center gap-1">
+                <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
+                Discount
+              </span>
+              <div className="flex items-center gap-1">
                 <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
-                  -₹{fmtAmount(amt)}
+                  -₹{fmtAmount(totalDiscAmt)}
                 </span>
+                <HugeiconsIcon icon={discExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
               </div>
-            ))}
-            {/* Legacy shape fallback */}
-            {!sessionDisc.catDiscAmts && sessionDisc.foodDiscAmt > 0 && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Food Disc ({sessionDisc.foodPct}%)
-                </span>
-                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
-              </div>
-            )}
-            {!sessionDisc.catDiscAmts && sessionDisc.liquorDiscAmt > 0 && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Liquor Disc ({sessionDisc.liquorPct}%)
-                </span>
-                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
-              </div>
-            )}
-            {sessionDisc.billDiscAmt > 0 && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}
-                </span>
-                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">
-                  -₹{fmtAmount(sessionDisc.billDiscAmt)}
-                </span>
-              </div>
-            )}
-            {sessionDisc.sCharge > 0 && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Service Charge
-                </span>
-                <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.sCharge)}</span>
-              </div>
-            )}
-            {sessionDisc.miscMinus > 0 && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Misc Deduct
-                </span>
-                <span className="tabular-nums font-medium text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.miscMinus)}</span>
-              </div>
-            )}
-            {sessionDisc.misc > 0 && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <HugeiconsIcon icon={Discount01Icon} size={10} strokeWidth={2} />
-                  Misc Add
-                </span>
-                <span className="tabular-nums font-medium">+₹{fmtAmount(sessionDisc.misc)}</span>
+            </button>
+            {discExpanded && (
+              <div className="pl-2 space-y-0.5">
+                {/* New shape: per-category rows */}
+                {catDiscRows.map(({ catId, amt, pct, name }) => (
+                  <div key={catId} className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>{name} Disc{pct != null && pct > 0 ? ` (${pct}%)` : ""}</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(amt)}</span>
+                  </div>
+                ))}
+                {/* Legacy shape fallback */}
+                {!sessionDisc.catDiscAmts && sessionDisc.foodDiscAmt > 0 && (
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>Food Disc ({sessionDisc.foodPct}%)</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
+                  </div>
+                )}
+                {!sessionDisc.catDiscAmts && sessionDisc.liquorDiscAmt > 0 && (
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>Liquor Disc ({sessionDisc.liquorPct}%)</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
+                  </div>
+                )}
+                {sessionDisc.billDiscAmt > 0 && (
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.billDiscAmt)}</span>
+                  </div>
+                )}
+                {sessionDisc.sCharge > 0 && (
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>Service Charge</span>
+                    <span className="tabular-nums">+₹{fmtAmount(sessionDisc.sCharge)}</span>
+                  </div>
+                )}
+                {sessionDisc.miscMinus > 0 && (
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>Misc Deduct</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.miscMinus)}</span>
+                  </div>
+                )}
+                {sessionDisc.misc > 0 && (
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>Misc Add</span>
+                    <span className="tabular-nums">+₹{fmtAmount(sessionDisc.misc)}</span>
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
 
         {roundOff !== 0 && (

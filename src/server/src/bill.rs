@@ -20,6 +20,12 @@ pub struct TableForBilling {
     pub occupied_since:           Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct TaxDetailEntry {
+    pub tax_name:       String,
+    pub tax_percentage: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct MenuItemForBilling {
     pub id:                   i32,
@@ -41,6 +47,7 @@ pub struct MenuItemForBilling {
     pub rate_5:               f64,
     pub tax_name:             Option<String>,
     pub tax_percentage:       f64,
+    pub tax_details:          Vec<TaxDetailEntry>,
     pub allow_discount:        bool,
     pub max_discount_percent:  f64,
     pub auto_discount_percent: f64,
@@ -290,12 +297,12 @@ pub async fn get_menu_for_billing(
          JOIN   menu_category cat ON cat.id = mg.category_id
          LEFT JOIN food_type ft ON ft.id = mc.food_type_id
          LEFT JOIN LATERAL (
-             SELECT mctd.tax_percentage, tm.name AS tax_name
+             SELECT
+                 SUM(mctd.tax_percentage)                         AS tax_percentage,
+                 STRING_AGG(tm.name, ' + ' ORDER BY mctd.id)     AS tax_name
              FROM   menu_category_tax_detail mctd
              LEFT JOIN tax_master tm ON tm.id = mctd.tax_id
              WHERE  mctd.category_id = cat.id
-             ORDER  BY mctd.id
-             LIMIT  1
          ) tax_info ON true
          WHERE  mc.is_active = TRUE
          ORDER  BY cat.name, mg.name, mc.name",
@@ -304,8 +311,30 @@ pub async fn get_menu_for_billing(
     .await
     .map_err(|e| format!("Failed to load menu: {e}"))?;
 
+    // Fetch individual tax rows for every category, keyed by category_id
+    use std::collections::HashMap;
+    let cat_tax_rows = sqlx::query(
+        "SELECT mctd.category_id, tm.name AS tax_name, mctd.tax_percentage::float8
+         FROM   menu_category_tax_detail mctd
+         LEFT JOIN tax_master tm ON tm.id = mctd.tax_id
+         ORDER  BY mctd.category_id, mctd.id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+
+    let mut cat_tax_map: HashMap<i32, Vec<TaxDetailEntry>> = HashMap::new();
+    for tr in &cat_tax_rows {
+        let cat_id: i32 = tr.try_get("category_id").unwrap_or(0);
+        let name: String = tr.try_get("tax_name").unwrap_or_default();
+        let pct: f64 = tr.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
+        cat_tax_map.entry(cat_id).or_default().push(TaxDetailEntry { tax_name: name, tax_percentage: pct });
+    }
+
     Ok(rows.iter().map(|r| {
         let tax_name_raw: String = r.try_get("tax_name").unwrap_or_default();
+        let cat_id: i32 = r.try_get("category_id").unwrap_or(0);
+        let tax_details = cat_tax_map.get(&cat_id).cloned().unwrap_or_default();
         MenuItemForBilling {
             id:                   r.try_get("id").unwrap_or(0),
             code:                 r.try_get("code").unwrap_or(0),
@@ -326,6 +355,7 @@ pub async fn get_menu_for_billing(
             rate_5:               r.try_get::<f64, _>("rate_5").unwrap_or(0.0),
             tax_name:             if tax_name_raw.is_empty() { None } else { Some(tax_name_raw) },
             tax_percentage:       r.try_get::<f64, _>("tax_percentage").unwrap_or(0.0),
+            tax_details,
             allow_discount:        r.try_get("allow_discount").unwrap_or(false),
             max_discount_percent:  r.try_get::<f64, _>("max_discount_percent").unwrap_or(0.0),
             auto_discount_percent: r.try_get::<f64, _>("auto_discount_percent").unwrap_or(0.0),
@@ -1023,12 +1053,12 @@ pub async fn add_order_item(
          JOIN   menu_category cat ON cat.id = mg.category_id
          LEFT JOIN kitchen_section ks ON ks.id = mc.kitchen_section_id
          LEFT JOIN LATERAL (
-             SELECT mctd.tax_percentage, tm.name AS tax_name
+             SELECT
+                 SUM(mctd.tax_percentage)                         AS tax_percentage,
+                 STRING_AGG(tm.name, ' + ' ORDER BY mctd.id)     AS tax_name
              FROM   menu_category_tax_detail mctd
              LEFT JOIN tax_master tm ON tm.id = mctd.tax_id
              WHERE  mctd.category_id = cat.id
-             ORDER  BY mctd.id
-             LIMIT  1
          ) tax_info ON true
          WHERE  mc.id = $1 AND mc.is_active = TRUE",
     )
@@ -1610,15 +1640,23 @@ pub async fn get_bill_summary(
     let round_off  = round2((final_amount).round() - final_amount);
     let net_amount = round2(final_amount + round_off);
 
-    // Tax breakdown
+    // Tax breakdown — expand each order item into its individual tax components
+    // so that e.g. "CGST ON FOODS" from two different categories is merged into one row.
     let tax_rows = sqlx::query(
-        "SELECT COALESCE(tax_name, 'No Tax')     AS tax_name,
-                MAX(tax_percentage)::float8       AS tax_percentage,
-                SUM(taxable_amount)::float8       AS taxable_amount,
-                SUM(tax_amount)::float8           AS tax_amount
-         FROM   order_item
-         WHERE  order_session_id = $1 AND item_status = 'ACTIVE'
-         GROUP  BY tax_name",
+        "SELECT
+             COALESCE(tm.name, 'No Tax')                              AS tax_name,
+             COALESCE(mctd.tax_percentage, 0)::float8                AS tax_percentage,
+             SUM(oi.taxable_amount)::float8                          AS taxable_amount,
+             SUM(oi.taxable_amount * mctd.tax_percentage / 100.0)::float8 AS tax_amount
+         FROM order_item oi
+         JOIN menu_card mc ON mc.id = oi.menu_id
+         JOIN menu_group mg ON mg.id = mc.menu_group_id
+         JOIN menu_category cat ON cat.id = mg.category_id
+         JOIN menu_category_tax_detail mctd ON mctd.category_id = cat.id
+         LEFT JOIN tax_master tm ON tm.id = mctd.tax_id
+         WHERE oi.order_session_id = $1 AND oi.item_status = 'ACTIVE'
+         GROUP BY tm.name, mctd.tax_percentage
+         ORDER BY tm.name",
     )
     .bind(session_id)
     .fetch_all(&pool)
@@ -4006,6 +4044,409 @@ pub async fn transfer_order_items(
     )
     .bind(dest_session_id)
     .bind(format!("{} item(s) received from session {source_session_id}", item_ids.len()))
+    .execute(&pool)
+    .await
+    .ok();
+
+    Ok(dest_session_id)
+}
+
+/// Item-quantity transfer request — one entry per order_item row to move.
+#[derive(Debug, Deserialize)]
+pub struct TransferQtyItem {
+    pub item_id: i32,
+    pub qty:     f64,
+}
+
+/// Like transfer_order_items but supports moving a partial quantity of a row.
+/// When qty == item.quantity the row is moved wholesale; when qty < item.quantity
+/// the source row is reduced in-place and a new cloned row is inserted on the
+/// destination with the partial amount (amounts are scaled proportionally).
+#[tauri::command]
+pub async fn transfer_order_items_with_qty(
+    app:               tauri::AppHandle,
+    state:             tauri::State<'_, AppState>,
+    source_session_id: i32,
+    target_table_id:   i32,
+    items:             Vec<TransferQtyItem>,
+) -> Result<i32, String> {
+    if items.is_empty() {
+        return Err("No items selected to move.".into());
+    }
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Source session — must be live
+    let src = sqlx::query(
+        "SELECT table_id, order_type, session_status
+         FROM   order_session
+         WHERE  id = $1 AND is_active = 1",
+    )
+    .bind(source_session_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Source session lookup failed: {e}"))?
+    .ok_or_else(|| "Source session not found.".to_string())?;
+
+    let source_table_id: Option<i32> = src.try_get("table_id").ok().flatten();
+    let order_type:      String      = src.try_get("order_type").ok().flatten().unwrap_or_else(|| "DINE_IN".to_string());
+    let src_status:      String      = src.try_get("session_status").unwrap_or_default();
+
+    if matches!(src_status.as_str(), "SETTLED" | "CANCELLED") {
+        return Err("This order is already closed — nothing to move.".into());
+    }
+    if source_table_id == Some(target_table_id) {
+        return Err("Source and destination are the same table.".into());
+    }
+
+    let item_ids: Vec<i32> = items.iter().map(|i| i.item_id).collect();
+
+    // Validate that all selected items belong to this session and are active
+    let valid_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM order_item
+         WHERE  id = ANY($1) AND order_session_id = $2 AND item_status = 'ACTIVE'",
+    )
+    .bind(&item_ids)
+    .bind(source_session_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Item validation failed: {e}"))?;
+
+    if valid_count as usize != item_ids.len() {
+        return Err("Some selected items are no longer available on the source table.".into());
+    }
+
+    // Target table + group + any live session
+    let target = sqlx::query(
+        "SELECT table_group_id, current_order_session_id
+         FROM   restaurant_table
+         WHERE  id = $1 AND is_active = TRUE",
+    )
+    .bind(target_table_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Target table lookup failed: {e}"))?
+    .ok_or_else(|| "Destination table not found.".to_string())?;
+
+    let target_group_id: Option<i32> = target.try_get("table_group_id").ok().flatten();
+    let existing_dest:   Option<i32> = target.try_get("current_order_session_id").ok().flatten();
+
+    let mut tx = pool.begin().await.map_err(|e| format!("Transaction start failed: {e}"))?;
+
+    // Resolve / create the destination session
+    let dest_session_id: i32 = if let Some(dest) = existing_dest {
+        dest
+    } else {
+        let new_id: i32 = sqlx::query_scalar(
+            "INSERT INTO order_session (order_type, table_id, table_group_id, session_status)
+             VALUES ($1, $2, $3, 'OPEN') RETURNING id",
+        )
+        .bind(&order_type)
+        .bind(target_table_id)
+        .bind(target_group_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to open destination session: {e}"))?;
+
+        let order_no = format!("ORD-{new_id}");
+        sqlx::query("UPDATE order_session SET order_no = $1, token_no = $1 WHERE id = $2")
+            .bind(&order_no)
+            .bind(new_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to assign order number: {e}"))?;
+
+        sqlx::query(
+            "UPDATE restaurant_table
+             SET    current_status = 'OCCUPIED',
+                    current_order_session_id = $1,
+                    occupied_since = NOW()
+             WHERE  id = $2",
+        )
+        .bind(new_id)
+        .bind(target_table_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to occupy destination table: {e}"))?;
+
+        new_id
+    };
+
+    // For each item: if partial qty requested, split the row; collect the final
+    // set of item_ids that will actually move to the destination.
+    let mut dest_item_ids: Vec<i32> = Vec::new();
+
+    for req in &items {
+        let row = sqlx::query(
+            "SELECT quantity, rate, gross_amount, discount_percent, discount_amount,
+                    tax_name, tax_percentage, tax_amount, taxable_amount, final_amount,
+                    menu_id, item_name, food_type_id, kitchen_section_id,
+                    special_instruction, kot_id, kot_status
+             FROM   order_item
+             WHERE  id = $1 AND item_status = 'ACTIVE'",
+        )
+        .bind(req.item_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("Item fetch failed: {e}"))?
+        .ok_or_else(|| format!("Item {} not found", req.item_id))?;
+
+        let full_qty: f64 = row.try_get::<f64, _>("quantity").unwrap_or(1.0);
+        let move_qty = req.qty.min(full_qty).max(0.001);
+
+        if (move_qty - full_qty).abs() < 0.001 {
+            // Whole row moves — no split needed
+            dest_item_ids.push(req.item_id);
+        } else {
+            // Partial — scale amounts proportionally
+            let ratio = move_qty / full_qty;
+            let remain_qty = full_qty - move_qty;
+            let remain_ratio = remain_qty / full_qty;
+
+            let gross:    f64 = row.try_get::<f64, _>("gross_amount").unwrap_or(0.0);
+            let disc_pct: f64 = row.try_get::<f64, _>("discount_percent").unwrap_or(0.0);
+            let disc_amt: f64 = row.try_get::<f64, _>("discount_amount").unwrap_or(0.0);
+            let tax_amt:  f64 = row.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
+            let taxable:  f64 = row.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
+            let final_a:  f64 = row.try_get::<f64, _>("final_amount").unwrap_or(0.0);
+
+            let tax_name:   Option<String> = row.try_get("tax_name").ok().flatten();
+            let tax_pct:    f64            = row.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
+            let menu_id:    Option<i32>    = row.try_get("menu_id").ok().flatten();
+            let item_name:  String         = row.try_get("item_name").unwrap_or_default();
+            let ft_id:      Option<i32>    = row.try_get("food_type_id").ok().flatten();
+            let ks_id:      Option<i32>    = row.try_get("kitchen_section_id").ok().flatten();
+            let special:    Option<i32>    = row.try_get("special_instruction").ok().flatten();
+            let kot_id:     Option<i32>    = row.try_get("kot_id").ok().flatten();
+            let kot_status: String         = row.try_get("kot_status").unwrap_or_else(|_| "PENDING".to_string());
+
+            // Reduce source row in-place
+            sqlx::query(
+                "UPDATE order_item
+                 SET    quantity       = $1,
+                        gross_amount   = $2,
+                        discount_amount= $3,
+                        tax_amount     = $4,
+                        taxable_amount = $5,
+                        final_amount   = $6,
+                        updated_at     = NOW()
+                 WHERE  id = $7",
+            )
+            .bind(remain_qty)
+            .bind(gross    * remain_ratio)
+            .bind(disc_amt * remain_ratio)
+            .bind(tax_amt  * remain_ratio)
+            .bind(taxable  * remain_ratio)
+            .bind(final_a  * remain_ratio)
+            .bind(req.item_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to reduce source item qty: {e}"))?;
+
+            // Insert cloned row for the moved portion
+            let new_item_id: i32 = sqlx::query_scalar(
+                "INSERT INTO order_item
+                     (order_session_id, menu_id, item_name, quantity, rate,
+                      gross_amount, discount_percent, discount_amount,
+                      tax_name, tax_percentage, tax_amount, taxable_amount, final_amount,
+                      food_type_id, kitchen_section_id, special_instruction,
+                      kot_status, item_status, kot_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'ACTIVE',$18)
+                 RETURNING id",
+            )
+            .bind(dest_session_id)
+            .bind(menu_id)
+            .bind(&item_name)
+            .bind(move_qty)
+            .bind(row.try_get::<f64, _>("rate").unwrap_or(0.0))
+            .bind(gross    * ratio)
+            .bind(disc_pct)
+            .bind(disc_amt * ratio)
+            .bind(&tax_name)
+            .bind(tax_pct)
+            .bind(tax_amt  * ratio)
+            .bind(taxable  * ratio)
+            .bind(final_a  * ratio)
+            .bind(ft_id)
+            .bind(ks_id)
+            .bind(special)
+            .bind(&kot_status)
+            .bind(kot_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to insert split item: {e}"))?;
+
+            dest_item_ids.push(new_item_id);
+        }
+    }
+
+    // KOT re-assignment for whole-row moves (same logic as transfer_order_items)
+    let whole_ids: Vec<i32> = items.iter()
+        .filter_map(|req| {
+            // only items that were moved wholesale are in both item_ids and dest_item_ids at same position
+            if dest_item_ids.contains(&req.item_id) { Some(req.item_id) } else { None }
+        })
+        .collect();
+
+    if !whole_ids.is_empty() {
+        let kot_rows = sqlx::query(
+            "SELECT km.id AS kot_id,
+                    COUNT(*) FILTER (WHERE oi.id = ANY($1)) AS moving,
+                    COUNT(*)                                AS total
+             FROM   kot_master km
+             JOIN   order_item oi ON oi.kot_id = km.id AND oi.item_status = 'ACTIVE'
+             WHERE  km.id IN (SELECT DISTINCT kot_id FROM order_item
+                              WHERE id = ANY($1) AND kot_id IS NOT NULL)
+             GROUP  BY km.id",
+        )
+        .bind(&whole_ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("KOT classification failed: {e}"))?;
+
+        for row in &kot_rows {
+            let kot_id: i32 = row.try_get("kot_id").unwrap_or(0);
+            let moving: i64 = row.try_get("moving").unwrap_or(0);
+            let total:  i64 = row.try_get("total").unwrap_or(0);
+
+            if moving >= total {
+                sqlx::query(
+                    "UPDATE kot_master
+                     SET    table_id = $1, order_session_id = $2, updated_at = NOW(),
+                            remarks  = COALESCE(remarks || ' · ', '') || 'Table transfer'
+                     WHERE  id = $3",
+                )
+                .bind(target_table_id)
+                .bind(dest_session_id)
+                .bind(kot_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to move KOT: {e}"))?;
+            } else {
+                let new_kot: i32 = sqlx::query_scalar(
+                    "INSERT INTO kot_master (order_session_id, table_id, kot_status, remarks)
+                     VALUES ($1, $2, 'PENDING', 'Table transfer') RETURNING id",
+                )
+                .bind(dest_session_id)
+                .bind(target_table_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to create transfer KOT: {e}"))?;
+
+                sqlx::query("UPDATE kot_master SET kot_no = $1 WHERE id = $2")
+                    .bind(format!("KOT-{new_kot}"))
+                    .bind(new_kot)
+                    .execute(&mut *tx)
+                    .await
+                    .ok();
+
+                sqlx::query(
+                    "UPDATE kot_item SET kot_id = $1
+                     WHERE  kot_id = $2 AND order_item_id = ANY($3)",
+                )
+                .bind(new_kot)
+                .bind(kot_id)
+                .bind(&whole_ids)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to regroup KOT items: {e}"))?;
+
+                sqlx::query(
+                    "UPDATE order_item SET kot_id = $1
+                     WHERE  kot_id = $2 AND id = ANY($3)",
+                )
+                .bind(new_kot)
+                .bind(kot_id)
+                .bind(&whole_ids)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to relink moved items: {e}"))?;
+            }
+        }
+
+        // Move whole-row items to destination session
+        sqlx::query(
+            "UPDATE order_item SET order_session_id = $1, updated_at = NOW()
+             WHERE  id = ANY($2)",
+        )
+        .bind(dest_session_id)
+        .bind(&whole_ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to move items: {e}"))?;
+    }
+
+    // Destination status: KOT_SENT if it holds any sent item
+    sqlx::query(
+        "UPDATE order_session
+         SET    session_status = 'KOT_SENT', updated_at = NOW()
+         WHERE  id = $1
+           AND  session_status = 'OPEN'
+           AND  EXISTS (SELECT 1 FROM order_item
+                        WHERE order_session_id = $1
+                          AND item_status = 'ACTIVE' AND kot_status = 'SENT')",
+    )
+    .bind(dest_session_id)
+    .execute(&mut *tx)
+    .await
+    .ok();
+
+    // Did the source run dry?
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM order_item
+         WHERE  order_session_id = $1 AND item_status = 'ACTIVE'",
+    )
+    .bind(source_session_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| format!("Remaining-item check failed: {e}"))?;
+
+    if remaining == 0 {
+        sqlx::query(
+            "UPDATE order_session
+             SET    session_status = 'CANCELLED', settled_at = NOW(), updated_at = NOW(),
+                    total_occupancy_minutes = GREATEST(
+                        0, FLOOR(EXTRACT(EPOCH FROM (NOW() - opened_at)) / 60)::integer)
+             WHERE  id = $1",
+        )
+        .bind(source_session_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to close empty source session: {e}"))?;
+
+        if let Some(src_id) = source_table_id {
+            sqlx::query(
+                "UPDATE restaurant_table
+                 SET    current_status = 'AVAILABLE',
+                        current_order_session_id = NULL,
+                        occupied_since = NULL
+                 WHERE  id = $1",
+            )
+            .bind(src_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to free emptied source table: {e}"))?;
+        }
+    }
+
+    tx.commit().await.map_err(|e| format!("Transaction commit failed: {e}"))?;
+
+    sqlx::query(
+        "INSERT INTO order_status_history (order_session_id, status_name, remarks)
+         VALUES ($1, 'ITEMS_TRANSFERRED', $2)",
+    )
+    .bind(source_session_id)
+    .bind(format!("{} item(s) moved to table {target_table_id}", items.len()))
+    .execute(&pool)
+    .await
+    .ok();
+
+    sqlx::query(
+        "INSERT INTO order_status_history (order_session_id, status_name, remarks)
+         VALUES ($1, 'ITEMS_RECEIVED', $2)",
+    )
+    .bind(dest_session_id)
+    .bind(format!("{} item(s) received from session {source_session_id}", items.len()))
     .execute(&pool)
     .await
     .ok();

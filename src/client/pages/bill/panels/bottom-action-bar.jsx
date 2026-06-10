@@ -14,7 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 import { useBillingContext } from "../state/billing-context";
-import { useGenerateKot, useGenerateBill } from "../hooks/use-billing-queries";
+import { useGenerateKot, useGenerateCheckKot, useGenerateBill } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { fmtAmount, calcBillTotals, buildMenuLookups, buildCategories } from "../utils/billing-calc";
 import { BQK } from "../constants/billing";
@@ -77,21 +77,30 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
 // ─── Billing mode panel (single-row action bar) ───────────────
 
 function BillingModePanel({
-  canKot, kotPending,
+  canKot, kotPending, checkKotPending,
   canBill, billPending,
   canSettle,
   netAmount,
   pendingKot,
-  onKot, onBill, onSettle, onSwitchMode, onHold, canHold, isRestoredFromHold,
+  onKot, onCheckKot, onBill, onSettle, onSwitchMode, onHold, canHold, isRestoredFromHold,
+  isClosed,
 }) {
   return (
     <div className="flex items-stretch gap-1.5 px-2 py-1.5">
       <ActionBtn
         icon={PrinterIcon}
-        label="KOT+Print"
-        shortcut="Home"
+        label="KOT"
+        shortcut="+"
         onClick={onKot}
         disabled={!canKot || kotPending}
+        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
+      />
+      <ActionBtn
+        icon={PrinterIcon}
+        label="KOT+Print"
+        shortcut="Home"
+        onClick={onCheckKot}
+        disabled={!canKot || checkKotPending}
         variant="default"
         className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
         data-pos-action="kotprint"
@@ -115,18 +124,11 @@ function BillingModePanel({
         )}
       </div>
       <ActionBtn
-        icon={PrinterIcon}
-        label="KOT"
-        shortcut="+"
-        onClick={onKot}
-        disabled={!canKot || kotPending}
-        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
-      />
-      <ActionBtn
         icon={Discount01Icon}
         label="Discount"
         shortcut="/"
         onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.DISCOUNT)}
+        disabled={isClosed}
       />
       <ActionBtn
         icon={Hold01Icon}
@@ -164,7 +166,7 @@ const sanitizeNum = (v) => v.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
 function DiscField({ label, value, onChange, readOnly, autoFocus, onKeyDown, inputRef }) {
   return (
     <div className="flex items-center gap-1.5 shrink-0">
-      <span className="text-[10px] font-bold text-foreground whitespace-nowrap">{label}</span>
+      <span className="text-xs font-bold text-foreground whitespace-nowrap">{label}</span>
       <input
         ref={inputRef}
         inputMode="decimal"
@@ -176,7 +178,7 @@ function DiscField({ label, value, onChange, readOnly, autoFocus, onKeyDown, inp
         // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus={autoFocus}
         className={[
-          "w-20 h-7 rounded border text-xs text-right tabular-nums px-2",
+          "w-20 h-8 rounded border text-sm text-right tabular-nums px-2",
           "bg-muted/30 border-border/60",
           "focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary",
           readOnly
@@ -264,13 +266,22 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
     });
   }, [freshMenuQuery.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Misc fields
-  const [misc,      setMisc]      = useState(() => String(sessionDisc?.misc      ?? 0));
-  const [miscMinus, setMiscMinus] = useState(() => String(sessionDisc?.miscMinus ?? 0));
-  const [sCharge,   setSCharge]   = useState(() => String(sessionDisc?.sCharge   ?? 0));
+  // Bill disc value — interpreted as % or flat depending on discMode
+  const [billDiscVal, setBillDiscVal] = useState(() => String(sessionDisc?.billDiscPct ?? 0));
 
-  // Overall bill discount % applied directly on net (after category discounts)
-  const [billDiscPct, setBillDiscPct] = useState(() => String(sessionDisc?.billDiscPct ?? 0));
+  // When Bill Disc is non-zero, category discounts are cleared and locked
+  const billDiscActive = (parseFloat(billDiscVal) || 0) > 0;
+
+  // Clear all cat rows when bill disc becomes active
+  useEffect(() => {
+    if (billDiscActive) {
+      setCatRows((prev) => {
+        const next = { ...prev };
+        for (const key of Object.keys(next)) next[key] = { value: "0" };
+        return next;
+      });
+    }
+  }, [billDiscActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Effective cap = min(category max, user's total_discount cap).
   // cat.max_discount is null when not configured in DB → no category-level restriction.
@@ -321,25 +332,26 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
 
   const totalCatDisc  = r2(Object.values(catDiscAmts).reduce((s, v) => s + v, 0));
   const afterCatDisc  = r2(billAmt - totalCatDisc);
-  const billDiscAmt   = r2(afterCatDisc * (Math.min(parseFloat(billDiscPct) || 0, 100)) / 100);
 
-  const net = r2(
-    afterCatDisc
-    - billDiscAmt
-    + (Number(misc)      || 0)
-    - (Number(miscMinus) || 0)
-    + (Number(sCharge)   || 0)
-  );
+  // Bill disc: % mode → percentage of afterCatDisc; flat mode → direct amount (capped at afterCatDisc)
+  const billDiscRaw = parseFloat(billDiscVal) || 0;
+  const billDiscAmt = discMode === "pct"
+    ? r2(afterCatDisc * Math.min(billDiscRaw, 100) / 100)
+    : r2(Math.min(billDiscRaw, afterCatDisc));
+  // Effective % for saving (always store as pct equivalent for downstream use)
+  const billDiscPct = afterCatDisc > 0 ? r2((billDiscAmt / afterCatDisc) * 100) : 0;
 
-  // ── Mode switch — reset values (% keeps auto_discount, flat resets to 0) ──
+  const net = r2(afterCatDisc - billDiscAmt);
+
+  // ── Mode switch — reset values (% keeps auto_discount if no bill disc, flat resets to 0) ──
   function switchMode(mode) {
     setDiscMode(mode);
+    setBillDiscVal("0");
     const reset = {};
     for (const cat of categories) {
       reset[cat.id] = { value: mode === "pct" ? String(cat.auto_discount ?? 0) : "0" };
     }
     setCatRows(reset);
-    setApplyAllVal("");
   }
 
   // ── Save ─────────────────────────────────────────────────
@@ -352,24 +364,20 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
       catRows,
       catDiscAmts,
       totalCatDisc,
-      billDiscPct:  Number(billDiscPct) || 0,
+      billDiscPct,
       billDiscAmt,
-      misc:         Number(misc)      || 0,
-      miscMinus:    Number(miscMinus) || 0,
-      sCharge:      Number(sCharge)   || 0,
+      misc:         0,
+      miscMinus:    0,
+      sCharge:      0,
       netAmt:       net,
       discPct,
     });
     onBack();
   }
 
-  const miscRef    = useRef(null);
-  const minusRef   = useRef(null);
-  const sChargeRef = useRef(null);
-
   return (
     <div className="px-3 py-2 bg-card border-t space-y-2">
-      {/* ── Header row: totals + mode toggle + apply-all ── */}
+      {/* ── Header row: totals + mode toggle + bill disc ── */}
       <div className="flex items-center gap-3 flex-wrap">
         <DiscField label="Tax Amt. :"  value={fmtAmount(taxAmt)}  readOnly />
         <DiscField label="Bill Amt. :" value={fmtAmount(billAmt)} readOnly />
@@ -380,7 +388,7 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
             type="button"
             onClick={() => switchMode("pct")}
             className={[
-              "h-7 px-2.5 text-[10px] font-semibold transition-colors",
+              "h-8 px-2.5 text-xs font-semibold transition-colors",
               discMode === "pct"
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted/30 text-muted-foreground hover:bg-muted/50",
@@ -392,7 +400,7 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
             type="button"
             onClick={() => switchMode("flat")}
             className={[
-              "h-7 px-2.5 text-[10px] font-semibold transition-colors",
+              "h-8 px-2.5 text-xs font-semibold transition-colors",
               discMode === "flat"
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted/30 text-muted-foreground hover:bg-muted/50",
@@ -402,29 +410,35 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
           </button>
         </div>
 
-        {/* Bill-level discount % on net (extra on top of category discounts) */}
+        {/* Bill-level discount — follows mode toggle (% or flat ₹) */}
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-[10px] font-bold text-foreground whitespace-nowrap">
-            Bill Disc % :
+          <span className="text-xs font-bold text-foreground whitespace-nowrap">
+            Bill Disc {discMode === "pct" ? "%" : "₹"} :
           </span>
           <input
             inputMode="decimal"
-            value={billDiscPct}
-            onChange={(e) => setBillDiscPct(sanitizeNum(e.target.value))}
+            value={billDiscVal}
+            onChange={(e) => setBillDiscVal(sanitizeNum(e.target.value))}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
-            className="w-16 h-7 rounded border text-xs text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
+            className="w-16 h-8 rounded border text-sm text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
           />
         </div>
+
+        {billDiscActive && (
+          <span className="text-xs text-amber-500 font-medium shrink-0">
+            Category discounts disabled
+          </span>
+        )}
       </div>
 
       {/* ── Per-category rows ── */}
       <div className="space-y-1">
         {categories.map((cat, idx) => {
-          const val  = catRows[cat.id]?.value ?? "0";
-          const err  = catErrors[cat.id];
-          const disc = catDiscAmts[cat.id] ?? 0;
-          const cap  = effectiveCap(cat);
-          // Show cap label: if category has no configured max, show user cap as the limit
+          const val      = catRows[cat.id]?.value ?? "0";
+          const err      = catErrors[cat.id];
+          const disc     = catDiscAmts[cat.id] ?? 0;
+          const cap      = effectiveCap(cat);
+          const isLocked = billDiscActive || !cat.allow_discount;
           const capLabel = !cat.allow_discount
             ? "No discount"
             : discMode === "pct"
@@ -434,24 +448,20 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
           return (
             <div key={cat.id} className="flex items-center gap-2 flex-wrap">
               {/* Category name */}
-              <span className="text-[10px] font-bold text-foreground w-28 truncate shrink-0" title={cat.name}>
+              <span className="text-xs font-bold text-foreground w-28 truncate shrink-0" title={cat.name}>
                 {cat.name}
               </span>
               {/* Category total */}
-              <span className="text-[10px] tabular-nums text-muted-foreground w-16 text-right shrink-0">
+              <span className="text-xs tabular-nums text-muted-foreground w-16 text-right shrink-0">
                 ₹{fmtAmount(cat.total)}
               </span>
               {/* Cap badge */}
-              <span className="text-[9px] text-muted-foreground/70 shrink-0 w-20">{capLabel}</span>
-              {/* Auto badge — shown when auto_discount > 0 */}
-              {cat.auto_discount > 0 && (
-                <span className="text-[9px] text-blue-500 shrink-0">Auto:{cat.auto_discount}%</span>
-              )}
+              <span className="text-[10px] text-muted-foreground/70 shrink-0 w-20">{capLabel}</span>
               {/* Discount input */}
               <input
                 inputMode="decimal"
                 value={val}
-                disabled={!cat.allow_discount}
+                disabled={isLocked}
                 onChange={(e) => {
                   const v = sanitizeNum(e.target.value);
                   setCatRows((prev) => ({ ...prev, [cat.id]: { value: v } }));
@@ -460,54 +470,44 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   e.preventDefault();
-                  // Focus next category input or misc field
                   const next = categories[idx + 1];
-                  if (next) {
-                    document.querySelector(`[data-cat-input="${next.id}"]`)?.focus();
-                  } else {
-                    miscRef.current?.focus();
-                  }
+                  if (next) document.querySelector(`[data-cat-input="${next.id}"]`)?.focus();
+                  else handleSave();
                 }}
                 data-cat-input={cat.id}
                 className={[
-                  "w-20 h-7 rounded border text-xs text-right tabular-nums px-2",
+                  "w-20 h-8 rounded border text-sm text-right tabular-nums px-2",
                   "focus:outline-none focus:ring-1 focus:border-primary",
-                  !cat.allow_discount
+                  isLocked
                     ? "bg-muted/10 border-border/20 text-muted-foreground cursor-not-allowed"
                     : err
                       ? "border-destructive bg-destructive/5 focus:ring-destructive text-foreground"
                       : "bg-muted/30 border-border/60 focus:ring-primary text-foreground",
                 ].join(" ")}
               />
-              <span className="text-[10px] text-muted-foreground shrink-0">
+              <span className="text-xs text-muted-foreground shrink-0">
                 {discMode === "pct" ? "%" : "₹"}
               </span>
               {/* Derived discount amount */}
-              {disc > 0 && !err && (
-                <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400 shrink-0">
+              {disc > 0 && !err && !billDiscActive && (
+                <span className="text-xs tabular-nums text-emerald-600 dark:text-emerald-400 shrink-0">
                   −₹{fmtAmount(disc)}
                 </span>
               )}
               {/* Inline error */}
-              {err && (
-                <span className="text-[10px] text-destructive font-medium shrink-0">{err}</span>
+              {err && !billDiscActive && (
+                <span className="text-xs text-destructive font-medium shrink-0">{err}</span>
               )}
             </div>
           );
         })}
       </div>
 
-      {/* ── Misc / service charge row ── */}
+      {/* ── Footer: net total + action buttons ── */}
       <div className="flex items-center gap-2.5 flex-wrap border-t border-border/30 pt-1.5">
-        <DiscField label="+ Misc :"    value={misc}      inputRef={miscRef}    onChange={setMisc}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); minusRef.current?.focus(); } }} />
-        <DiscField label="- Misc :"    value={miscMinus} inputRef={minusRef}   onChange={setMiscMinus}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sChargeRef.current?.focus(); } }} />
-        <DiscField label="+ Svc Chg :" value={sCharge}   inputRef={sChargeRef} onChange={setSCharge}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }} />
         <DiscField label="Net Amt :" value={fmtAmount(net)} readOnly />
         {(totalCatDisc > 0 || billDiscAmt > 0) && (
-          <span className="text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
+          <span className="text-xs tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
             Total Disc: −₹{fmtAmount(r2(totalCatDisc + billDiscAmt))}
           </span>
         )}
@@ -532,8 +532,7 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
                 reset[cat.id] = { value: discMode === "pct" ? String(cat.auto_discount ?? 0) : "0" };
               }
               setCatRows(reset);
-              setBillDiscPct("0");
-              setMisc("0"); setMiscMinus("0"); setSCharge("0");
+              setBillDiscVal("0");
             }}
             className="h-8 px-4 text-xs"
           >
@@ -560,8 +559,9 @@ export default function BottomActionBar({
   sessionDisc, onDiscountChange,
 }) {
   const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
-  const generateKot  = useGenerateKot(sessionId);
-  const generateBill = useGenerateBill(sessionId);
+  const generateKot      = useGenerateKot(sessionId);
+  const generateCheckKot = useGenerateCheckKot(sessionId);
+  const generateBill     = useGenerateBill(sessionId);
   const [panelMode, setPanelMode] = useState(BOTTOM_PANEL_MODE.BILLING);
 
   // ── Derived state ─────────────────────────────────────────
@@ -576,13 +576,14 @@ export default function BottomActionBar({
   const hasSentItems = sentItems.length > 0;
   const billTotals   = calcBillTotals(sentItems);
 
-  const canKot    = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
+  const canKot         = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
   // Bill+Print is enabled as long as there is at least one KOT-sent item — pending items are excluded from the bill automatically
-  const canBill   = !isDraft && hasSentItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
-  const canSettle = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
-  const kotPending = isDraft ? isKotting : generateKot.isPending;
+  const canBill        = !isDraft && hasSentItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
+  const canSettle      = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
+  const kotPending     = isDraft ? isKotting : generateKot.isPending;
+  const checkKotPending = isDraft ? isKotting : generateCheckKot.isPending;
   // Hold is only meaningful in draft mode. When restored from hold, always enable (to release).
-  const canHold   = isDraft && (activeItems.length > 0 || isRestoredFromHold);
+  const canHold        = isDraft && (activeItems.length > 0 || isRestoredFromHold);
 
   // Persist UI-held KOT messages for existing pending items into the DB
   async function flushPendingKotMsgs() {
@@ -604,7 +605,7 @@ export default function BottomActionBar({
     }
     if (isDraft) { onKotDraft(); return; }
     try {
-      await flushPendingKotMsgs();   // save KOT messages before sending to kitchen
+      await flushPendingKotMsgs();
     } catch (e) {
       toast.error(String(e));
       return;
@@ -612,6 +613,22 @@ export default function BottomActionBar({
     generateKot.mutate({}, { onSuccess: clearSession });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNearReservation, isDraft, onKotDraft, generateKot, clearSession, pendingItemKotMsgs]);
+
+  const handleCheckKot = useCallback(async () => {
+    if (isNearReservation) {
+      toast.error("This table has an upcoming reservation. KOT cannot be created before reservation time.");
+      return;
+    }
+    if (isDraft) { onKotDraft(); return; }
+    try {
+      await flushPendingKotMsgs();
+    } catch (e) {
+      toast.error(String(e));
+      return;
+    }
+    generateCheckKot.mutate({ remarks: "Check KOT" }, { onSuccess: clearSession });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNearReservation, isDraft, onKotDraft, generateCheckKot, clearSession, pendingItemKotMsgs]);
 
   const handleBill = useCallback(() => {
     if (pendingKot > 0) {
@@ -633,7 +650,7 @@ export default function BottomActionBar({
 
   // ── Ref: always holds the LATEST values without stale closure ─
   const live = useRef({});
-  live.current = { canKot, kotPending, canBill, billPending: generateBill.isPending, canSettle, canHold, onHold, panelMode, settleDialogOpen, handleKot, handleBill, handleSettle, switchMode };
+  live.current = { canKot, kotPending, checkKotPending, canBill, billPending: generateBill.isPending, canSettle, canHold, onHold, panelMode, settleDialogOpen, handleKot, handleCheckKot, handleBill, handleSettle, switchMode, isClosed };
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
@@ -662,11 +679,13 @@ export default function BottomActionBar({
 
       switch (e.key) {
         case "Home":
+          if (cur.canKot && !cur.checkKotPending) cur.handleCheckKot();
+          break;
         case "+":
           if (cur.canKot && !cur.kotPending) cur.handleKot();
           break;
         case "/":
-          setPanelMode(BOTTOM_PANEL_MODE.DISCOUNT);
+          if (!cur.isClosed) setPanelMode(BOTTOM_PANEL_MODE.DISCOUNT);
           break;
         case "F2":
           if (cur.canHold && cur.onHold) cur.onHold();
@@ -702,18 +721,21 @@ export default function BottomActionBar({
           <BillingModePanel
             canKot={canKot}
             kotPending={kotPending}
+            checkKotPending={checkKotPending}
             canBill={canBill}
             billPending={generateBill.isPending}
             canSettle={canSettle}
             netAmount={netAmount}
             pendingKot={pendingKot}
             onKot={handleKot}
+            onCheckKot={handleCheckKot}
             onBill={handleBill}
             onSettle={handleSettle}
             onSwitchMode={switchMode}
             onHold={onHold}
             canHold={canHold}
             isRestoredFromHold={isRestoredFromHold}
+            isClosed={isClosed}
           />
         )}
 

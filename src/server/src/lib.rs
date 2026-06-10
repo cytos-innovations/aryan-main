@@ -175,6 +175,7 @@ use bill::{
     // Table shift / item transfer
     shift_table_full,
     transfer_order_items,
+    transfer_order_items_with_qty,
     // Bill & payment
     get_bill_summary,
     generate_bill,
@@ -2209,6 +2210,7 @@ pub fn run() {
             // Billing — table shift / item transfer
             shift_table_full,
             transfer_order_items,
+            transfer_order_items_with_qty,
             // Billing — bill & payment
             get_bill_summary,
             generate_bill,

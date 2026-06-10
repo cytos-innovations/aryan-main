@@ -9,7 +9,6 @@ import {
 } from "@hugeicons/core-free-icons";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -23,7 +22,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-import { useOrderItems, useShiftTable, useTransferItems } from "../hooks/use-billing-queries";
+import { useOrderItems, useShiftTable, useTransferItemsWithQty } from "../hooks/use-billing-queries";
 
 // Visual status label + dot for a running session
 const STATUS_LABEL = {
@@ -42,7 +41,7 @@ const STATUS_DOT = {
 // Trigger button + popover with a search box (name / code) and a
 // scrollable, filterable option list.
 
-function TablePicker({ value, onChange, options, placeholder, disabled, emptyText }) {
+function TablePicker({ value, onChange, options, placeholder, disabled, emptyText, triggerRef, onEnter }) {
   const [open, setOpen]       = useState(false);
   const [q, setQ]             = useState("");
   const [cursor, setCursor]   = useState(-1);
@@ -90,6 +89,10 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
       if (cursor >= 0 && filtered[cursor]) {
         onChange(filtered[cursor].value);
         setOpen(false);
+        onEnter?.();
+      } else if (value != null) {
+        setOpen(false);
+        onEnter?.();
       }
     } else if (e.key === "Escape") {
       setOpen(false);
@@ -102,6 +105,7 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
         <button
+          ref={triggerRef}
           type="button"
           className={[
             "flex h-11 w-full items-center gap-2.5 rounded-lg border bg-card px-3 text-left text-sm transition-colors",
@@ -202,10 +206,13 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
   const [sourceSessionId, setSourceSessionId] = useState(null);
   const [targetTableId,   setTargetTableId]   = useState(null);
   const [mode,            setMode]            = useState("all"); // "all" | "select"
-  const [selectedIds,     setSelectedIds]     = useState(() => new Set());
+  // Map<itemId, qty> — qty is how many units to move (defaults to full qty when checked)
+  const [selectedQtys,    setSelectedQtys]    = useState(() => new Map());
+
+  const destPickerRef = useRef(null);
 
   const shiftMut    = useShiftTable();
-  const transferMut = useTransferItems();
+  const transferMut = useTransferItemsWithQty();
   const busy = shiftMut.isPending || transferMut.isPending;
 
   // Running tables that can be a source
@@ -266,13 +273,13 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
       setSourceSessionId(defaultSessionId ?? null);
       setTargetTableId(null);
       setMode("all");
-      setSelectedIds(new Set());
+      setSelectedQtys(new Map());
     }
   }, [open, defaultSessionId]);
 
   // Reset item selection when the source or mode changes — but keep the
   // chosen destination across mode switches.
-  useEffect(() => { setSelectedIds(new Set()); }, [sourceSessionId, mode]);
+  useEffect(() => { setSelectedQtys(new Map()); }, [sourceSessionId, mode]);
 
   // Drop the destination only if it is no longer an eligible option
   // (e.g. switching back to "All items" after picking a busy table).
@@ -282,18 +289,38 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
     }
   }, [destOptions, targetTableId]);
 
-  function toggleItem(id) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+  function toggleItem(item) {
+    setSelectedQtys((prev) => {
+      const next = new Map(prev);
+      if (next.has(item.id)) {
+        next.delete(item.id);
+      } else {
+        next.set(item.id, item.quantity ?? 1);
+      }
       return next;
     });
   }
 
-  const selectedTotal = useMemo(
-    () => activeItems.filter((i) => selectedIds.has(i.id)).reduce((s, i) => s + (i.final_amount ?? 0), 0),
-    [activeItems, selectedIds],
-  );
+  function setItemQty(itemId, fullQty, val) {
+    const parsed = parseFloat(val);
+    if (Number.isNaN(parsed) || parsed <= 0) return;
+    const clamped = Math.min(parsed, fullQty);
+    setSelectedQtys((prev) => {
+      const next = new Map(prev);
+      next.set(itemId, clamped);
+      return next;
+    });
+  }
+
+  const selectedTotal = useMemo(() => {
+    return activeItems.reduce((s, item) => {
+      if (!selectedQtys.has(item.id)) return s;
+      const moveQty  = selectedQtys.get(item.id);
+      const fullQty  = item.quantity ?? 1;
+      const ratio    = moveQty / fullQty;
+      return s + (item.final_amount ?? 0) * ratio;
+    }, 0);
+  }, [activeItems, selectedQtys]);
 
   // Validation
   const sameTable = sourceTable && targetTableId === sourceTable.id;
@@ -303,10 +330,8 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
     targetTableId != null &&
     !sameTable &&
     (mode === "all"
-      // Full shift onto a free table needs nothing extra; merging all items
-      // into a running table needs at least one item to move.
       ? (!destRunning || activeItems.length > 0)
-      : selectedIds.size > 0);
+      : selectedQtys.size > 0);
 
   function handleSubmit() {
     if (!canSubmit) return;
@@ -318,10 +343,14 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
       return;
     }
 
-    // Otherwise transfer items: all of them (All items → running table merge)
-    // or just the picked ones (Select items).
-    const itemIds = mode === "all" ? activeItems.map((i) => i.id) : [...selectedIds];
-    transferMut.mutate({ sourceSessionId, targetTableId, itemIds }, close);
+    // Build items array with qty for the new command
+    const items = mode === "all"
+      ? activeItems.map((i) => ({ item_id: i.id, qty: i.quantity ?? 1 }))
+      : activeItems
+          .filter((i) => selectedQtys.has(i.id))
+          .map((i) => ({ item_id: i.id, qty: selectedQtys.get(i.id) }));
+
+    transferMut.mutate({ sourceSessionId, targetTableId, items }, close);
   }
 
   return (
@@ -344,6 +373,7 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
               options={sourceOptions}
               placeholder="Choose a running table…"
               emptyText="No running tables."
+              onEnter={() => destPickerRef.current?.focus()}
             />
           </div>
 
@@ -357,6 +387,7 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
               placeholder="Choose a destination…"
               emptyText="No eligible tables."
               disabled={sourceSessionId == null}
+              triggerRef={destPickerRef}
             />
           </div>
 
@@ -393,21 +424,55 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
               <div className="text-xs text-muted-foreground text-center py-3">No active items.</div>
             ) : (
               <div className="rounded-lg border divide-y max-h-56 overflow-y-auto">
-                {activeItems.map((item) => (
-                  <button
-                    type="button"
-                    key={item.id}
-                    onClick={() => toggleItem(item.id)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-muted/50"
-                  >
-                    <Checkbox checked={selectedIds.has(item.id)} className="pointer-events-none" />
-                    <span className="flex-1 text-sm truncate">{item.item_name}</span>
-                    <span className="text-xs text-muted-foreground tabular-nums">x{item.quantity}</span>
-                    <span className="text-xs font-medium tabular-nums w-16 text-right">
-                      ₹{(item.final_amount ?? 0).toFixed(2)}
-                    </span>
-                  </button>
-                ))}
+                {activeItems.map((item) => {
+                  const isChecked = selectedQtys.has(item.id);
+                  const fullQty   = item.quantity ?? 1;
+                  const moveQty   = selectedQtys.get(item.id) ?? fullQty;
+                  return (
+                    <div key={item.id} className="flex items-center gap-2.5 px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleItem(item)}
+                        className="flex items-center gap-2.5 flex-1 min-w-0 text-left hover:bg-muted/50 rounded"
+                      >
+                        <Checkbox checked={isChecked} className="pointer-events-none shrink-0" />
+                        <span className="flex-1 text-sm truncate">{item.item_name}</span>
+                      </button>
+
+                      {isChecked && fullQty > 1 ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setItemQty(item.id, fullQty, moveQty - 1)}
+                            className="size-5 rounded flex items-center justify-center text-muted-foreground hover:bg-muted text-base leading-none"
+                          >−</button>
+                          <input
+                            type="number"
+                            min={1}
+                            max={fullQty}
+                            step={1}
+                            value={moveQty}
+                            onChange={(e) => setItemQty(item.id, fullQty, e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-10 text-center text-xs tabular-nums bg-muted rounded border-0 outline-none focus:ring-1 focus:ring-ring py-0.5"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setItemQty(item.id, fullQty, moveQty + 1)}
+                            className="size-5 rounded flex items-center justify-center text-muted-foreground hover:bg-muted text-base leading-none"
+                          >+</button>
+                          <span className="text-[10px] text-muted-foreground">/{fullQty}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground tabular-nums shrink-0">x{fullQty}</span>
+                      )}
+
+                      <span className="text-xs font-medium tabular-nums w-16 text-right shrink-0">
+                        ₹{((item.final_amount ?? 0) * (isChecked ? moveQty / fullQty : 1)).toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )
           )}
@@ -420,9 +485,9 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
                 : "Everything — items, KOTs, occupied time and state — moves to the destination. The source table becomes free."}
             </p>
           ) : (
-            selectedIds.size > 0 && (
+            selectedQtys.size > 0 && (
               <p className="text-[11px] text-muted-foreground">
-                Moving {selectedIds.size} of {activeItems.length} items · ₹{selectedTotal.toFixed(2)}
+                Moving {selectedQtys.size} of {activeItems.length} items · ₹{selectedTotal.toFixed(2)}
               </p>
             )
           )}
