@@ -7,29 +7,16 @@ import { Input } from "@/components/ui/input";
 import { selectItemRate } from "../utils/billing-calc";
 import { FoodTypeDot } from "./menu-center";
 
-// ─────────────────────────────────────────────────────────────
-// Add-on selection dialog.
-//
-// Used in two ways:
-//   • On add — when an item has pre-defined add-ons.
-//   • On clicking an existing order line's name — to edit that line's add-ons.
-//
-// The cashier can: tick the item's suggested add-ons, search ALL add-on master
-// items, or type a CUSTOM add-on (name + price). Custom add-ons are saved to the
-// add-on master (via onCreateCustom) so they're reusable, but they only apply to
-// THIS session line — nothing is permanently attached to the menu item.
-// ─────────────────────────────────────────────────────────────
-
 export default function AddonDialog({
   item,
+  mode = "add",   // "add" = from menu grid | "edit" = clicked existing item name
   applicableRate,
-  allAddons = [],          // every is_addon master item (for search)
-  initialSelected = [],    // [{ menuId, name, rate }] — preselected (edit mode)
-  onConfirm,               // (chosen[]) => void
-  onCreateCustom,          // async ({ name, rate }) => { menuId, name, rate }
+  allAddons = [],
+  initialSelected = [],
+  onConfirm,
+  onCreateCustom,
   onClose,
 }) {
-  // Suggested add-ons = the ones pre-linked to this item, resolved to a rate.
   const suggested = useMemo(
     () =>
       (item?.addons ?? []).map((a) => ({
@@ -40,26 +27,34 @@ export default function AddonDialog({
     [item, applicableRate],
   );
 
-  // selectedMap: menuId → { menuId, name, rate }
   const [selectedMap, setSelectedMap] = useState(() => new Map());
-  const [query, setQuery] = useState("");
+  const [query, setQuery]             = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [customName, setCustomName] = useState("");
-  const [customRate, setCustomRate] = useState("");
-  const [creating, setCreating] = useState(false);
-  const searchRef = useRef(null);
-  const dropdownRef = useRef(null);
+  const [activeIdx, setActiveIdx]     = useState(0);
+  const [customName, setCustomName]   = useState("");
+  const [customRate, setCustomRate]   = useState("");
+  const [creating, setCreating]       = useState(false);
 
-  // Reset selection whenever the dialog opens for a different item/line.
+  // focusable row index within the suggested/added list (-1 = none focused)
+  const [rowFocus, setRowFocus]       = useState(-1);
+
+  const searchRef      = useRef(null);
+  const dropdownRef    = useRef(null);
+  const customNameRef  = useRef(null);
+  const customRateRef  = useRef(null);
+  const applyBtnRef    = useRef(null);
+  // refs for suggested + added rows (rebuilt each render)
+  const rowRefs        = useRef([]);
+
+  // Reset whenever dialog opens for a different item/line.
   useEffect(() => {
     const m = new Map();
     for (const a of initialSelected) m.set(a.menuId, a);
     setSelectedMap(m);
     setQuery(""); setCustomName(""); setCustomRate("");
-    setDropdownOpen(false); setActiveIdx(0);
+    setDropdownOpen(false); setActiveIdx(0); setRowFocus(-1);
     setTimeout(() => searchRef.current?.focus(), 60);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item]);
 
   // Close dropdown when clicking outside the search area.
@@ -71,47 +66,145 @@ export default function AddonDialog({
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
+  // Focus the row element whenever rowFocus changes (setTimeout lets the DOM settle first).
+  useEffect(() => {
+    if (rowFocus >= 0) setTimeout(() => rowRefs.current[rowFocus]?.focus(), 0);
+  }, [rowFocus]);
+
   const baseRate   = selectItemRate(item, applicableRate);
   const addonTotal = [...selectedMap.values()].reduce((s, a) => s + (Number(a.rate) || 0), 0);
   const lineRate   = Math.round((baseRate + addonTotal) * 100) / 100;
 
-  // Resolve a master add-on's rate at the table's applicable rate.
   function masterRate(a) { return selectItemRate(a, applicableRate); }
 
-  // Dropdown results from the full add-on master (excludes already-selected).
-  // Empty query → show ALL available add-ons; otherwise filter by name.
   const searchResults = useMemo(() => {
+    const available = allAddons.filter((a) => !selectedMap.has(a.menu_id));
     const q = query.trim().toLowerCase();
-    return allAddons.filter(
-      (a) => !selectedMap.has(a.menu_id) && (!q || a.name.toLowerCase().includes(q)),
-    );
+    if (!q) return available;
+
+    const initials = q.replace(/\s+/g, "");
+    function matchesInitials(name) {
+      const words = name.toLowerCase().split(/\s+/).filter(Boolean);
+      return words.map((w) => w[0]).join("").startsWith(initials);
+    }
+
+    const results = available.filter((a) => {
+      const name = (a.name ?? "").toLowerCase();
+      const code = String(a.code ?? a.menu_id ?? "");
+      return name.includes(q) || code.includes(q) || matchesInitials(a.name ?? "");
+    });
+
+    results.sort((a, b) => {
+      const score = (i) => {
+        const name = (i.name ?? "").toLowerCase();
+        const code = String(i.code ?? i.menu_id ?? "").toLowerCase();
+        if (code === q)                    return 0;
+        if (name.startsWith(q))            return 1;
+        if (matchesInitials(i.name ?? "")) return 2;
+        return 3;
+      };
+      return score(a) - score(b);
+    });
+
+    return results;
   }, [query, allAddons, selectedMap]);
 
-  // Keep the active index in range as the list changes.
   useEffect(() => { setActiveIdx(0); }, [query, dropdownOpen]);
 
-  // Scroll the active option into view.
   useEffect(() => {
     if (!dropdownOpen) return;
     const list = dropdownRef.current?.querySelector("[data-addon-list]");
     list?.children[activeIdx]?.scrollIntoView({ block: "nearest" });
   }, [activeIdx, dropdownOpen]);
 
+  // All togglable rows in order: suggested first, then extras (Added section).
+  // We build the same list as the JSX renders to keep indices in sync.
+  const suggestedIds = useMemo(() => new Set(suggested.map((s) => s.menuId)), [suggested]);
+  const extraRows    = useMemo(
+    () => [...selectedMap.values()].filter((a) => !suggestedIds.has(a.menuId)),
+    [selectedMap, suggestedIds],
+  );
+  const allRows = useMemo(() => [...suggested, ...extraRows], [suggested, extraRows]);
+
   function onSearchKeyDown(e) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setDropdownOpen(true);
-      setActiveIdx((i) => Math.min(i + 1, searchResults.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIdx((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (dropdownOpen && searchResults[activeIdx]) addFromMaster(searchResults[activeIdx]);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setDropdownOpen(false);
+      if (query.trim()) {
+        setDropdownOpen(true);
+        setActiveIdx((i) => Math.min(i + 1, searchResults.length - 1));
+      } else if (allRows.length > 0) {
+        // no query → navigate into suggested/added rows
+        setRowFocus(-1);
+        setTimeout(() => setRowFocus(0), 0);
+      }
+      return;
     }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (dropdownOpen) setActiveIdx((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      // Dropdown open + has result → pick it
+      if (dropdownOpen && searchResults[activeIdx]) { addFromMaster(searchResults[activeIdx]); return; }
+      if (!query.trim()) {
+        if (mode === "add") {
+          // Add mode: Enter = focus the Apply/No add-ons button (second Enter confirms)
+          applyBtnRef.current?.focus();
+        } else {
+          // Edit mode: Enter = go to custom name
+          customNameRef.current?.focus();
+        }
+      }
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); setDropdownOpen(false); }
+  }
+
+  function onRowKeyDown(e, idx) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      toggleByIndex(idx);
+      // move to next row; after last suggested row go to custom name
+      const nextIdx = idx + 1;
+      if (nextIdx < allRows.length) {
+        setRowFocus(-1);
+        setTimeout(() => setRowFocus(nextIdx), 0);
+      } else {
+        customNameRef.current?.focus();
+      }
+      return;
+    }
+    if (e.key === " ") {
+      e.preventDefault();
+      toggleByIndex(idx);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (idx < allRows.length - 1) { setRowFocus(-1); setTimeout(() => setRowFocus(idx + 1), 0); }
+      else customNameRef.current?.focus();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (idx > 0) { setRowFocus(-1); setTimeout(() => setRowFocus(idx - 1), 0); }
+      else searchRef.current?.focus();
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); searchRef.current?.focus(); }
+  }
+
+  function toggleByIndex(idx) {
+    const a = allRows[idx];
+    if (!a) return;
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
+      if (next.has(a.menuId)) next.delete(a.menuId);
+      else next.set(a.menuId, a);
+      return next;
+    });
   }
 
   function toggle(a) {
@@ -128,8 +221,26 @@ export default function AddonDialog({
     setSelectedMap((prev) => new Map(prev).set(entry.menuId, entry));
     setQuery("");
     setActiveIdx(0);
-    setDropdownOpen(true); // keep the list open so more add-ons can be picked
+    setDropdownOpen(false);
     searchRef.current?.focus();
+  }
+
+  function onCustomNameKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (customName.trim()) { customRateRef.current?.focus(); return; }
+      // Empty name → go straight to Apply
+      applyBtnRef.current?.focus();
+    }
+    if (e.key === "ArrowUp") { e.preventDefault(); searchRef.current?.focus(); }
+  }
+
+  function onCustomRateKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (customName.trim()) { handleAddCustom().then(() => applyBtnRef.current?.focus()); return; }
+      applyBtnRef.current?.focus();
+    }
   }
 
   async function handleAddCustom() {
@@ -139,7 +250,7 @@ export default function AddonDialog({
     if (!onCreateCustom) return;
     setCreating(true);
     try {
-      const created = await onCreateCustom({ name, rate }); // { menuId, name, rate }
+      const created = await onCreateCustom({ name, rate });
       setSelectedMap((prev) => new Map(prev).set(created.menuId, {
         menuId: created.menuId, name: created.name, rate: created.rate,
       }));
@@ -151,13 +262,8 @@ export default function AddonDialog({
     }
   }
 
-  function handleConfirm() {
-    onConfirm([...selectedMap.values()]);
-  }
-
-  function handleKey(e) {
-    if (e.key === "Escape") onClose();
-  }
+  function handleConfirm() { onConfirm([...selectedMap.values()]); }
+  function handleKey(e) { if (e.key === "Escape") onClose(); }
 
   return (
     <div
@@ -181,7 +287,7 @@ export default function AddonDialog({
         </div>
 
         <div className="px-3 py-2.5 max-h-[60vh] overflow-y-auto space-y-2.5">
-          {/* Search box — opens the full add-on list on focus */}
+          {/* Search */}
           <div className="relative" ref={dropdownRef}>
             <HugeiconsIcon
               icon={Search01Icon} size={13} strokeWidth={2}
@@ -190,8 +296,7 @@ export default function AddonDialog({
             <Input
               ref={searchRef}
               value={query}
-              onChange={(e) => { setQuery(e.target.value); setDropdownOpen(true); }}
-              onFocus={() => setDropdownOpen(true)}
+              onChange={(e) => { setQuery(e.target.value); setDropdownOpen(!!e.target.value.trim()); }}
               onKeyDown={onSearchKeyDown}
               placeholder="Search add-ons…"
               className="h-8 pl-8 text-xs"
@@ -202,9 +307,7 @@ export default function AddonDialog({
                   <p className="px-3 py-2.5 text-xs text-muted-foreground">
                     {allAddons.length === 0
                       ? "No add-ons found. Create one below."
-                      : query.trim()
-                        ? "No matching add-ons."
-                        : "All add-ons already selected."}
+                      : query.trim() ? "No matching add-ons." : "All add-ons already selected."}
                   </p>
                 ) : (
                   <div data-addon-list className="max-h-52 overflow-y-auto">
@@ -233,46 +336,59 @@ export default function AddonDialog({
           {suggested.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Suggested</p>
-              {suggested.map((a) => {
+              {suggested.map((a, i) => {
                 const on = selectedMap.has(a.menuId);
+                const globalIdx = i;
                 return (
-                  <AddonRow key={a.menuId} name={a.name} rate={a.rate} on={on} onClick={() => toggle(a)} />
+                  <AddonRow
+                    key={a.menuId}
+                    rowRef={(el) => { rowRefs.current[globalIdx] = el; }}
+                    name={a.name} rate={a.rate} on={on}
+                    onClick={() => toggle(a)}
+                    onKeyDown={(e) => onRowKeyDown(e, globalIdx)}
+                  />
                 );
               })}
             </div>
           )}
 
-          {/* Selected add-ons not in the suggested list (from search/custom) */}
-          {(() => {
-            const suggestedIds = new Set(suggested.map((s) => s.menuId));
-            const extra = [...selectedMap.values()].filter((a) => !suggestedIds.has(a.menuId));
-            if (extra.length === 0) return null;
-            return (
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Added</p>
-                {extra.map((a) => (
-                  <AddonRow key={a.menuId} name={a.name} rate={a.rate} on onClick={() => toggle(a)} />
-                ))}
-              </div>
-            );
-          })()}
+          {/* Added (from search/custom) */}
+          {extraRows.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Added</p>
+              {extraRows.map((a, i) => {
+                const globalIdx = suggested.length + i;
+                return (
+                  <AddonRow
+                    key={a.menuId}
+                    rowRef={(el) => { rowRefs.current[globalIdx] = el; }}
+                    name={a.name} rate={a.rate} on
+                    onClick={() => toggle(a)}
+                    onKeyDown={(e) => onRowKeyDown(e, globalIdx)}
+                  />
+                );
+              })}
+            </div>
+          )}
 
           {/* Custom add-on */}
           <div className="rounded-lg border border-dashed px-3 py-2.5 space-y-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Custom add-on</p>
             <div className="flex items-center gap-2">
               <Input
+                ref={customNameRef}
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddCustom(); } }}
+                onKeyDown={onCustomNameKeyDown}
                 placeholder="Add-on name"
                 className="h-8 text-xs flex-1"
               />
               <Input
+                ref={customRateRef}
                 type="number" min="0" step="0.01"
                 value={customRate}
                 onChange={(e) => setCustomRate(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddCustom(); } }}
+                onKeyDown={onCustomRateKeyDown}
                 placeholder="₹"
                 className="h-8 text-xs w-20"
               />
@@ -301,7 +417,11 @@ export default function AddonDialog({
             <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-8 px-3 text-xs">
               Cancel
             </Button>
-            <Button type="button" size="sm" onClick={handleConfirm} className="h-8 px-4 text-xs gap-1">
+            <Button
+              ref={applyBtnRef}
+              type="button" size="sm" onClick={handleConfirm}
+              className="h-8 px-4 text-xs gap-1"
+            >
               <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={2.5} />
               {selectedMap.size > 0 ? "Apply" : "No add-ons"}
             </Button>
@@ -312,13 +432,15 @@ export default function AddonDialog({
   );
 }
 
-function AddonRow({ name, rate, on, onClick }) {
+function AddonRow({ rowRef, name, rate, on, onClick, onKeyDown }) {
   return (
     <button
+      ref={rowRef}
       type="button"
       onClick={onClick}
+      onKeyDown={onKeyDown}
       className={[
-        "w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+        "w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
         on ? "border-primary bg-primary/10" : "border-border bg-background hover:bg-muted/50",
       ].join(" ")}
     >

@@ -945,7 +945,7 @@ function BillTotals({ items, sessionDisc, menu }) {
               <div className="pl-2 space-y-0.5">
                 {taxBreakdown.map((t) => (
                   <div key={t.tax_name} className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>{t.tax_name} ({t.tax_percentage}%)</span>
+                    <span>{t.tax_name}</span>
                     <span className="tabular-nums">₹{fmtAmount(t.tax_amount)}</span>
                   </div>
                 ))}

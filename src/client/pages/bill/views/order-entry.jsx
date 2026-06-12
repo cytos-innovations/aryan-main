@@ -695,6 +695,7 @@ export default function OrderEntryView() {
       {addonTarget && (
         <AddonDialog
           item={addonTarget.menuItem}
+          mode={addonTarget.mode}
           applicableRate={applicableRate}
           allAddons={allAddons}
           initialSelected={

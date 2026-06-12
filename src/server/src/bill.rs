@@ -50,6 +50,7 @@ pub struct OrderItemAddon {
 
 /// Payload for a chosen add-on when adding an order item.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AddonInput {
     pub menu_id: i32,
     pub rate:    f64,
