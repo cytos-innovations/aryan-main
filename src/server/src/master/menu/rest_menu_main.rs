@@ -29,12 +29,21 @@ pub struct MenuCardRow {
     pub excise_rate: f64,
     pub comments: Option<String>,
     pub is_active: bool,
+    pub is_addon: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct PagedMenuCards {
     pub data: Vec<MenuCardRow>,
     pub total: i64,
+}
+
+/// A menu item that is flagged as an add-on (for the add-on picker).
+#[derive(Debug, Serialize)]
+pub struct AddonItemSimple {
+    pub id: i32,
+    pub name: String,
+    pub rate_1: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +132,7 @@ pub async fn get_menu_cards(
                          CAST(mc.rate_5 AS FLOAT8) AS rate_5, \
                          CAST(mc.consume_quantity AS FLOAT8) AS consume_quantity, \
                          CAST(mc.excise_rate AS FLOAT8) AS excise_rate, \
-                         mc.comments, mc.is_active \
+                         mc.comments, mc.is_active, mc.is_addon \
                   FROM menu_card mc \
                   LEFT JOIN menu_group mg ON mg.id = mc.menu_group_id \
                   LEFT JOIN food_type ft ON ft.id = mc.food_type_id";
@@ -201,6 +210,7 @@ pub async fn get_menu_cards(
             excise_rate: r.try_get::<f64, _>("excise_rate").unwrap_or(0.0),
             comments: r.try_get("comments").ok().flatten(),
             is_active: r.try_get("is_active").unwrap_or(true),
+            is_addon: r.try_get("is_addon").unwrap_or(false),
         })
         .collect();
 
@@ -227,7 +237,10 @@ pub async fn create_menu_card(
     consume_quantity: f64,
     excise_rate: f64,
     comments: Option<String>,
+    is_addon: Option<bool>,
+    addon_ids: Option<Vec<i32>>,
 ) -> Result<i32, String> {
+    let is_addon = is_addon.unwrap_or(false);
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".to_string());
@@ -262,8 +275,8 @@ pub async fn create_menu_card(
              (code, name, menu_group_id, food_type_id, item_barcode, menu_alias, \
               kitchen_section_id, liquor_group_id, \
               rate_1, rate_2, rate_3, rate_4, rate_5, \
-              consume_quantity, excise_rate, comments) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+              consume_quantity, excise_rate, comments, is_addon) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              RETURNING id",
         )
         .bind(c)
@@ -282,6 +295,7 @@ pub async fn create_menu_card(
         .bind(consume_quantity)
         .bind(excise_rate)
         .bind(cmts)
+        .bind(is_addon)
         .fetch_one(&pool)
         .await
         .map_err(map_err)?
@@ -291,8 +305,8 @@ pub async fn create_menu_card(
              (name, menu_group_id, food_type_id, item_barcode, menu_alias, \
               kitchen_section_id, liquor_group_id, \
               rate_1, rate_2, rate_3, rate_4, rate_5, \
-              consume_quantity, excise_rate, comments) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+              consume_quantity, excise_rate, comments, is_addon) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              RETURNING id",
         )
         .bind(&name)
@@ -310,12 +324,46 @@ pub async fn create_menu_card(
         .bind(consume_quantity)
         .bind(excise_rate)
         .bind(cmts)
+        .bind(is_addon)
         .fetch_one(&pool)
         .await
         .map_err(map_err)?
     };
 
+    // Save which add-ons this item offers (skip for items that are themselves add-ons)
+    if !is_addon {
+        replace_menu_item_addons(&pool, new_id, &addon_ids.unwrap_or_default()).await?;
+    }
+
     Ok(new_id)
+}
+
+/// Replace all add-on links for a parent menu item (delete + reinsert).
+async fn replace_menu_item_addons(
+    pool: &sqlx::PgPool,
+    menu_card_id: i32,
+    addon_ids: &[i32],
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM menu_item_addon WHERE menu_card_id = $1")
+        .bind(menu_card_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear add-on links: {e}"))?;
+
+    for &addon_id in addon_ids {
+        if addon_id == menu_card_id { continue; } // can't add itself
+        sqlx::query(
+            "INSERT INTO menu_item_addon (menu_card_id, addon_card_id, is_active) \
+             VALUES ($1, $2, 1) \
+             ON CONFLICT (menu_card_id, addon_card_id) DO NOTHING",
+        )
+        .bind(menu_card_id)
+        .bind(addon_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to save add-on link: {e}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -338,7 +386,10 @@ pub async fn update_menu_card(
     consume_quantity: f64,
     excise_rate: f64,
     comments: Option<String>,
+    is_addon: Option<bool>,
+    addon_ids: Option<Vec<i32>>,
 ) -> Result<(), String> {
+    let is_addon = is_addon.unwrap_or(false);
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Name is required".to_string());
@@ -363,8 +414,8 @@ pub async fn update_menu_card(
          name = $1, menu_group_id = $2, food_type_id = $3, item_barcode = $4, \
          menu_alias = $5, kitchen_section_id = $6, liquor_group_id = $7, \
          rate_1 = $8, rate_2 = $9, rate_3 = $10, rate_4 = $11, rate_5 = $12, \
-         consume_quantity = $13, excise_rate = $14, comments = $15, \
-         updated_at = NOW() WHERE id = $16",
+         consume_quantity = $13, excise_rate = $14, comments = $15, is_addon = $16, \
+         updated_at = NOW() WHERE id = $17",
     )
     .bind(&name)
     .bind(menu_group_id)
@@ -381,6 +432,7 @@ pub async fn update_menu_card(
     .bind(consume_quantity)
     .bind(excise_rate)
     .bind(cmts)
+    .bind(is_addon)
     .bind(id)
     .execute(&pool)
     .await
@@ -393,7 +445,57 @@ pub async fn update_menu_card(
         }
     })?;
 
+    // An item that is itself an add-on cannot offer add-ons → clear any links.
+    let links: Vec<i32> = if is_addon { vec![] } else { addon_ids.unwrap_or_default() };
+    replace_menu_item_addons(&pool, id, &links).await?;
+
     Ok(())
+}
+
+/// List all menu items flagged as add-ons (for the picker in the menu card form).
+#[tauri::command]
+pub async fn get_addon_items(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AddonItemSimple>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, name, CAST(rate_1 AS FLOAT8) AS rate_1 \
+         FROM menu_card \
+         WHERE is_addon = TRUE AND is_active = TRUE \
+         ORDER BY name ASC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch add-on items: {e}"))?;
+
+    Ok(rows.iter().map(|r| AddonItemSimple {
+        id:     r.try_get("id").unwrap_or(0),
+        name:   r.try_get("name").unwrap_or_default(),
+        rate_1: r.try_get::<f64, _>("rate_1").unwrap_or(0.0),
+    }).collect())
+}
+
+/// Get the add-on ids currently linked to a parent menu item (for the edit form).
+#[tauri::command]
+pub async fn get_menu_card_addons(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    menu_card_id: i32,
+) -> Result<Vec<i32>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT addon_card_id FROM menu_item_addon \
+         WHERE menu_card_id = $1 AND is_active = 1 ORDER BY addon_card_id",
+    )
+    .bind(menu_card_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch add-on links: {e}"))?;
+
+    Ok(rows.iter().map(|r| r.try_get("addon_card_id").unwrap_or(0)).collect())
 }
 
 #[tauri::command]

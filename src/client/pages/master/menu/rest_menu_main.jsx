@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, PencilEdit01Icon, Delete01Icon, FilterHorizontalIcon } from "@hugeicons/core-free-icons";
+import { Add01Icon, PencilEdit01Icon, Delete01Icon, FilterHorizontalIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
 
 import { Can } from "@/lib/auth";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
@@ -40,6 +40,8 @@ const EMPTY = {
   consume_quantity: "0",
   excise_rate: "0",
   comments: "",
+  is_addon: false,
+  addon_ids: [],
 };
 
 function IngredientInput({ value, onChange, placeholder }) {
@@ -201,6 +203,136 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
   );
 }
 
+// Searchable multi-select for add-ons: search to add, list below to remove.
+function AddonPicker({ options, selectedIds, onChange }) {
+  const [query, setQuery]   = useState("");
+  const [open, setOpen]     = useState(false);
+  const [active, setActive] = useState(0);
+  const containerRef        = useRef(null);
+  const listRef             = useRef(null);
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  const selectedItems = useMemo(
+    () => selectedIds.map((id) => options.find((o) => String(o.id) === id)).filter(Boolean),
+    [selectedIds, options],
+  );
+
+  // Only show not-yet-selected options that match the query.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return options.filter(
+      (o) => !selectedSet.has(String(o.id)) && (!q || o.name.toLowerCase().includes(q)),
+    );
+  }, [query, options, selectedSet]);
+
+  useEffect(() => { setActive(0); }, [filtered.length]);
+
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    listRef.current.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  useEffect(() => {
+    function onDown(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  function add(id) {
+    onChange([...selectedIds, String(id)]);
+    setQuery("");
+    setActive(0);
+  }
+  function remove(id) {
+    onChange(selectedIds.filter((x) => x !== String(id)));
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "ArrowDown")    { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter")   { e.preventDefault(); if (filtered[active]) add(filtered[active].id); }
+    else if (e.key === "Escape")  { setOpen(false); }
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* Search box + dropdown */}
+      <div ref={containerRef} className="relative">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          placeholder="Search add-ons to add…"
+          autoComplete="off"
+          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-muted-foreground"
+        />
+        {open && (
+          <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                {options.length === 0
+                  ? "No add-on items yet. Create an item and tick “This item is an Add-on” first."
+                  : "No matching add-ons."}
+              </p>
+            ) : (
+              <div ref={listRef} className="max-h-52 overflow-y-auto">
+                {filtered.map((opt, i) => (
+                  <div
+                    key={opt.id}
+                    onMouseDown={(e) => { e.preventDefault(); add(opt.id); }}
+                    onMouseEnter={() => setActive(i)}
+                    className={[
+                      "flex items-center justify-between cursor-pointer px-3 py-2 text-sm",
+                      i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                    ].join(" ")}
+                  >
+                    <span>{opt.name}</span>
+                    <span className="text-xs text-muted-foreground">+₹{Number(opt.rate_1).toFixed(0)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Selected add-ons list (each removable) */}
+      {selectedItems.length > 0 ? (
+        <div className="space-y-1.5">
+          {selectedItems.map((a) => (
+            <div
+              key={a.id}
+              className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2"
+            >
+              <span className="text-sm font-medium">{a.name}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold tabular-nums text-muted-foreground">
+                  +₹{Number(a.rate_1).toFixed(2)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => remove(a.id)}
+                  className="text-muted-foreground hover:text-destructive transition-colors"
+                  title="Remove add-on"
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground px-1">No add-ons selected for this item.</p>
+      )}
+    </div>
+  );
+}
+
 export default function MenuCardPage() {
   const enterNav = useEnterNav();
   const queryClient = useQueryClient();
@@ -243,6 +375,11 @@ export default function MenuCardPage() {
     queryFn: () => invoke("get_all_units_for_recipe"),
   });
 
+  const addonItemsQuery = useQuery({
+    queryKey: ["addon-items"],
+    queryFn: () => invoke("get_addon_items"),
+  });
+
   const inv = () => queryClient.invalidateQueries({ queryKey: QK });
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -250,6 +387,7 @@ export default function MenuCardPage() {
   const allFoodTypes = foodTypesQuery.data ?? [];
   const allKitchenSections = kitchenSectionsQuery.data ?? [];
   const allUnits = unitsQuery.data ?? [];
+  const allAddonItems = addonItemsQuery.data ?? [];
 
   // Derive selected group (category name + recipe flag)
   const selectedGroup = useMemo(
@@ -276,6 +414,9 @@ export default function MenuCardPage() {
       consumeQuantity: parseFloat(f.consume_quantity) || 0,
       exciseRate: parseFloat(f.excise_rate) || 0,
       comments: f.comments || null,
+      isAddon: !!f.is_addon,
+      // An add-on item cannot itself offer add-ons.
+      addonIds: f.is_addon ? [] : (f.addon_ids ?? []).map(Number),
     };
   }
 
@@ -287,7 +428,12 @@ export default function MenuCardPage() {
       });
       await invoke("save_menu_recipes", { menuId: newId, recipes });
     },
-    onSuccess: () => { toast.success("Menu card created"); inv(); closeDialog(); },
+    onSuccess: () => {
+      toast.success("Menu card created");
+      inv();
+      queryClient.invalidateQueries({ queryKey: ["addon-items"] });
+      closeDialog();
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -296,7 +442,12 @@ export default function MenuCardPage() {
       await invoke("update_menu_card", { id: f.id, ...buildPayload(f) });
       await invoke("save_menu_recipes", { menuId: f.id, recipes });
     },
-    onSuccess: () => { toast.success("Menu card updated"); inv(); closeDialog(); },
+    onSuccess: () => {
+      toast.success("Menu card updated");
+      inv();
+      queryClient.invalidateQueries({ queryKey: ["addon-items"] });
+      closeDialog();
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -336,9 +487,21 @@ export default function MenuCardPage() {
       consume_quantity: String(row.consume_quantity ?? 0),
       excise_rate: String(row.excise_rate ?? 0),
       comments: row.comments ?? "",
+      is_addon: !!row.is_addon,
+      addon_ids: [],
     });
     setRecipeRows([]);
     setDialog({ open: true, mode: "edit", data: row });
+
+    // Load this item's linked add-ons (only relevant for non-add-on items)
+    if (!row.is_addon) {
+      try {
+        const ids = await invoke("get_menu_card_addons", { menuCardId: row.id });
+        setForm((f) => ({ ...f, addon_ids: ids.map(String) }));
+      } catch {
+        /* leave empty */
+      }
+    }
 
     const group = allGroups.find((g) => g.id === row.menu_group_id);
     if (group?.multiple_recipe === "Y") {
@@ -410,7 +573,16 @@ export default function MenuCardPage() {
     {
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Item Name" />,
-      cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium">{row.original.name}</span>
+          {row.original.is_addon && (
+            <span className="text-[10px] font-semibold bg-primary/15 text-primary px-1.5 py-0.5 rounded-full leading-none">
+              ADD-ON
+            </span>
+          )}
+        </div>
+      ),
       meta: { label: "Item Name" },
     },
     {
@@ -654,6 +826,23 @@ export default function MenuCardPage() {
           </DialogHeader>
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
+              {/* Add-on flag — top of the form */}
+              <Field>
+                <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+                  <div className="space-y-0.5">
+                    <FieldLabel className="cursor-pointer">This item is an Add-on</FieldLabel>
+                    <p className="text-xs text-muted-foreground">
+                      Add-ons (toppings, extra cheese…) are hidden from the billing menu and
+                      offered as chargeable extras on other items.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={form.is_addon}
+                    onCheckedChange={(v) => setF("is_addon", v)}
+                  />
+                </div>
+              </Field>
+
               {/* Row 1 — Code | Item Name */}
               <div className="grid grid-cols-3 gap-3">
                 <Field>
@@ -826,6 +1015,21 @@ export default function MenuCardPage() {
                   placeholder="Optional comments"
                 />
               </Field>
+
+              {/* Available add-ons (only for non-add-on items) */}
+              {!form.is_addon && (
+                <Field>
+                  <FieldLabel>
+                    Available Add-ons{" "}
+                    <span className="text-muted-foreground font-normal">(optional)</span>
+                  </FieldLabel>
+                  <AddonPicker
+                    options={allAddonItems}
+                    selectedIds={form.addon_ids ?? []}
+                    onChange={(ids) => setF("addon_ids", ids)}
+                  />
+                </Field>
+              )}
             </FieldGroup>
 
             {/* Recipe Section — shown only when the selected group allows recipes */}

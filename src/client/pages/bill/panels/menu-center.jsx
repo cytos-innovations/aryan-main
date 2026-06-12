@@ -286,6 +286,16 @@ function MenuItemCard({ item, applicableRate, onClick, isAdding }) {
           LIQ
         </span>
       )}
+
+      {/* Add-ons available badge */}
+      {item.addons?.length > 0 && (
+        <span className={[
+          "absolute right-1.5 text-[8px] font-semibold bg-primary/15 text-primary px-1 rounded-sm leading-none py-0.5",
+          item.is_liquor ? "top-6" : "top-1.5",
+        ].join(" ")}>
+          +ADD
+        </span>
+      )}
     </button>
   );
 }

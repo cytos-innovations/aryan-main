@@ -117,6 +117,7 @@ export const BQK = {
   EMPLOYEES:       ["billing-employees"],
   CUSTOMER_SEARCH: (q) => ["billing-customer-search", q],
   KOT_MSG_SEARCH:  (q) => ["billing-kot-msg-search", q],
+  ADDONS:          ["billing-addons"],
 };
 
 // ─────────────────────────────────────────────────────────────

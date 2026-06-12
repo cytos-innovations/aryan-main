@@ -82,11 +82,21 @@ function billingReducer(state, action) {
     // ── Draft items ───────────────────────────────────────────────
 
     case "ADD_DRAFT_ITEM": {
-      const { menuItem, rate } = action.payload;
-      const existing = state.draftItems.find((i) => i.menu_id === menuItem.id);
+      const { menuItem, rate, addons } = action.payload;
+      // Per-unit add-on charge, taxed at the parent rate (mirrors the Rust calc).
+      const addonList = addons ?? [];
+      const addonRate = r2(addonList.reduce((s, a) => s + (Number(a.rate) || 0), 0));
+      const effRate   = r2(rate + addonRate);
+
+      // Merge only when neither the existing nor the new line carries add-ons.
+      // (Draft mode keys lines by menu_id, so we keep one add-on config per item.)
+      const existing = addonList.length > 0
+        ? null
+        : state.draftItems.find((i) => i.menu_id === menuItem.id && !(Number(i.addon_rate) > 0));
       if (existing) {
         const newQty = existing.quantity + 1;
-        const amounts = calcDraftAmounts(existing.rate, newQty, existing.tax_percentage);
+        const existingEff = (Number(existing.rate) || 0) + (Number(existing.addon_rate) || 0);
+        const amounts = calcDraftAmounts(existingEff, newQty, existing.tax_percentage);
         return {
           ...state,
           draftItems: state.draftItems.map((i) =>
@@ -94,7 +104,7 @@ function billingReducer(state, action) {
           ),
         };
       }
-      const amounts = calcDraftAmounts(rate, 1, menuItem.tax_percentage ?? 0);
+      const amounts = calcDraftAmounts(effRate, 1, menuItem.tax_percentage ?? 0);
       return {
         ...state,
         draftItems: [...state.draftItems, {
@@ -103,6 +113,12 @@ function billingReducer(state, action) {
           item_name:           menuItem.item_name,
           quantity:            1,
           rate,
+          addon_rate:          addonRate,
+          addons:              addonList.map((a) => ({
+            menu_id: a.menuId ?? a.menu_id,
+            name:    a.name,
+            rate:    a.rate,
+          })),
           discount_percent:    0,
           tax_name:            menuItem.tax_name ?? null,
           tax_percentage:      menuItem.tax_percentage ?? 0,
@@ -153,7 +169,31 @@ function billingReducer(state, action) {
         ...state,
         draftItems: state.draftItems.map((i) => {
           if (i.menu_id !== menuId) return i;
-          return { ...i, quantity: qty, ...calcDraftAmounts(i.rate, qty, i.tax_percentage) };
+          const effRate = (Number(i.rate) || 0) + (Number(i.addon_rate) || 0);
+          return { ...i, quantity: qty, ...calcDraftAmounts(effRate, qty, i.tax_percentage) };
+        }),
+      };
+    }
+
+    case "SET_DRAFT_ITEM_ADDONS": {
+      const { menuId, addons } = action.payload;
+      const addonList = addons ?? [];
+      const addonRate = r2(addonList.reduce((s, a) => s + (Number(a.rate) || 0), 0));
+      return {
+        ...state,
+        draftItems: state.draftItems.map((i) => {
+          if (i.menu_id !== menuId) return i;
+          const effRate = (Number(i.rate) || 0) + addonRate;
+          return {
+            ...i,
+            addon_rate: addonRate,
+            addons: addonList.map((a) => ({
+              menu_id: a.menuId ?? a.menu_id,
+              name:    a.name,
+              rate:    a.rate,
+            })),
+            ...calcDraftAmounts(effRate, i.quantity, i.tax_percentage),
+          };
         }),
       };
     }
@@ -220,8 +260,8 @@ export function BillingProvider({ children }) {
     dispatch({ type: "CLEAR_SESSION" }),
   []);
 
-  const addDraftItem = useCallback((menuItem, rate) =>
-    dispatch({ type: "ADD_DRAFT_ITEM", payload: { menuItem, rate } }),
+  const addDraftItem = useCallback((menuItem, rate, addons) =>
+    dispatch({ type: "ADD_DRAFT_ITEM", payload: { menuItem, rate, addons } }),
   []);
 
   const updateDraftQty = useCallback((menuId, qty) =>
@@ -230,6 +270,10 @@ export function BillingProvider({ children }) {
 
   const removeDraftItem = useCallback((menuId) =>
     dispatch({ type: "REMOVE_DRAFT_ITEM", payload: menuId }),
+  []);
+
+  const setDraftItemAddons = useCallback((menuId, addons) =>
+    dispatch({ type: "SET_DRAFT_ITEM_ADDONS", payload: { menuId, addons } }),
   []);
 
   const setDraftItemKotMsg = useCallback((menuId, message) =>
@@ -262,6 +306,7 @@ export function BillingProvider({ children }) {
       addDraftItem,
       updateDraftQty,
       removeDraftItem,
+      setDraftItemAddons,
       setDraftItemKotMsg,
       setPendingItemKotMsg,
       clearPendingItemKotMsgs,

@@ -248,7 +248,7 @@ function KotDot({ status }) {
 
 // ─── Merged order item row (groups same menu_id across KOTs) ──
 
-function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter }) {
+function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter, onEditAddons }) {
   const { auth } = useAuth();
   const updateQty        = useUpdateOrderItemQty(sessionId);
   const cancelItem       = useCancelOrderItem(sessionId);
@@ -457,10 +457,21 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
           <KotDot status={groupStatus} />
         </div>
 
-        {/* Name */}
-        <span className="flex-1 min-w-0 text-xs leading-snug truncate font-medium">
-          {representative.item_name}
-        </span>
+        {/* Name — click to add / edit add-ons (draft, or pending session lines) */}
+        {onEditAddons && (isDraft || (!isBillPrinted && hasPendingQty)) ? (
+          <button
+            type="button"
+            onClick={() => onEditAddons(representative)}
+            title="Click to add / edit add-ons"
+            className="flex-1 min-w-0 text-xs leading-snug truncate font-medium text-left hover:text-primary hover:underline decoration-dotted underline-offset-2 transition-colors"
+          >
+            {representative.item_name}
+          </button>
+        ) : (
+          <span className="flex-1 min-w-0 text-xs leading-snug truncate font-medium">
+            {representative.item_name}
+          </span>
+        )}
 
         {/* Qty controls: [trash/minus] [qty] [+] */}
         <div className="flex items-center gap-0.5 shrink-0">
@@ -618,6 +629,23 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
         </div>
       )}
 
+      {/* Add-ons (chargeable modifiers attached to this line) */}
+      {Array.isArray(representative.addons) && representative.addons.length > 0 && (
+        <div className="px-3 pb-1.5 -mt-0.5 space-y-0.5">
+          {representative.addons.map((a, idx) => (
+            <div key={a.id ?? idx} className="flex items-center gap-1 pl-3.5">
+              <span className="text-[10px] text-muted-foreground/50">+</span>
+              <span className="text-[10px] text-muted-foreground flex-1 min-w-0 truncate">{a.name}</span>
+              {Number(a.rate) > 0 && (
+                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                  ₹{fmtAmount(Number(a.rate))}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Special instruction (from representative) */}
       {representative.special_instruction && (
         <div className="flex items-start gap-1 px-3 pb-2 -mt-0.5">
@@ -643,7 +671,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
 // ─── Order items area ─────────────────────────────────────────
 
-function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, lastAddedKey, onQtyEnter }) {
+function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, lastAddedKey, onQtyEnter, onEditAddons }) {
   const [f6ItemKey, setF6ItemKey] = useState(null);
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
@@ -760,6 +788,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
           isF6Active={f6ItemKey === groupKey}
           onF6Close={() => setF6ItemKey(null)}
           onQtyEnter={onQtyEnter}
+          onEditAddons={onEditAddons}
         />
       ))}
     </div>
@@ -1144,6 +1173,7 @@ export default function OrderRightPanel({
   lastAddedKey,
   onQtyEnter,
   selectedTableName,
+  onEditAddons,
 }) {
   const tableName     = session?.table_name ?? selectedTableName ?? null;
   const isBillPrinted = !isDraft && session?.session_status === "BILL_PRINTED";
@@ -1173,6 +1203,7 @@ export default function OrderRightPanel({
           isBillPrinted={isBillPrinted}
           lastAddedKey={lastAddedKey}
           onQtyEnter={onQtyEnter}
+          onEditAddons={onEditAddons}
         />
       </div>
 

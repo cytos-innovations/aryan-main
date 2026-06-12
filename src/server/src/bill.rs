@@ -26,6 +26,35 @@ pub struct TaxDetailEntry {
     pub tax_percentage: f64,
 }
 
+/// An add-on available for a menu item (a menu_card row flagged is_addon, linked
+/// via menu_item_addon). `rate` is the per-unit charge at applicable_rate 1.
+#[derive(Debug, Serialize, Clone)]
+pub struct AddonOption {
+    pub menu_id:   i32,
+    pub name:      String,
+    pub rate_1:    f64,
+    pub rate_2:    f64,
+    pub rate_3:    f64,
+    pub rate_4:    f64,
+    pub rate_5:    f64,
+}
+
+/// A chosen add-on attached to an order line (one order_item_modifier row).
+#[derive(Debug, Serialize, Clone)]
+pub struct OrderItemAddon {
+    pub id:         i32,
+    pub menu_id:    Option<i32>,
+    pub name:       String,
+    pub rate:       f64,
+}
+
+/// Payload for a chosen add-on when adding an order item.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AddonInput {
+    pub menu_id: i32,
+    pub rate:    f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct MenuItemForBilling {
     pub id:                   i32,
@@ -51,6 +80,8 @@ pub struct MenuItemForBilling {
     pub allow_discount:        bool,
     pub max_discount_percent:  f64,
     pub auto_discount_percent: f64,
+    pub is_addon:              bool,
+    pub addons:                Vec<AddonOption>,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +134,8 @@ pub struct OrderItemRow {
     pub kot_id:               Option<i32>,
     pub kot_no:               Option<String>,
     pub kot_created_at:       Option<String>,
+    pub addon_rate:           f64,
+    pub addons:               Vec<OrderItemAddon>,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,6 +309,7 @@ pub async fn get_menu_for_billing(
     app:   tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<MenuItemForBilling>, String> {
+    use std::collections::HashMap;
     let pool = acquire_pool(&state.pool, &app).await?;
 
     let rows = sqlx::query(
@@ -288,6 +322,7 @@ pub async fn get_menu_for_billing(
                 mc.food_type_id, ft.name AS food_type,
                 mc.kitchen_section_id,
                 (mc.liquor_group_id IS NOT NULL) AS is_liquor,
+                mc.is_addon,
                 mc.rate_1::float8, mc.rate_2::float8,
                 mc.rate_3::float8, mc.rate_4::float8, mc.rate_5::float8,
                 COALESCE(tax_info.tax_name, '')         AS tax_name,
@@ -304,15 +339,43 @@ pub async fn get_menu_for_billing(
              LEFT JOIN tax_master tm ON tm.id = mctd.tax_id
              WHERE  mctd.category_id = cat.id
          ) tax_info ON true
-         WHERE  mc.is_active = TRUE
+         WHERE  mc.is_active = TRUE AND mc.is_addon = FALSE
          ORDER  BY cat.name, mg.name, mc.name",
     )
     .fetch_all(&pool)
     .await
     .map_err(|e| format!("Failed to load menu: {e}"))?;
 
+    // Build per-item add-on options: for each parent menu_card_id, the list of
+    // add-on menu items (with their rates) it offers via menu_item_addon.
+    let addon_rows = sqlx::query(
+        "SELECT mia.menu_card_id, ac.id AS addon_id, ac.name AS addon_name,
+                ac.rate_1::float8, ac.rate_2::float8,
+                ac.rate_3::float8, ac.rate_4::float8, ac.rate_5::float8
+         FROM   menu_item_addon mia
+         JOIN   menu_card ac ON ac.id = mia.addon_card_id
+         WHERE  mia.is_active = 1 AND ac.is_active = TRUE
+         ORDER  BY mia.menu_card_id, ac.name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+
+    let mut addon_map: HashMap<i32, Vec<AddonOption>> = HashMap::new();
+    for ar in &addon_rows {
+        let parent_id: i32 = ar.try_get("menu_card_id").unwrap_or(0);
+        addon_map.entry(parent_id).or_default().push(AddonOption {
+            menu_id: ar.try_get("addon_id").unwrap_or(0),
+            name:    ar.try_get("addon_name").unwrap_or_default(),
+            rate_1:  ar.try_get::<f64, _>("rate_1").unwrap_or(0.0),
+            rate_2:  ar.try_get::<f64, _>("rate_2").unwrap_or(0.0),
+            rate_3:  ar.try_get::<f64, _>("rate_3").unwrap_or(0.0),
+            rate_4:  ar.try_get::<f64, _>("rate_4").unwrap_or(0.0),
+            rate_5:  ar.try_get::<f64, _>("rate_5").unwrap_or(0.0),
+        });
+    }
+
     // Fetch individual tax rows for every category, keyed by category_id
-    use std::collections::HashMap;
     let cat_tax_rows = sqlx::query(
         "SELECT mctd.category_id, tm.name AS tax_name, mctd.tax_percentage::float8
          FROM   menu_category_tax_detail mctd
@@ -359,6 +422,8 @@ pub async fn get_menu_for_billing(
             allow_discount:        r.try_get("allow_discount").unwrap_or(false),
             max_discount_percent:  r.try_get::<f64, _>("max_discount_percent").unwrap_or(0.0),
             auto_discount_percent: r.try_get::<f64, _>("auto_discount_percent").unwrap_or(0.0),
+            is_addon:              r.try_get("is_addon").unwrap_or(false),
+            addons:                addon_map.get(&r.try_get::<i32, _>("id").unwrap_or(0)).cloned().unwrap_or_default(),
         }
     }).collect())
 }
@@ -951,9 +1016,11 @@ pub async fn get_order_items(
                 COALESCE(cat.auto_discount_percent, 0)::float8 AS auto_discount_percent,
                 oi.kot_status, oi.item_status,
                 oi.special_instruction,
+                COALESCE(oi.addon_rate, 0)::float8 AS addon_rate,
                 (SELECT string_agg(oim.modifier_name, ', ' ORDER BY oim.id)
                  FROM   order_item_modifier oim
-                 WHERE  oim.order_item_id = oi.id AND oim.is_active = 1) AS kot_messages,
+                 WHERE  oim.order_item_id = oi.id AND oim.is_active = 1
+                   AND  oim.menu_card_id IS NULL) AS kot_messages,
                 oi.ordered_at,
                 oi.kot_id,
                 km.kot_no,
@@ -972,8 +1039,37 @@ pub async fn get_order_items(
     .await
     .map_err(|e| format!("Failed to load order items: {e}"))?;
 
-    Ok(rows.iter().map(|r| OrderItemRow {
-        id:                   r.try_get("id").unwrap_or(0),
+    // Fetch priced add-on modifiers for this session's items, keyed by order_item_id.
+    use std::collections::HashMap;
+    let addon_rows = sqlx::query(
+        "SELECT oim.id, oim.order_item_id, oim.menu_card_id,
+                oim.modifier_name, oim.modifier_rate::float8 AS modifier_rate
+         FROM   order_item_modifier oim
+         JOIN   order_item oi ON oi.id = oim.order_item_id
+         WHERE  oi.order_session_id = $1 AND oim.is_active = 1
+           AND  oim.menu_card_id IS NOT NULL
+         ORDER  BY oim.order_item_id, oim.id",
+    )
+    .bind(session_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+
+    let mut addons_by_item: HashMap<i32, Vec<OrderItemAddon>> = HashMap::new();
+    for ar in &addon_rows {
+        let oi_id: i32 = ar.try_get("order_item_id").unwrap_or(0);
+        addons_by_item.entry(oi_id).or_default().push(OrderItemAddon {
+            id:      ar.try_get("id").unwrap_or(0),
+            menu_id: ar.try_get("menu_card_id").ok().flatten(),
+            name:    ar.try_get("modifier_name").unwrap_or_default(),
+            rate:    ar.try_get::<f64, _>("modifier_rate").unwrap_or(0.0),
+        });
+    }
+
+    Ok(rows.iter().map(|r| {
+        let oi_id: i32 = r.try_get("id").unwrap_or(0);
+        OrderItemRow {
+        id:                   oi_id,
         code:                 r.try_get("code").unwrap_or(0),
         order_session_id:     r.try_get("order_session_id").unwrap_or(0),
         menu_id:              r.try_get("menu_id").ok().flatten(),
@@ -1009,6 +1105,9 @@ pub async fn get_order_items(
         kot_created_at:       r.try_get::<Option<chrono::NaiveDateTime>, _>("kot_created_at")
                                .ok().flatten()
                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
+        addon_rate:           r.try_get::<f64, _>("addon_rate").unwrap_or(0.0),
+        addons:               addons_by_item.get(&oi_id).cloned().unwrap_or_default(),
+        }
     }).collect())
 }
 
@@ -1020,6 +1119,7 @@ pub async fn add_order_item(
     menu_id:             i32,
     quantity:            f64,
     special_instruction: Option<String>,
+    addons:              Option<Vec<AddonInput>>,
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
@@ -1083,39 +1183,52 @@ pub async fn add_order_item(
         _ => menu_row.try_get::<f64, _>("rate_1").unwrap_or(0.0),
     };
 
-    // Calculate amounts
-    let gross_amount   = round2(rate * quantity);
+    // Per-unit add-on charge: sum of chosen add-on rates. Charged per unit and
+    // taxed at the parent item's tax rate (folded into this line's amounts).
+    let addon_list = addons.unwrap_or_default();
+    let addon_rate: f64 = round2(addon_list.iter().map(|a| a.rate).sum());
+    let effective_rate  = round2(rate + addon_rate);
+
+    // Calculate amounts (base rate + add-on rate, per unit)
+    let gross_amount   = round2(effective_rate * quantity);
     let taxable_amount = gross_amount;          // no discount at add time
     let tax_amount     = round2(taxable_amount * tax_pct / 100.0);
     let final_amount   = round2(taxable_amount + tax_amount);
     let tax_name_opt: Option<String> = if tax_name.is_empty() { None } else { Some(tax_name) };
 
     // ── Merge: if a PENDING item with same menu + instruction already exists, increment qty ──
-    let existing = sqlx::query(
-        "SELECT id, quantity::float8 AS quantity
-         FROM   order_item
-         WHERE  order_session_id = $1
-           AND  menu_id          = $2
-           AND  item_status      = 'ACTIVE'
-           AND  kot_status       = 'PENDING'
-           AND  (
-               ($3::text IS NULL AND special_instruction IS NULL)
-               OR special_instruction = $3
-           )
-         LIMIT 1",
-    )
-    .bind(session_id)
-    .bind(menu_id)
-    .bind(special_instruction.as_deref())
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| format!("Merge check failed: {e}"))?;
+    // Lines carrying add-ons are never merged: the same item with a different add-on
+    // set must remain a distinct line. Only merge plain (no add-on) pending lines.
+    let existing = if addon_list.is_empty() {
+        sqlx::query(
+            "SELECT id, quantity::float8 AS quantity
+             FROM   order_item
+             WHERE  order_session_id = $1
+               AND  menu_id          = $2
+               AND  item_status      = 'ACTIVE'
+               AND  kot_status       = 'PENDING'
+               AND  COALESCE(addon_rate, 0) = 0
+               AND  (
+                   ($3::text IS NULL AND special_instruction IS NULL)
+                   OR special_instruction = $3
+               )
+             LIMIT 1",
+        )
+        .bind(session_id)
+        .bind(menu_id)
+        .bind(special_instruction.as_deref())
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| format!("Merge check failed: {e}"))?
+    } else {
+        None
+    };
 
     if let Some(row) = existing {
         let existing_id:  i32 = row.try_get("id").unwrap_or(0);
         let existing_qty: f64 = row.try_get::<f64, _>("quantity").unwrap_or(0.0);
         let new_qty       = existing_qty + quantity;
-        let g             = round2(rate * new_qty);
+        let g             = round2(effective_rate * new_qty);
         let t             = round2(g * tax_pct / 100.0);
         let f             = round2(g + t);
 
@@ -1143,12 +1256,12 @@ pub async fn add_order_item(
 
     let item_id: i32 = sqlx::query_scalar(
         "INSERT INTO order_item
-            (order_session_id, menu_id, item_name, quantity, rate,
+            (order_session_id, menu_id, item_name, quantity, rate, addon_rate,
              gross_amount, discount_percent, discount_amount,
              tax_name, tax_percentage, tax_amount, taxable_amount, final_amount,
              food_type_id, kitchen_section_id, special_instruction,
              kot_status, item_status)
-         VALUES ($1,$2,$3,$4,$5, $6,0,0, $7,$8,$9,$10,$11, $12,$13,$14, 'PENDING','ACTIVE')
+         VALUES ($1,$2,$3,$4,$5,$6, $7,0,0, $8,$9,$10,$11,$12, $13,$14,$15, 'PENDING','ACTIVE')
          RETURNING id",
     )
     .bind(session_id)
@@ -1156,6 +1269,7 @@ pub async fn add_order_item(
     .bind(&item_name)
     .bind(quantity)
     .bind(rate)
+    .bind(addon_rate)
     .bind(gross_amount)
     .bind(tax_name_opt)
     .bind(tax_pct)
@@ -1169,7 +1283,219 @@ pub async fn add_order_item(
     .await
     .map_err(|e| format!("Failed to add order item: {e}"))?;
 
+    // Persist each chosen add-on as a priced order_item_modifier row. The modifier
+    // name is resolved from the add-on's menu_card so the KOT/bill shows a label.
+    for a in &addon_list {
+        let addon_name: String = sqlx::query_scalar(
+            "SELECT name FROM menu_card WHERE id = $1",
+        )
+        .bind(a.menu_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "Add-on".to_string());
+
+        sqlx::query(
+            "INSERT INTO order_item_modifier (order_item_id, menu_card_id, modifier_name, modifier_rate, is_active)
+             VALUES ($1, $2, $3, $4, 1)",
+        )
+        .bind(item_id)
+        .bind(a.menu_id)
+        .bind(addon_name)
+        .bind(a.rate)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Failed to add item add-on: {e}"))?;
+    }
+
     Ok(item_id)
+}
+
+/// Result of creating a custom add-on on the fly from the billing screen.
+#[derive(Debug, Serialize)]
+pub struct CreatedAddon {
+    pub menu_id: i32,
+    pub name:    String,
+    pub rate:    f64,
+}
+
+/// Create a custom add-on item (is_addon menu_card) from the billing dialog so
+/// it's reusable later. Reuses an existing menu_group + food_type for FK validity.
+/// If an add-on with the same name already exists, it's returned instead of duplicated.
+#[tauri::command]
+pub async fn create_custom_addon(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    name:  String,
+    rate:  f64,
+) -> Result<CreatedAddon, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Add-on name is required".to_string());
+    }
+    if rate < 0.0 {
+        return Err("Add-on price cannot be negative".to_string());
+    }
+
+    // Reuse an existing add-on with the same name (case-insensitive) if present.
+    let existing = sqlx::query(
+        "SELECT id, name, rate_1::float8 AS rate FROM menu_card
+         WHERE is_addon = TRUE AND LOWER(name) = LOWER($1) LIMIT 1",
+    )
+    .bind(&name)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Lookup failed: {e}"))?;
+
+    if let Some(row) = existing {
+        return Ok(CreatedAddon {
+            menu_id: row.try_get("id").unwrap_or(0),
+            name:    row.try_get("name").unwrap_or(name),
+            rate:    row.try_get::<f64, _>("rate").unwrap_or(rate),
+        });
+    }
+
+    let new_id: i32 = sqlx::query_scalar(
+        "INSERT INTO menu_card
+            (name, menu_group_id, food_type_id, is_addon,
+             rate_1, rate_2, rate_3, rate_4, rate_5, is_active)
+         VALUES ($1,
+                 (SELECT id FROM menu_group ORDER BY id LIMIT 1),
+                 (SELECT id FROM food_type  ORDER BY id LIMIT 1),
+                 TRUE, $2, $2, $2, $2, $2, TRUE)
+         RETURNING id",
+    )
+    .bind(&name)
+    .bind(rate)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to create custom add-on: {e}"))?;
+
+    Ok(CreatedAddon { menu_id: new_id, name, rate })
+}
+
+/// List all add-on items (is_addon menu_card) for the billing add-on dialog search.
+#[tauri::command]
+pub async fn get_billing_addons(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<AddonOption>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, name, rate_1::float8, rate_2::float8, rate_3::float8,
+                rate_4::float8, rate_5::float8
+         FROM   menu_card
+         WHERE  is_addon = TRUE AND is_active = TRUE
+         ORDER  BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load add-ons: {e}"))?;
+
+    Ok(rows.iter().map(|r| AddonOption {
+        menu_id: r.try_get("id").unwrap_or(0),
+        name:    r.try_get("name").unwrap_or_default(),
+        rate_1:  r.try_get::<f64, _>("rate_1").unwrap_or(0.0),
+        rate_2:  r.try_get::<f64, _>("rate_2").unwrap_or(0.0),
+        rate_3:  r.try_get::<f64, _>("rate_3").unwrap_or(0.0),
+        rate_4:  r.try_get::<f64, _>("rate_4").unwrap_or(0.0),
+        rate_5:  r.try_get::<f64, _>("rate_5").unwrap_or(0.0),
+    }).collect())
+}
+
+/// Replace the add-ons on an existing (pending) order line and recompute its amounts.
+/// Add-ons are session-scoped modifier rows — this never alters the menu master.
+#[tauri::command]
+pub async fn update_order_item_addons(
+    app:           tauri::AppHandle,
+    state:         tauri::State<'_, AppState>,
+    order_item_id: i32,
+    addons:        Vec<AddonInput>,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Only pending (not yet KOT-sent) lines can have their add-ons edited.
+    let row = sqlx::query(
+        "SELECT rate::float8, quantity::float8, discount_percent::float8,
+                tax_percentage::float8, kot_status
+         FROM   order_item WHERE id = $1 AND item_status = 'ACTIVE'",
+    )
+    .bind(order_item_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Order item not found: {e}"))?;
+
+    let kot_status: String = row.try_get("kot_status").unwrap_or_default();
+    if kot_status != "PENDING" {
+        return Err("Add-ons can only be changed before the item is sent to the kitchen".to_string());
+    }
+
+    let rate:     f64 = row.try_get::<f64, _>("rate").unwrap_or(0.0);
+    let quantity: f64 = row.try_get::<f64, _>("quantity").unwrap_or(1.0);
+    let disc_pct: f64 = row.try_get::<f64, _>("discount_percent").unwrap_or(0.0);
+    let tax_pct:  f64 = row.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
+
+    let addon_rate: f64 = round2(addons.iter().map(|a| a.rate).sum());
+    let gross_amount   = round2((rate + addon_rate) * quantity);
+    let discount_amt   = round2(gross_amount * disc_pct / 100.0);
+    let taxable_amount = round2(gross_amount - discount_amt);
+    let tax_amount     = round2(taxable_amount * tax_pct / 100.0);
+    let final_amount   = round2(taxable_amount + tax_amount);
+
+    // Clear existing add-on modifiers (keep KOT notes, which have NULL menu_card_id).
+    sqlx::query(
+        "DELETE FROM order_item_modifier WHERE order_item_id = $1 AND menu_card_id IS NOT NULL",
+    )
+    .bind(order_item_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to clear add-ons: {e}"))?;
+
+    // Re-insert the chosen add-ons.
+    for a in &addons {
+        let addon_name: String = sqlx::query_scalar("SELECT name FROM menu_card WHERE id = $1")
+            .bind(a.menu_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Add-on".to_string());
+
+        sqlx::query(
+            "INSERT INTO order_item_modifier (order_item_id, menu_card_id, modifier_name, modifier_rate, is_active)
+             VALUES ($1, $2, $3, $4, 1)",
+        )
+        .bind(order_item_id)
+        .bind(a.menu_id)
+        .bind(addon_name)
+        .bind(a.rate)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Failed to save add-on: {e}"))?;
+    }
+
+    // Update the line's stored add-on rate + amounts.
+    sqlx::query(
+        "UPDATE order_item
+         SET    addon_rate = $1, gross_amount = $2, discount_amount = $3,
+                taxable_amount = $4, tax_amount = $5, final_amount = $6, updated_at = NOW()
+         WHERE  id = $7",
+    )
+    .bind(addon_rate)
+    .bind(gross_amount)
+    .bind(discount_amt)
+    .bind(taxable_amount)
+    .bind(tax_amount)
+    .bind(final_amount)
+    .bind(order_item_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to update line: {e}"))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1187,7 +1513,8 @@ pub async fn update_order_item_qty(
 
     // Fetch existing amounts to recalculate (::float8 to safely decode NUMERIC columns)
     let row = sqlx::query(
-        "SELECT rate::float8, discount_percent::float8, tax_percentage::float8
+        "SELECT rate::float8, COALESCE(addon_rate, 0)::float8 AS addon_rate,
+                discount_percent::float8, tax_percentage::float8
          FROM   order_item WHERE id = $1",
     )
     .bind(order_item_id)
@@ -1195,11 +1522,13 @@ pub async fn update_order_item_qty(
     .await
     .map_err(|e| format!("Order item not found: {e}"))?;
 
-    let rate:     f64 = row.try_get::<f64, _>("rate").unwrap_or(0.0);
-    let disc_pct: f64 = row.try_get::<f64, _>("discount_percent").unwrap_or(0.0);
-    let tax_pct:  f64 = row.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
+    let rate:       f64 = row.try_get::<f64, _>("rate").unwrap_or(0.0);
+    let addon_rate: f64 = row.try_get::<f64, _>("addon_rate").unwrap_or(0.0);
+    let disc_pct:   f64 = row.try_get::<f64, _>("discount_percent").unwrap_or(0.0);
+    let tax_pct:    f64 = row.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
 
-    let gross_amount   = round2(rate * quantity);
+    // Per-unit charge includes any add-ons so the line scales correctly with qty.
+    let gross_amount   = round2((rate + addon_rate) * quantity);
     let discount_amt   = round2(gross_amount * disc_pct / 100.0);
     let taxable_amount = round2(gross_amount - discount_amt);
     let tax_amount     = round2(taxable_amount * tax_pct / 100.0);

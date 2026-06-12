@@ -40,6 +40,7 @@ use master::menu::rest_menu_group::{
 use master::menu::rest_menu_main::{
     create_menu_card, delete_menu_card, get_menu_cards, toggle_menu_card_active, update_menu_card,
     get_all_units_for_recipe, get_menu_recipes, save_menu_recipes, search_ingredient_items,
+    get_addon_items, get_menu_card_addons,
 };
 use master::menu::rest_kitchen_section::{
     get_kitchen_section_list, create_kitchen_section, update_kitchen_section,
@@ -202,6 +203,10 @@ use bill::{
     search_kot_messages,
     add_order_item_modifier,
     clear_order_item_modifiers,
+    // Add-ons (session-scoped item modifiers)
+    create_custom_addon,
+    get_billing_addons,
+    update_order_item_addons,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -1299,6 +1304,18 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by     INTEGER
         )"#,
+        r#"CREATE TABLE IF NOT EXISTS menu_item_addon (
+            id             SERIAL PRIMARY KEY,
+            code           BIGSERIAL UNIQUE,
+            menu_card_id   INTEGER NOT NULL REFERENCES menu_card(id) ON DELETE CASCADE,
+            addon_card_id  INTEGER NOT NULL REFERENCES menu_card(id) ON DELETE CASCADE,
+            is_active      INTEGER   NOT NULL DEFAULT 1,
+            created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by     INTEGER,
+            updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by     INTEGER,
+            UNIQUE (menu_card_id, addon_card_id)
+        )"#,
         r#"CREATE TABLE IF NOT EXISTS kot_master (
             id                 SERIAL PRIMARY KEY,
             code               BIGSERIAL UNIQUE,
@@ -1567,6 +1584,31 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .await
     .map_err(|e| format!("Migration error (order_session.reservation_id): {e}"))?;
 
+    // ── Add-ons (item modifiers with a chargeable rate) ──────────
+    // Mark a menu item as an add-on (excluded from the main billing grid).
+    sqlx::query(
+        "ALTER TABLE menu_card ADD COLUMN IF NOT EXISTS is_addon BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (menu_card.is_addon): {e}"))?;
+
+    // Link a chosen add-on back to its source menu item (NULL for free-text KOT notes).
+    sqlx::query(
+        "ALTER TABLE order_item_modifier ADD COLUMN IF NOT EXISTS menu_card_id INTEGER REFERENCES menu_card(id)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (order_item_modifier.menu_card_id): {e}"))?;
+
+    // Per-unit sum of add-on rates stored on the order line so qty edits recompute correctly.
+    sqlx::query(
+        "ALTER TABLE order_item ADD COLUMN IF NOT EXISTS addon_rate NUMERIC(12,2) NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (order_item.addon_rate): {e}"))?;
+
     seed_applications(pool).await?;
     seed_module_permissions(pool).await?;
     sync_sequences(pool).await?;
@@ -1580,6 +1622,7 @@ async fn sync_sequences(pool: &PgPool) -> Result<(), String> {
         ("menu_category",      "menu_category_id_seq",      "menu_category_code_seq"),
         ("menu_group",         "menu_group_id_seq",         "menu_group_code_seq"),
         ("menu_card",          "menu_card_id_seq",          "menu_card_code_seq"),
+        ("menu_item_addon",    "menu_item_addon_id_seq",    "menu_item_addon_code_seq"),
         ("kitchen_section",    "kitchen_section_id_seq",    "kitchen_section_code_seq"),
         ("table_group",        "table_group_id_seq",        "table_group_code_seq"),
         ("restaurant_table",   "restaurant_table_id_seq",   "restaurant_table_code_seq"),
@@ -2007,6 +2050,9 @@ pub fn run() {
             get_menu_recipes,
             save_menu_recipes,
             search_ingredient_items,
+            // Menu card — add-ons
+            get_addon_items,
+            get_menu_card_addons,
             // Kitchen sections (shared lookup)
             get_kitchen_sections,
             // Kitchen sections (master screen)
@@ -2237,6 +2283,9 @@ pub fn run() {
             search_kot_messages,
             add_order_item_modifier,
             clear_order_item_modifiers,
+            create_custom_addon,
+            get_billing_addons,
+            update_order_item_addons,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

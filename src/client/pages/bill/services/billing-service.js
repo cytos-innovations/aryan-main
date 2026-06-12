@@ -62,16 +62,30 @@ export const billingService = {
   getOrderItems: (sessionId) =>
     invoke("get_order_items", { sessionId }),
 
-  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction }) =>
+  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons }) =>
     invoke("add_order_item", {
       sessionId,
       menuId,
       quantity:            quantity            ?? 1,
       specialInstruction:  specialInstruction  ?? null,
+      // addons: [{ menuId, rate }] — per-unit charges folded into the line
+      addons:              (addons ?? []).map((a) => ({ menuId: a.menuId ?? a.menu_id, rate: a.rate })),
     }),
 
   updateOrderItemQty: (orderItemId, quantity) =>
     invoke("update_order_item_qty", { orderItemId, quantity }),
+
+  // Add-ons (session-scoped item modifiers)
+  getBillingAddons: () => invoke("get_billing_addons"),
+
+  createCustomAddon: ({ name, rate }) =>
+    invoke("create_custom_addon", { name, rate: Number(rate) || 0 }),
+
+  updateOrderItemAddons: ({ orderItemId, addons }) =>
+    invoke("update_order_item_addons", {
+      orderItemId,
+      addons: (addons ?? []).map((a) => ({ menuId: a.menuId ?? a.menu_id, rate: a.rate })),
+    }),
 
   cancelOrderItem: (orderItemId) =>
     invoke("cancel_order_item", { orderItemId }),

@@ -31,6 +31,9 @@ import {
   useOrderItems,
   useBillSummary,
   useSettleBill,
+  useBillingAddons,
+  useCreateCustomAddon,
+  useUpdateOrderItemAddons,
 } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
@@ -41,6 +44,7 @@ import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
 import BottomActionBar from "../panels/bottom-action-bar";
 import SettleDialog    from "../panels/settle-dialog";
+import AddonDialog     from "../panels/addon-dialog";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -191,6 +195,7 @@ export default function OrderEntryView() {
     addDraftItem,
     updateDraftQty,
     removeDraftItem,
+    setDraftItemAddons,
     setDraftConfig,
     clearSession,
     setView,
@@ -204,6 +209,10 @@ export default function OrderEntryView() {
   const [settleOpen, setSettleOpen] = useState(false);
   const [addingId,   setAddingId]   = useState(null);
   const [isKotting,  setIsKotting]  = useState(false);
+  // Add-on dialog target:
+  //   { mode: "add",  menuItem }            → choosing add-ons while adding an item
+  //   { mode: "edit", menuItem, orderItem } → editing add-ons on an existing line
+  const [addonTarget, setAddonTarget] = useState(null);
 
   // Discount keyed strictly by DB sessionId (never by "draft").
   // Draft orders start fresh every time — no persistence needed.
@@ -255,6 +264,12 @@ export default function OrderEntryView() {
   const itemsQuery   = useOrderItems(activeSessionId);
   const billSummary  = useBillSummary(activeSessionId);
   const settleBillMut = useSettleBill(activeSessionId);
+
+  // Add-ons
+  const addonsQuery     = useBillingAddons();
+  const createAddonMut  = useCreateCustomAddon();
+  const updateAddonsMut = useUpdateOrderItemAddons(activeSessionId);
+  const allAddons       = addonsQuery.data ?? [];
 
   // Reservation guard
   const isNearReservation = useMemo(() => {
@@ -400,11 +415,38 @@ export default function OrderEntryView() {
     );
   }
 
+  // Entry point from the menu grid. If the item offers add-ons, prompt for them;
+  // otherwise add instantly (fast path unchanged).
   function handleAddItem(menuItem) {
     if (!isDraft && session?.session_status === "BILL_PRINTED") return;
+    if (menuItem.addons?.length > 0) {
+      setAddonTarget({ mode: "add", menuItem });
+      return;
+    }
+    commitAddItem(menuItem, []);
+  }
+
+  // Open the add-on dialog to edit an EXISTING (pending) order line's add-ons.
+  // group = the merged row's items; representative carries menu_id/item_name/addons.
+  function handleEditAddons(orderItem) {
+    if (!orderItem) return;
+    // Resolve the menu master row so the dialog knows the base rate + suggested add-ons.
+    const menuItem = menu.find((m) => m.id === orderItem.menu_id) ?? {
+      id: orderItem.menu_id,
+      item_name: orderItem.item_name,
+      food_type: orderItem.food_type,
+      addons: [],
+      rate_1: orderItem.rate, rate_2: orderItem.rate, rate_3: orderItem.rate,
+      rate_4: orderItem.rate, rate_5: orderItem.rate,
+    };
+    setAddonTarget({ mode: "edit", menuItem, orderItem });
+  }
+
+  // Actually add the item, optionally with chosen add-ons. addons = [{ menuId, name, rate }]
+  function commitAddItem(menuItem, addons) {
     if (isDraft) {
       const rate = selectItemRate(menuItem, applicableRate);
-      addDraftItem(menuItem, rate);
+      addDraftItem(menuItem, rate, addons);
       pushRecentId(menuItem.id);
       setLastAddedKey(menuItem.id); // menu_id for draft rows
       return;
@@ -412,7 +454,7 @@ export default function OrderEntryView() {
     if (!activeSessionId || !session) return;
     setAddingId(menuItem.id);
     addItemMut.mutate(
-      { sessionId: activeSessionId, menuId: menuItem.id, quantity: 1, specialInstruction: null },
+      { sessionId: activeSessionId, menuId: menuItem.id, quantity: 1, specialInstruction: null, addons },
       {
         onSuccess: () => {
           pushRecentId(menuItem.id);
@@ -485,6 +527,7 @@ export default function OrderEntryView() {
           menuId:             item.menu_id,
           quantity:           item.quantity,
           specialInstruction: item.special_instruction ?? null,
+          addons:             item.addons ?? [],
         }),
       ));
 
@@ -602,6 +645,7 @@ export default function OrderEntryView() {
                 lastAddedKey={lastAddedKey}
                 onQtyEnter={focusSearch}
                 selectedTableName={selectedTableName}
+                onEditAddons={handleEditAddons}
               />
             </div>
           </div>
@@ -644,6 +688,39 @@ export default function OrderEntryView() {
           sessionDisc={sessionDisc}
           onSettle={handleSettle}
           isSettling={settleBillMut.isPending}
+        />
+      )}
+
+      {/* ── Add-on selection ── */}
+      {addonTarget && (
+        <AddonDialog
+          item={addonTarget.menuItem}
+          applicableRate={applicableRate}
+          allAddons={allAddons}
+          initialSelected={
+            addonTarget.mode === "edit"
+              ? (addonTarget.orderItem?.addons ?? []).map((a) => ({
+                  menuId: a.menu_id, name: a.name, rate: Number(a.rate) || 0,
+                }))
+              : []
+          }
+          onCreateCustom={(payload) => createAddonMut.mutateAsync(payload)}
+          onConfirm={(chosen) => {
+            const target = addonTarget;
+            setAddonTarget(null);
+            if (target.mode === "edit") {
+              if (isDraft) {
+                // Draft line — update add-ons in local context, keyed by menu_id.
+                setDraftItemAddons(target.orderItem.menu_id, chosen);
+              } else if (target.orderItem?.id) {
+                // Session line — persist + recompute on the backend.
+                updateAddonsMut.mutate({ orderItemId: target.orderItem.id, addons: chosen });
+              }
+            } else {
+              commitAddItem(target.menuItem, chosen);
+            }
+          }}
+          onClose={() => setAddonTarget(null)}
         />
       )}
 

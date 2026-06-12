@@ -161,7 +161,7 @@ export function useAddOrderItem(sessionId) {
   return useMutation({
     mutationFn: billingService.addOrderItem,
 
-    onMutate: async ({ menuId, quantity, specialInstruction }) => {
+    onMutate: async ({ menuId, quantity, specialInstruction, addons }) => {
       await qc.cancelQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
       const prevItems = qc.getQueryData(BQK.ORDER_ITEMS(sessionId));
 
@@ -170,15 +170,21 @@ export function useAddOrderItem(sessionId) {
         const session  = qc.getQueryData(BQK.SESSION_DETAIL(sessionId));
         const menuItem = menu.find((m) => m.id === menuId);
 
+        // Per-unit add-on charge (matches the Rust calc). Lines with add-ons never merge.
+        const addonList = addons ?? [];
+        const addonRate = r2(addonList.reduce((s, a) => s + (Number(a.rate) || 0), 0));
+
         if (menuItem) {
           const instrKey = specialInstruction ?? null;
 
-          // Check for existing PENDING item with same menu + instruction → merge
-          const existingIdx = prevItems.findIndex(
+          // Check for existing PENDING item with same menu + instruction → merge.
+          // Never merge into (or as) an add-on-bearing line.
+          const existingIdx = addonList.length > 0 ? -1 : prevItems.findIndex(
             (i) =>
               i.menu_id === menuId &&
               i.kot_status === "PENDING" &&
               i.item_status === "ACTIVE" &&
+              !(Number(i.addon_rate) > 0) &&
               (i.special_instruction ?? null) === instrKey,
           );
 
@@ -191,7 +197,8 @@ export function useAddOrderItem(sessionId) {
             qc.setQueryData(BQK.ORDER_ITEMS(sessionId), next);
           } else {
             const rate    = selectItemRate(menuItem, session?.applicable_rate ?? 1);
-            const amounts = recalcItem(rate, quantity || 1, 0, menuItem.tax_percentage ?? 0);
+            // Charge per unit = base rate + add-on rate, taxed at the parent rate.
+            const amounts = recalcItem(rate + addonRate, quantity || 1, 0, menuItem.tax_percentage ?? 0);
             const optimistic = {
               id:                  -(Date.now()),
               code:                0,
@@ -200,6 +207,13 @@ export function useAddOrderItem(sessionId) {
               item_name:           menuItem.item_name,
               quantity:            quantity || 1,
               rate,
+              addon_rate:          addonRate,
+              addons:              addonList.map((a) => ({
+                id: -(Date.now() + Math.random()),
+                menu_id: a.menuId ?? a.menu_id,
+                name: a.name,
+                rate: a.rate,
+              })),
               discount_percent:    0,
               tax_name:            menuItem.tax_name ?? null,
               tax_percentage:      menuItem.tax_percentage ?? 0,
@@ -249,13 +263,85 @@ export function useUpdateOrderItemQty(sessionId) {
         const idx = prevItems.findIndex((i) => i.id === id);
         if (idx !== -1) {
           const item    = prevItems[idx];
-          const amounts = recalcItem(item.rate, qty, item.discount_percent, item.tax_percentage);
+          const effRate = (Number(item.rate) || 0) + (Number(item.addon_rate) || 0);
+          const amounts = recalcItem(effRate, qty, item.discount_percent, item.tax_percentage);
           const next    = [...prevItems];
           next[idx]     = { ...item, quantity: qty, ...amounts };
           qc.setQueryData(BQK.ORDER_ITEMS(sessionId), next);
         }
       }
 
+      return { prevItems };
+    },
+
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prevItems !== undefined) {
+        qc.setQueryData(BQK.ORDER_ITEMS(sessionId), ctx.prevItems);
+      }
+      toast.error(String(_e));
+    },
+
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
+    },
+  });
+}
+
+// All add-on master items, for the billing add-on dialog search.
+export function useBillingAddons() {
+  return useQuery({
+    queryKey: BQK.ADDONS,
+    queryFn: billingService.getBillingAddons,
+    staleTime: 60_000,
+  });
+}
+
+// Create a custom add-on (also saved to the add-on master so it's reusable).
+export function useCreateCustomAddon() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.createCustomAddon,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.ADDONS });
+      qc.invalidateQueries({ queryKey: BQK.MENU });
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
+// Replace the add-ons on an existing pending order line + recompute the line.
+export function useUpdateOrderItemAddons(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.updateOrderItemAddons,
+
+    onMutate: async ({ orderItemId, addons }) => {
+      await qc.cancelQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      const prevItems = qc.getQueryData(BQK.ORDER_ITEMS(sessionId));
+
+      if (Array.isArray(prevItems)) {
+        const idx = prevItems.findIndex((i) => i.id === orderItemId);
+        if (idx !== -1) {
+          const item      = prevItems[idx];
+          const addonRate = r2((addons ?? []).reduce((s, a) => s + (Number(a.rate) || 0), 0));
+          const effRate   = (Number(item.rate) || 0) + addonRate;
+          const amounts   = recalcItem(effRate, item.quantity, item.discount_percent, item.tax_percentage);
+          const next      = [...prevItems];
+          next[idx] = {
+            ...item,
+            addon_rate: addonRate,
+            addons: (addons ?? []).map((a) => ({
+              id: -(Date.now() + Math.random()),
+              menu_id: a.menuId ?? a.menu_id,
+              name: a.name,
+              rate: a.rate,
+            })),
+            ...amounts,
+          };
+          qc.setQueryData(BQK.ORDER_ITEMS(sessionId), next);
+        }
+      }
       return { prevItems };
     },
 
