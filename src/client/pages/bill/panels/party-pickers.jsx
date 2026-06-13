@@ -67,6 +67,19 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
   const [cursor,  setCursor]  = useState(-1);
   const searchRef  = useRef(null);
   const itemRefs   = useRef([]);
+  const nameRef    = useRef(null);
+  const mobileRef  = useRef(null);
+  const emailRef   = useRef(null);
+  const addressRef = useRef(null);
+  const okRef      = useRef(null);
+
+  // Field order for Enter / arrow-key navigation (search → fields → OK)
+  const fieldRefs = [nameRef, mobileRef, emailRef, addressRef, okRef];
+
+  function focusFieldAt(idx) {
+    const clamped = Math.max(0, Math.min(idx, fieldRefs.length - 1));
+    fieldRefs[clamped].current?.focus();
+  }
 
   const searchQuery = useSearchCustomers(query, open && query.trim().length > 0);
   const createMut   = useQuickCreateCustomer();
@@ -100,16 +113,43 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
   }, [cursor]);
 
   function handleSearchKeyDown(e) {
-    if (results.length === 0) return;
-    if (e.key === "ArrowDown") {
+    if (results.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setCursor((c) => Math.min(c + 1, results.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setCursor((c) => Math.max(c - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && cursor >= 0 && results[cursor]) {
+        e.preventDefault();
+        pickResult(results[cursor]);
+        return;
+      }
+    }
+    // No result highlighted → Enter / ArrowDown moves into the form (new customer)
+    if (e.key === "Enter" || e.key === "ArrowDown") {
       e.preventDefault();
-      setCursor((c) => Math.min(c + 1, results.length - 1));
+      focusFieldAt(0);
+    }
+  }
+
+  // Enter advances to the next field; arrow keys move up/down the form.
+  function handleFieldKeyDown(e, idx) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (idx === fieldRefs.length - 1) handleOk();
+      else focusFieldAt(idx + 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusFieldAt(idx + 1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setCursor((c) => Math.max(c - 1, 0));
-    } else if (e.key === "Enter" && cursor >= 0 && results[cursor]) {
-      e.preventDefault();
-      pickResult(results[cursor]);
+      if (idx === 0) searchRef.current?.focus();
+      else focusFieldAt(idx - 1);
     }
   }
 
@@ -119,7 +159,8 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
     if ((k === "name" || k === "mobile") && selId) setSelId(null);
   }
 
-  // Pick an existing customer from results → auto-fill all fields
+  // Pick an existing customer from results → auto-fill all fields,
+  // then jump straight to OK so the user can confirm with Enter.
   function pickResult(c) {
     setSelId(c.id);
     setForm({
@@ -129,6 +170,7 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
       address: c.address ?? "",
     });
     setQuery("");
+    setTimeout(() => okRef.current?.focus(), 0);
   }
 
   function done(c) {
@@ -220,10 +262,10 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
 
         {/* Detail form (auto-filled on select, editable for new) */}
         <div className="p-3 space-y-2">
-          <FieldWithIcon icon={UserAccountIcon} placeholder="Customer name" value={form.name} onChange={(v) => setField("name", v)} />
-          <FieldWithIcon icon={SmartPhone01Icon} placeholder="Mobile no" value={form.mobile} onChange={(v) => setField("mobile", v)} maxLength={15} />
-          <FieldWithIcon icon={Mail01Icon} placeholder="Email (optional)" value={form.email} onChange={(v) => setField("email", v)} />
-          <FieldWithIcon icon={Location01Icon} placeholder="Address (optional)" value={form.address} onChange={(v) => setField("address", v)} />
+          <FieldWithIcon icon={UserAccountIcon} placeholder="Customer name" value={form.name} onChange={(v) => setField("name", v)} inputRef={nameRef} onKeyDown={(e) => handleFieldKeyDown(e, 0)} />
+          <FieldWithIcon icon={SmartPhone01Icon} placeholder="Mobile no" value={form.mobile} onChange={(v) => setField("mobile", v)} maxLength={15} inputRef={mobileRef} onKeyDown={(e) => handleFieldKeyDown(e, 1)} />
+          <FieldWithIcon icon={Mail01Icon} placeholder="Email (optional)" value={form.email} onChange={(v) => setField("email", v)} inputRef={emailRef} onKeyDown={(e) => handleFieldKeyDown(e, 2)} />
+          <FieldWithIcon icon={Location01Icon} placeholder="Address (optional)" value={form.address} onChange={(v) => setField("address", v)} inputRef={addressRef} onKeyDown={(e) => handleFieldKeyDown(e, 3)} />
 
           {selId && (
             <p className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
@@ -234,10 +276,12 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
 
           <Separator />
           <Button
+            ref={okRef}
             type="button"
             size="sm"
             className="w-full h-8 text-xs"
             onClick={handleOk}
+            onKeyDown={(e) => { if (e.key === "ArrowUp") { e.preventDefault(); focusFieldAt(3); } }}
             disabled={!form.name.trim() || createMut.isPending}
           >
             {createMut.isPending ? "Saving…" : "OK"}
@@ -248,17 +292,20 @@ export function CustomerPicker({ customerId, customerName, customerMobile, disab
   );
 }
 
-function FieldWithIcon({ icon, placeholder, value, onChange, maxLength }) {
+function FieldWithIcon({ icon, placeholder, value, onChange, maxLength, inputRef, onKeyDown }) {
   return (
     <div className="relative">
       <HugeiconsIcon icon={icon} size={12} strokeWidth={2} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
       <Input
+        ref={inputRef}
         value={value}
         maxLength={maxLength}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
         className="h-8 pl-7 text-xs"
       />
+      {/* `inputRef` is forwarded to the native input via React 19 ref-as-prop */}
     </div>
   );
 }
