@@ -574,6 +574,7 @@ CREATE TABLE customer_information (
     visa_no VARCHAR(50),
     visa_issue_date TIMESTAMP,
     visa_expiry_date TIMESTAMP,
+    customer_type VARCHAR(20), -- 'LODGE' or 'RESTAURANT' (set by the application)
 
     -- Standard Audit & Status Columns
     is_active INTEGER DEFAULT 1,

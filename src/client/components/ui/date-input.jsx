@@ -94,10 +94,18 @@ export function DateInput({ value, onChange, className, disabled }) {
   const segCls = "w-7 text-center bg-transparent outline-none border-0 p-0 text-sm tabular-nums caret-transparent selection:bg-primary/30 disabled:pointer-events-none disabled:opacity-50";
   const sepCls = "text-muted-foreground select-none text-sm";
 
+  // Open the calendar as soon as the user focuses into the date field
+  // (e.g. via Tab / keyboard navigation). Typing the DD/MM/YYYY segments
+  // still works because the calendar does not steal focus on open.
+  function handleFocus() {
+    if (!disabled) setOpen(true);
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <div
         data-date-input
+        onFocus={handleFocus}
         className={cn(
           "h-9 flex items-center gap-0.5 rounded-md border border-input bg-transparent px-2.5 shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
           disabled && "pointer-events-none cursor-not-allowed opacity-50",
@@ -157,7 +165,11 @@ export function DateInput({ value, onChange, className, disabled }) {
         </PopoverTrigger>
       </div>
 
-      <PopoverContent className="w-auto p-0" align="start">
+      <PopoverContent
+        className="w-auto p-0"
+        align="start"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
         <Calendar
           mode="single"
           selected={selectedDate}
@@ -166,7 +178,6 @@ export function DateInput({ value, onChange, className, disabled }) {
           captionLayout="dropdown"
           fromYear={2000}
           toYear={2100}
-          initialFocus
         />
       </PopoverContent>
     </Popover>

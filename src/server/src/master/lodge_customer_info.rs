@@ -38,6 +38,7 @@ pub struct CustomerInfoRow {
     pub zip_code: Option<String>,
     pub ledger_id: Option<i64>,
     pub segment_name: Option<String>,
+    pub customer_type: Option<String>,
     pub is_active: i32,
     pub has_documents: bool,
 }
@@ -220,10 +221,12 @@ pub async fn get_customer_informations(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     qs: QueryState,
+    customer_type: String,
 ) -> Result<PagedCustomerInfos, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
     let search_pattern = format!("%{}%", qs.search.trim());
     let offset = qs.page * qs.per_page;
+    let ctype = customer_type.trim().to_uppercase();
 
     let order_col = match qs.sort_by.as_deref() {
         Some("code") => "ci.code",
@@ -236,9 +239,11 @@ pub async fn get_customer_informations(
 
     let total: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM customer_information ci \
-         WHERE ci.customer_name ILIKE $1 OR ci.mobile_no1 ILIKE $1 OR ci.email_id ILIKE $1",
+         WHERE ci.customer_type = $2 \
+           AND (ci.customer_name ILIKE $1 OR ci.mobile_no1 ILIKE $1 OR ci.email_id ILIKE $1)",
     )
     .bind(&search_pattern)
+    .bind(&ctype)
     .fetch_one(&pool)
     .await
     .map_err(|e| format!("Count query failed: {e}"))?;
@@ -251,19 +256,21 @@ pub async fn get_customer_informations(
                 ci.visa_no, ci.visa_issue_date, ci.visa_expiry_date, \
                 ci.state_id, sm.name AS state_name, \
                 ci.city_id, cm.name AS city_name, \
-                ci.zip_code, ci.ledger_id, ms.name AS segment_name, ci.is_active, \
+                ci.zip_code, ci.ledger_id, ms.name AS segment_name, ci.customer_type, ci.is_active, \
                 EXISTS(SELECT 1 FROM customer_detail cd WHERE cd.cust_id = ci.id AND cd.is_active = 1) AS has_documents \
          FROM customer_information ci \
          LEFT JOIN state_master sm ON sm.id = ci.state_id \
          LEFT JOIN city_master cm ON cm.id = ci.city_id \
          LEFT JOIN market_segment ms ON ms.id = ci.ledger_id \
-         WHERE ci.customer_name ILIKE $1 OR ci.mobile_no1 ILIKE $1 OR ci.email_id ILIKE $1 \
-         ORDER BY {} {} LIMIT $2 OFFSET $3",
+         WHERE ci.customer_type = $2 \
+           AND (ci.customer_name ILIKE $1 OR ci.mobile_no1 ILIKE $1 OR ci.email_id ILIKE $1) \
+         ORDER BY {} {} LIMIT $3 OFFSET $4",
         order_col, dir
     );
 
     let rows = sqlx::query(&sql)
         .bind(&search_pattern)
+        .bind(&ctype)
         .bind(qs.per_page)
         .bind(offset)
         .fetch_all(&pool)
@@ -319,6 +326,7 @@ pub async fn get_customer_informations(
             zip_code: r.try_get("zip_code").ok().flatten(),
             ledger_id: r.try_get("ledger_id").ok().flatten(),
             segment_name: r.try_get("segment_name").ok().flatten(),
+            customer_type: r.try_get("customer_type").ok().flatten(),
             is_active: r.try_get("is_active").unwrap_or(1),
             has_documents: r.try_get("has_documents").unwrap_or(false),
         })
@@ -356,10 +364,15 @@ pub async fn create_customer_information(
     visa_no: Option<String>,
     visa_issue_date: Option<String>,
     visa_expiry_date: Option<String>,
+    customer_type: String,
 ) -> Result<i32, String> {
     let customer_name = customer_name.trim().to_string();
     if customer_name.is_empty() {
         return Err("Customer name is required".to_string());
+    }
+    let ctype = customer_type.trim().to_uppercase();
+    if ctype != "LODGE" && ctype != "RESTAURANT" {
+        return Err("Customer type must be LODGE or RESTAURANT".to_string());
     }
     if ledger_id.is_none() {
         return Err("Market segment is required".to_string());
@@ -419,8 +432,8 @@ pub async fn create_customer_information(
           state_id, city_id, zip_code, \
           mobile_no1, mobile_no2, email_id, \
           pan_card, passport_no, passport_issue_date, passport_expiry_date, \
-          visa_no, visa_issue_date, visa_expiry_date) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) \
+          visa_no, visa_issue_date, visa_expiry_date, customer_type) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) \
          RETURNING id",
     )
     .bind(opt_str(prefix))
@@ -444,6 +457,7 @@ pub async fn create_customer_information(
     .bind(opt_str(visa_no))
     .bind(visa_issue)
     .bind(visa_expiry)
+    .bind(&ctype)
     .fetch_one(&pool)
     .await
     .map_err(|e| format!("Failed to create customer: {e}"))?;

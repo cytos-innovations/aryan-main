@@ -811,6 +811,7 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             visa_no              VARCHAR(50),
             visa_issue_date      TIMESTAMP,
             visa_expiry_date     TIMESTAMP,
+            customer_type        VARCHAR(20),
             is_active            INTEGER   NOT NULL DEFAULT 1,
             created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_by           INTEGER,
@@ -1608,6 +1609,24 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|e| format!("Migration error (order_item.addon_rate): {e}"))?;
+
+    // Flag to separate lodge customers from restaurant customers (shared table).
+    // No default — the application sets it explicitly on insert.
+    sqlx::query(
+        "ALTER TABLE customer_information ADD COLUMN IF NOT EXISTS customer_type VARCHAR(20)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (customer_information.customer_type): {e}"))?;
+
+    // Backfill pre-existing rows (created before this column existed) as LODGE
+    // so legacy customers remain visible in the lodge application.
+    sqlx::query(
+        "UPDATE customer_information SET customer_type = 'LODGE' WHERE customer_type IS NULL",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (backfill customer_type): {e}"))?;
 
     seed_applications(pool).await?;
     seed_module_permissions(pool).await?;

@@ -3275,6 +3275,7 @@ pub async fn search_customers(
         "SELECT id, code, customer_name, mobile_no1, email_id, address_line1
          FROM   customer_information
          WHERE  is_active = 1
+           AND  customer_type = 'RESTAURANT'
            AND  ($1 = '' OR customer_name ILIKE $2
                         OR mobile_no1 ILIKE $2
                         OR CAST(code AS TEXT) = $1)
@@ -3309,8 +3310,8 @@ pub async fn quick_create_customer(
 
     let row = sqlx::query(
         "INSERT INTO customer_information
-            (customer_name, mobile_no1, email_id, address_line1, is_active)
-         VALUES ($1, $2, $3, $4, 1)
+            (customer_name, mobile_no1, email_id, address_line1, customer_type, is_active)
+         VALUES ($1, $2, $3, $4, 'RESTAURANT', 1)
          RETURNING id, code, customer_name, mobile_no1, email_id, address_line1",
     )
     .bind(name)
@@ -3349,7 +3350,7 @@ pub async fn get_customer_due_by_mobile(
 
     let cust = sqlx::query(
         "SELECT id, customer_name FROM customer_information
-         WHERE  mobile_no1 = $1 AND is_active = 1 ORDER BY id LIMIT 1",
+         WHERE  mobile_no1 = $1 AND is_active = 1 AND customer_type = 'RESTAURANT' ORDER BY id LIMIT 1",
     )
     .bind(m)
     .fetch_optional(&pool)
