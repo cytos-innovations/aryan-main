@@ -38,13 +38,23 @@ export default function AddonDialog({
   // focusable row index within the suggested/added list (-1 = none focused)
   const [rowFocus, setRowFocus]       = useState(-1);
 
-  const searchRef      = useRef(null);
-  const dropdownRef    = useRef(null);
-  const customNameRef  = useRef(null);
-  const customRateRef  = useRef(null);
-  const applyBtnRef    = useRef(null);
+  const searchRef       = useRef(null);
+  const dropdownRef     = useRef(null);
+  const customNameRef   = useRef(null);
+  const customRateRef   = useRef(null);
+  const customRowRef    = useRef(null); // wraps [Name][Rate][+] row
+  const footerBtnsRef   = useRef(null); // wraps [Cancel][Apply] row
+  const applyBtnRef     = useRef(null);
   // refs for suggested + added rows (rebuilt each render)
-  const rowRefs        = useRef([]);
+  const rowRefs         = useRef([]);
+
+  function focusFooterFirst() { footerBtnsRef.current?.querySelector("button")?.focus(); }
+  function focusFooterLast()  { const b = footerBtnsRef.current?.querySelectorAll("button"); b?.[b.length - 1]?.focus(); }
+  function focusCustomAdd()   { customRowRef.current?.querySelector("[data-custom-add]")?.focus(); }
+  function focusLastRow() {
+    if (allRows.length > 0) { setRowFocus(-1); setTimeout(() => setRowFocus(allRows.length - 1), 0); }
+    else searchRef.current?.focus();
+  }
 
   // Reset whenever dialog opens for a different item/line.
   useEffect(() => {
@@ -229,18 +239,51 @@ export default function AddonDialog({
     if (e.key === "Enter") {
       e.preventDefault();
       if (customName.trim()) { customRateRef.current?.focus(); return; }
-      // Empty name → go straight to Apply
-      applyBtnRef.current?.focus();
+      focusFooterFirst();
+      return;
     }
-    if (e.key === "ArrowUp") { e.preventDefault(); searchRef.current?.focus(); }
+    if (e.key === "ArrowUp")    { e.preventDefault(); focusLastRow(); return; }
+    if (e.key === "ArrowDown")  { e.preventDefault(); focusFooterFirst(); return; }
+    if (e.key === "ArrowRight") {
+      // only move to rate/+ when cursor is at end of text
+      const el = e.currentTarget;
+      if (el.selectionStart === el.value.length) { e.preventDefault(); customRateRef.current?.focus(); }
+    }
+    // ArrowLeft: natural cursor movement in text
   }
 
   function onCustomRateKeyDown(e) {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (customName.trim()) { handleAddCustom().then(() => applyBtnRef.current?.focus()); return; }
-      applyBtnRef.current?.focus();
+      if (customName.trim()) { handleAddCustom().then(() => focusFooterLast()); return; }
+      focusFooterLast();
+      return;
     }
+    if (e.key === "ArrowUp")    { e.preventDefault(); focusLastRow(); return; }
+    if (e.key === "ArrowDown")  { e.preventDefault(); focusFooterFirst(); return; }
+    if (e.key === "ArrowLeft")  { e.preventDefault(); customNameRef.current?.focus(); return; }
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      if (customName.trim()) focusCustomAdd(); else focusFooterFirst();
+    }
+  }
+
+  function onCustomAddBtnKeyDown(e) {
+    if (e.key === "ArrowUp")    { e.preventDefault(); focusLastRow(); return; }
+    if (e.key === "ArrowDown")  { e.preventDefault(); focusFooterFirst(); return; }
+    if (e.key === "ArrowLeft")  { e.preventDefault(); customRateRef.current?.focus(); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); focusFooterFirst(); }
+  }
+
+  function onFooterKeyDown(e) {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp"].includes(e.key)) return;
+    const btns = Array.from(e.currentTarget.querySelectorAll("button"));
+    const idx  = btns.findIndex((b) => b === document.activeElement || b.contains(document.activeElement));
+    if (idx === -1) return;
+    e.preventDefault();
+    if (e.key === "ArrowRight") { if (idx + 1 < btns.length) btns[idx + 1].focus(); return; }
+    if (e.key === "ArrowLeft")  { if (idx > 0) btns[idx - 1].focus(); else focusCustomAdd(); return; }
+    if (e.key === "ArrowUp")    { customNameRef.current?.focus(); }
   }
 
   async function handleAddCustom() {
@@ -374,7 +417,7 @@ export default function AddonDialog({
           {/* Custom add-on */}
           <div className="rounded-lg border border-dashed px-3 py-2.5 space-y-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Custom add-on</p>
-            <div className="flex items-center gap-2">
+            <div ref={customRowRef} className="flex items-center gap-2">
               <Input
                 ref={customNameRef}
                 value={customName}
@@ -393,8 +436,10 @@ export default function AddonDialog({
                 className="h-8 text-xs w-20"
               />
               <Button
+                data-custom-add
                 type="button" size="sm" variant="outline"
                 onClick={handleAddCustom}
+                onKeyDown={onCustomAddBtnKeyDown}
                 disabled={!customName.trim() || creating}
                 className="h-8 px-2.5 text-xs shrink-0"
               >
@@ -413,7 +458,7 @@ export default function AddonDialog({
               <span className="text-[10px] ml-1">({selectedMap.size} add-on{selectedMap.size !== 1 ? "s" : ""})</span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div ref={footerBtnsRef} className="flex items-center gap-2" onKeyDown={onFooterKeyDown}>
             <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-8 px-3 text-xs">
               Cancel
             </Button>

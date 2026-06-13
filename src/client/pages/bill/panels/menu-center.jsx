@@ -232,14 +232,16 @@ function FoodTypeLegend() {
 
 // ─── Menu Item Card ───────────────────────────────────────────────
 
-function MenuItemCard({ item, applicableRate, onClick, isAdding }) {
+function MenuItemCard({ item, applicableRate, onClick, isAdding, cardIdx, onCardKeyDown }) {
   const price = selectItemRate(item, applicableRate);
 
   return (
     <button
       type="button"
       onClick={() => onClick(item)}
+      onKeyDown={onCardKeyDown}
       disabled={isAdding}
+      data-card-idx={cardIdx}
       className={[
         "relative flex flex-col rounded-lg border bg-card text-left",
         "cursor-pointer select-none overflow-hidden",
@@ -328,6 +330,15 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
   const { selectedMenuGroupId, selectedMenuCategoryId } = useBillingContext();
   const [search, setSearch] = useState("");
   const searchRef = useRef(null);
+  const gridRef   = useRef(null);
+  // Number of columns driven by the CSS grid — read from DOM on arrow press
+  function getColCount() {
+    if (!gridRef.current) return 3;
+    return getComputedStyle(gridRef.current).gridTemplateColumns.split(" ").length;
+  }
+  function focusCard(idx) {
+    gridRef.current?.querySelector(`[data-card-idx="${idx}"]`)?.focus();
+  }
 
   // Expose search ref to parent so it can refocus after qty entry
   useEffect(() => {
@@ -436,6 +447,13 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
               // POS action keys: prevent typing into search bar, let them bubble to BottomActionBar
               if (e.key === "*" || e.key === "/") { e.preventDefault(); return; }
 
+              // Arrow keys: move focus into the card grid
+              if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+                e.preventDefault();
+                focusCard(0);
+                return;
+              }
+
               if (e.key === "Tab" && !e.shiftKey) {
                 // Forward Tab: jump to the first enabled POS action button
                 e.preventDefault();
@@ -495,15 +513,25 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2">
+          <div ref={gridRef} className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2">
             {showRecents && <SectionLabel>Recent</SectionLabel>}
-            {displayItems.map((item) => (
+            {displayItems.map((item, idx) => (
               <MenuItemCard
                 key={item.id}
                 item={item}
                 applicableRate={applicableRate}
                 onClick={onAddItem}
                 isAdding={addingId === item.id}
+                cardIdx={idx}
+                totalCards={displayItems.length}
+                onCardKeyDown={(e) => {
+                  const cols = getColCount();
+                  const total = displayItems.length;
+                  if (e.key === "ArrowRight") { e.preventDefault(); if (idx + 1 < total) focusCard(idx + 1); }
+                  else if (e.key === "ArrowLeft") { e.preventDefault(); if (idx - 1 >= 0) focusCard(idx - 1); else searchRef.current?.focus(); }
+                  else if (e.key === "ArrowDown") { e.preventDefault(); const n = idx + cols; if (n < total) focusCard(n); }
+                  else if (e.key === "ArrowUp") { e.preventDefault(); const n = idx - cols; if (n >= 0) focusCard(n); else searchRef.current?.focus(); }
+                }}
               />
             ))}
           </div>

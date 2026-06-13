@@ -354,6 +354,8 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
     setCatRows(reset);
   }
 
+  const saveButtonRef = useRef(null);
+
   // ── Save ─────────────────────────────────────────────────
   function handleSave() {
     if (hasErrors) return;
@@ -416,10 +418,25 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
             Bill Disc {discMode === "pct" ? "%" : "₹"} :
           </span>
           <input
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
             inputMode="decimal"
             value={billDiscVal}
             onChange={(e) => setBillDiscVal(sanitizeNum(e.target.value))}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const isEmpty = (parseFloat(billDiscVal) || 0) === 0;
+              if (isEmpty) {
+                // Move to first unlocked category input
+                const first = categories.find((c) => !billDiscActive && c.allow_discount);
+                if (first) document.querySelector(`[data-cat-input="${first.id}"]`)?.focus();
+                else saveButtonRef.current?.querySelector("button")?.focus();
+              } else {
+                handleSave();
+              }
+            }}
             className="w-16 h-8 rounded border text-sm text-right tabular-nums px-2 bg-muted/30 border-border/60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary text-foreground"
           />
         </div>
@@ -470,9 +487,9 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
                 onKeyDown={(e) => {
                   if (e.key !== "Enter") return;
                   e.preventDefault();
-                  const next = categories[idx + 1];
-                  if (next) document.querySelector(`[data-cat-input="${next.id}"]`)?.focus();
-                  else handleSave();
+                  const nextUnlocked = categories.slice(idx + 1).find((c) => !billDiscActive && c.allow_discount);
+                  if (nextUnlocked) document.querySelector(`[data-cat-input="${nextUnlocked.id}"]`)?.focus();
+                  else saveButtonRef.current?.querySelector("button")?.focus();
                 }}
                 data-cat-input={cat.id}
                 className={[
@@ -512,16 +529,29 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
           </span>
         )}
 
-        <div className="flex items-center gap-1.5 ml-auto">
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleSave}
-            disabled={hasErrors}
-            className="h-8 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground border-0 disabled:opacity-50"
-          >
-            Save
-          </Button>
+        <div
+          className="flex items-center gap-1.5 ml-auto"
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            const btns = Array.from(e.currentTarget.querySelectorAll("button:not(:disabled)"));
+            const idx = btns.indexOf(document.activeElement);
+            if (idx === -1) return;
+            e.preventDefault();
+            const next = e.key === "ArrowRight" ? btns[idx + 1] : btns[idx - 1];
+            next?.focus();
+          }}
+        >
+          <span ref={saveButtonRef}>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleSave}
+              disabled={hasErrors}
+              className="h-8 px-5 text-xs font-semibold bg-primary hover:bg-primary/90 text-primary-foreground border-0 disabled:opacity-50"
+            >
+              Save
+            </Button>
+          </span>
           <Button
             type="button"
             variant="outline"
