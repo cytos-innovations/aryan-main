@@ -66,7 +66,7 @@ function getPaymentIcon(name = "") {
   return Wallet01Icon; // generic fallback for unknown methods
 }
 
-function SearchableSelect({ options, value, onSelect, onSelectDone, placeholder = "Select…", inputRef, className = "" }) {
+function SearchableSelect({ options, value, onSelect, onSelectDone, onArrowNav, markDropdown = false, placeholder = "Select…", inputRef, id, className = "" }) {
   const [query, setQuery]   = useState("");
   const [open, setOpen]     = useState(false);
   const [active, setActive] = useState(0);
@@ -116,10 +116,16 @@ function SearchableSelect({ options, value, onSelect, onSelectDone, placeholder 
     onSelect(opt.value);
     setOpen(false);
     setQuery("");
-    setTimeout(() => { if (onSelectDone) onSelectDone(); else focusNext(); }, 0);
+    setTimeout(() => { if (onSelectDone) onSelectDone(opt.value); else focusNext(); }, 0);
   }
 
   function onKeyDown(e) {
+    // Horizontal arrows never drive the dropdown — hand them to the parent for
+    // cross-cell navigation (works whether the list is open or closed).
+    if (onArrowNav && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      onArrowNav(e);
+      if (e.defaultPrevented) { setOpen(false); return; }
+    }
     if (!open) {
       if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); setQuery(""); setOpen(true); setActive(0); }
       return;
@@ -134,6 +140,7 @@ function SearchableSelect({ options, value, onSelect, onSelectDone, placeholder 
     <div ref={containerRef} className={`relative ${className}`}>
       <input
         ref={resolvedRef}
+        id={id}
         type="text"
         value={displayText}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
@@ -144,7 +151,7 @@ function SearchableSelect({ options, value, onSelect, onSelectDone, placeholder 
         className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-muted-foreground"
       />
       {open && filtered.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
+        <div data-split-dropdown-open={markDropdown ? "true" : undefined} className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
           <div ref={listRef} className="max-h-52 overflow-y-auto">
             {filtered.map((opt, i) => (
               <div
@@ -227,9 +234,12 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [splitMethod,  setSplitMethod]  = useState("");
   const [splitAmount,  setSplitAmount]  = useState("");
 
-  const nameRef   = useRef(null);
-  const methodRef = useRef(null);
-  const amountRef = useRef(null);
+  const nameRef        = useRef(null);
+  const methodRef      = useRef(null);
+  const amountRef      = useRef(null);
+  const splitMethodRef = useRef(null);
+  const duePaidRef     = useRef(null);
+  const ncRemarkRef    = useRef(null);
 
   const isSplit = method === SPLIT_VALUE;
   const isDue   = method === DUE_VALUE;
@@ -314,12 +324,141 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   function addSplit() {
     const amt = Number(splitAmount);
     if (!amt || amt <= 0 || !splitMethod) return;
-    setSplitEntries((prev) => [...prev, { payment_mode: splitMethod, amount: amt, reference_no: null }]);
+    const nextEntries = [...splitEntries, { payment_mode: splitMethod, amount: amt, reference_no: null }];
+    setSplitEntries(nextEntries);
     setSplitAmount("");
+
+    // Decide where focus should land after this entry is added.
+    // Once we have ≥2 modes and the split is balanced, the bill is ready to
+    // settle → jump to the Settle button. Otherwise loop back to the method
+    // picker to add the next mode.
+    const newTotal   = nextEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const newBalance = Math.round((netAmount - newTotal) * 100) / 100;
+    const readyToSettle = nextEntries.length >= 2 && Math.abs(newBalance) <= 0.01;
+    setTimeout(() => {
+      if (readyToSettle) document.getElementById("settle-dialog-settle-btn")?.focus();
+      else               document.getElementById("split-method-input")?.focus();
+    }, 0);
   }
 
   function removeSplit(i) {
     setSplitEntries((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  // ── Split-flow arrow-key grid navigation ──────────────────
+  // A single capture-phase handler (see effect below) owns all arrow keys
+  // while the dialog is in Split mode, so it runs *before* Radix Dialog's own
+  // focus management and before the inputs' default arrow behaviour.
+  //
+  // The focus grid (top → bottom):
+  //   row 0 : [ Payment Method ]                       (single cell)
+  //   row 1 : [ split method | amount | Add ]          (the add-row)
+  //   row k : [ split-entry-(k-2) ]                    (one per added entry)
+  //   last  : [ Close | Settle ]
+  //
+  // Left/Right move within a row; Up/Down move between rows keeping the column.
+  const byId = (id) => document.getElementById(id);
+
+  function buildSplitGrid() {
+    const rows = [["settle-method-input"]];
+    rows.push(["split-method-input", "split-amount-input", "split-add-btn"]);
+    for (let i = 0; i < splitEntries.length; i++) rows.push([`split-entry-${i}`]);
+    rows.push(["settle-dialog-close-btn", "settle-dialog-settle-btn"]);
+    return rows;
+  }
+
+  // Locate the currently-focused id within the grid → { r, c }, or null.
+  function locate(grid, id) {
+    for (let r = 0; r < grid.length; r++) {
+      const c = grid[r].indexOf(id);
+      if (c !== -1) return { r, c };
+    }
+    return null;
+  }
+
+  function focusId(id) { byId(id)?.focus(); }
+
+  // Returns true if it handled the key (caller should preventDefault).
+  function handleSplitArrow(key, activeId, caretAtStart, caretAtEnd) {
+    const grid = buildSplitGrid();
+    const pos = locate(grid, activeId);
+    if (!pos) return false;
+    const { r, c } = pos;
+    const row = grid[r];
+
+    if (key === "ArrowRight") {
+      // In the amount field, only leave when the caret is at the very end.
+      if (activeId === "split-amount-input" && !caretAtEnd) return false;
+      if (c < row.length - 1) { focusId(row[c + 1]); return true; }
+      return false;
+    }
+    if (key === "ArrowLeft") {
+      if (activeId === "split-amount-input" && !caretAtStart) return false;
+      if (c > 0) { focusId(row[c - 1]); return true; }
+      // Leftmost cell of the add-row → jump to Close (per spec).
+      if (r === 1) { focusId("settle-dialog-close-btn"); return true; }
+      return false;
+    }
+    if (key === "ArrowDown") {
+      const next = grid[r + 1];
+      if (next) { focusId(next[Math.min(c, next.length - 1)]); return true; }
+      return false;
+    }
+    if (key === "ArrowUp") {
+      const prev = grid[r - 1];
+      if (prev) { focusId(prev[Math.min(c, prev.length - 1)]); return true; }
+      return false;
+    }
+    return false;
+  }
+
+  // Capture-phase arrow navigation for the split flow. Runs before Radix
+  // Dialog and before the inputs, so arrow keys reliably move focus.
+  useEffect(() => {
+    if (!open || !isSplit) return;
+    function onKeyDownCapture(e) {
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+      const active = document.activeElement;
+      const id = active?.id;
+      if (!id) return;
+
+      // If a SearchableSelect dropdown is open, let it own Up/Down (option
+      // navigation) and Left/Right is handled by its own onArrowNav.
+      const dropdownOpen = !!document.querySelector("[data-split-dropdown-open='true']");
+      if (dropdownOpen && (e.key === "ArrowUp" || e.key === "ArrowDown")) return;
+      if (id === "split-method-input" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        // SearchableSelect.onArrowNav handles horizontal movement for the method cell.
+        return;
+      }
+
+      // Caret edge detection for the amount field.
+      let caretAtStart = true, caretAtEnd = true;
+      if (id === "split-amount-input") {
+        const sel = active.selectionStart;
+        caretAtStart = sel == null || (sel === 0 && active.selectionEnd === 0);
+        caretAtEnd   = sel == null || (sel === active.value.length && active.selectionEnd === active.value.length);
+      }
+
+      if (handleSplitArrow(e.key, id, caretAtStart, caretAtEnd)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+    document.addEventListener("keydown", onKeyDownCapture, true);
+    return () => document.removeEventListener("keydown", onKeyDownCapture, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isSplit, splitEntries.length]);
+
+  // Enter / Delete on a focused split-entry row removes it.
+  function onEntryRowKey(e, i) {
+    if (e.key === "Enter" || e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      removeSplit(i);
+      setTimeout(() => {
+        const fallback = byId(`split-entry-${Math.max(0, i - 1)}`);
+        (fallback ?? byId("split-method-input"))?.focus();
+      }, 0);
+    }
   }
 
   // ── Settle ────────────────────────────────────────────────
@@ -477,11 +616,20 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
           <Field>
             <FieldLabel>Payment Method</FieldLabel>
             <SearchableSelect
+              id="settle-method-input"
               inputRef={methodRef}
               options={allMethodOptions}
               value={method}
               onSelect={setMethod}
-              onSelectDone={() => amountRef.current?.focus()}
+              onSelectDone={(picked) => {
+                // Route focus to the field the chosen method reveals next.
+                setTimeout(() => {
+                  if (picked === SPLIT_VALUE)      splitMethodRef.current?.focus();
+                  else if (picked === DUE_VALUE)   duePaidRef.current?.focus();
+                  else if (picked === NC_VALUE)    ncRemarkRef.current?.focus();
+                  else                             amountRef.current?.focus();
+                }, 0);
+              }}
               placeholder={methodsQuery.isLoading ? "Loading…" : "Type or select method…"}
             />
           </Field>
@@ -691,6 +839,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
               <div className="relative">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
                 <Input
+                  ref={duePaidRef}
                   type="number"
                   min="0"
                   max={netAmount}
@@ -728,6 +877,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
               <div>
                 <p className="text-[11px] text-muted-foreground mb-1">Reason / Remark <span className="font-normal opacity-60">(optional)</span></p>
                 <Input
+                  ref={ncRemarkRef}
                   value={ncRemark}
                   onChange={(e) => setNcRemark(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSettle(); } }}
@@ -782,15 +932,24 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
               {/* Add row */}
               <div className="flex gap-2">
                 <SearchableSelect
+                  id="split-method-input"
+                  inputRef={splitMethodRef}
                   options={splitMethodOptions}
                   value={splitMethod}
                   onSelect={setSplitMethod}
+                  onSelectDone={() => document.getElementById("split-amount-input")?.focus()}
+                  markDropdown
+                  onArrowNav={(e) => {
+                    if (e.key === "ArrowRight") { e.preventDefault(); document.getElementById("split-amount-input")?.focus(); }
+                    else if (e.key === "ArrowLeft") { e.preventDefault(); document.getElementById("settle-dialog-close-btn")?.focus(); }
+                  }}
                   placeholder="Method…"
                   className="w-36 shrink-0"
                 />
                 <div className="relative flex-1">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
                   <Input
+                    id="split-amount-input"
                     type="number"
                     min="0"
                     step="0.01"
@@ -802,7 +961,14 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                     className="pl-6 font-mono"
                   />
                 </div>
-                <Button type="button" size="sm" className="h-9 px-3 gap-1" onClick={addSplit} disabled={!splitAmount || Number(splitAmount) <= 0}>
+                <Button
+                  id="split-add-btn"
+                  type="button"
+                  size="sm"
+                  className="h-9 px-3 gap-1"
+                  onClick={addSplit}
+                  disabled={!splitAmount || Number(splitAmount) <= 0}
+                >
                   <HugeiconsIcon icon={Add01Icon} size={13} strokeWidth={2.5} />
                   Add
                 </Button>
@@ -813,11 +979,17 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                 <>
                   <div className="border rounded-lg divide-y overflow-hidden">
                     {splitEntries.map((entry, i) => (
-                      <div key={i} className="flex items-center gap-3 px-3 py-2 bg-muted/10">
+                      <div
+                        key={i}
+                        id={`split-entry-${i}`}
+                        tabIndex={0}
+                        onKeyDown={(e) => onEntryRowKey(e, i)}
+                        className="flex items-center gap-3 px-3 py-2 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                      >
                         <HugeiconsIcon icon={CashIcon} size={13} strokeWidth={2} className="text-muted-foreground shrink-0" />
                         <span className="flex-1 text-xs font-semibold">{entry.payment_mode}</span>
                         <span className="text-sm font-bold tabular-nums">₹{fmtAmount(entry.amount)}</span>
-                        <button type="button" onClick={() => removeSplit(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors">
+                        <button type="button" onClick={() => removeSplit(i)} className="text-muted-foreground/40 hover:text-destructive transition-colors" tabIndex={-1}>
                           <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
                         </button>
                       </div>
@@ -842,10 +1014,11 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
         </FieldGroup>
 
         <DialogFooter className="gap-2">
-          <Button type="button" variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>
+          <Button id="settle-dialog-close-btn" type="button" variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>
             Close <span className="ml-1 text-[9px] font-mono opacity-60">Esc</span>
           </Button>
           <Button
+            id="settle-dialog-settle-btn"
             type="button"
             className={`flex-1 text-white border-0 ${isNc ? "bg-violet-600 hover:bg-violet-700" : "bg-emerald-600 hover:bg-emerald-700"}`}
             onClick={handleSettle}

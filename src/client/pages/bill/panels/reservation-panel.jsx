@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Calendar01Icon,
@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/ui/date-input";
+import { useEnterNav } from "@/hooks/use-enter-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -151,7 +152,8 @@ function FieldError({ children }) {
 // ─── Guest Count Stepper ──────────────────────────────────────
 
 function GuestCountStepper({ value, onChange, error }) {
-  const count = parseInt(value, 10) || 1;
+  // Empty string is allowed (no default). Stepper math falls back to 0.
+  const count = parseInt(value, 10) || 0;
   return (
     <div className="flex items-center gap-2">
       <Button
@@ -159,27 +161,31 @@ function GuestCountStepper({ value, onChange, error }) {
         variant="outline"
         size="icon"
         className="h-9 w-9 shrink-0"
+        tabIndex={-1}
         onClick={() => onChange(String(Math.max(1, count - 1)))}
         disabled={count <= 1}
       >
         <span className="text-base font-medium leading-none select-none">−</span>
       </Button>
-      <div
+      <Input
+        type="text"
+        inputMode="numeric"
+        required
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 3))}
+        placeholder="No. of guests"
         className={cn(
-          "flex-1 h-9 flex items-center justify-center rounded-md border text-sm font-semibold select-none",
-          error
-            ? "border-destructive text-destructive bg-destructive/5"
-            : "border-input bg-background",
+          "flex-1 h-9 text-center text-sm font-semibold",
+          error && "border-destructive text-destructive focus-visible:ring-destructive/30",
         )}
-      >
-        {count} {count === 1 ? "Guest" : "Guests"}
-      </div>
+      />
       <Button
         type="button"
         variant="outline"
         size="icon"
         className="h-9 w-9 shrink-0"
-        onClick={() => onChange(String(Math.min(999, count + 1)))}
+        tabIndex={-1}
+        onClick={() => onChange(String(Math.min(999, Math.max(1, count) + 1)))}
         disabled={count >= 999}
       >
         <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2.5} />
@@ -239,6 +245,7 @@ function TableStatusPicker({ tables, value, onChange }) {
       {/* Any table option */}
       <button
         type="button"
+        tabIndex={-1}
         onClick={() => onChange("none")}
         className={cn(
           "w-full rounded-lg border px-3 py-2.5 text-xs text-left transition-all",
@@ -274,6 +281,7 @@ function TableStatusPicker({ tables, value, onChange }) {
                     <button
                       key={t.id}
                       type="button"
+                      tabIndex={-1}
                       disabled={isOccupied}
                       onClick={() => !isOccupied && onChange(String(t.id))}
                       className={cn(
@@ -334,9 +342,9 @@ const EMPTY_FORM = {
   tableId:           "none",
   customerName:      "",
   customerMobile:    "",
-  guestCount:        "2",
+  guestCount:        "",
   reservationDate:   getTodayStr(),
-  reservationTime:   "19:00",
+  reservationTime:   "",
   durationMinutes:   "120",
   preferredWaiterId: "none",
   notes:             "",
@@ -346,6 +354,39 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
   const [form, setForm]     = useState(EMPTY_FORM);
   const [errors, setErrors] = useState({});
   const createMut           = useCreateReservation();
+  const enterNav            = useEnterNav({ arrows: true });
+  const cancelRef           = useRef(null);
+  const saveRef             = useRef(null);
+  const notesRef            = useRef(null);
+
+  // Notes is the last field: Enter / Down / Right move focus onto the action
+  // buttons (Save) instead of submitting directly. stopPropagation keeps the
+  // form-level enterNav handler from also acting (which would submit on Enter).
+  function handleNotesKeyDown(e) {
+    if (e.key === "Enter" || e.key === "ArrowDown") {
+      e.preventDefault();
+      e.stopPropagation();
+      saveRef.current?.focus();
+    } else if (e.key === "ArrowRight" && e.currentTarget.selectionStart === e.currentTarget.value.length) {
+      e.preventDefault();
+      e.stopPropagation();
+      saveRef.current?.focus();
+    }
+  }
+
+  // Left/Right move between the two action buttons; Up goes back to Notes.
+  function handleFooterKeyDown(e) {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      cancelRef.current?.focus();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      saveRef.current?.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      notesRef.current?.focus();
+    }
+  }
 
   function set(key, val) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -410,7 +451,7 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
-        <form id="reservation-form" onSubmit={handleSubmit} className="p-4 space-y-5">
+        <form id="reservation-form" onSubmit={handleSubmit} onKeyDown={enterNav} className="p-4 space-y-5">
 
           {/* ── Guest Info ── */}
           <div className="space-y-3">
@@ -426,6 +467,7 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
                 placeholder="Guest name or company"
                 maxLength={100}
                 autoFocus
+                required
                 className={cn(errors.customerName && "border-destructive focus-visible:ring-destructive/30")}
               />
               {errors.customerName && <FieldError>{errors.customerName}</FieldError>}
@@ -439,6 +481,7 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
                 placeholder="10-digit mobile number"
                 maxLength={10}
                 inputMode="numeric"
+                required
                 className={cn(errors.customerMobile && "border-destructive focus-visible:ring-destructive/30")}
               />
               {errors.customerMobile && <FieldError>{errors.customerMobile}</FieldError>}
@@ -467,13 +510,14 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
                   type="time"
                   value={form.reservationTime}
                   onChange={(e) => set("reservationTime", e.target.value)}
+                  required
                   className={cn(errors.reservationTime && "border-destructive")}
                 />
                 {errors.reservationTime && <FieldError>{errors.reservationTime}</FieldError>}
               </Field>
             </div>
 
-            <Field>
+            <Field data-enter-skip>
               <FieldLabel>Duration <OptLabel /></FieldLabel>
               <Select value={form.durationMinutes} onValueChange={(v) => set("durationMinutes", v)}>
                 <SelectTrigger>
@@ -506,7 +550,7 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
               {errors.guestCount && <FieldError>{errors.guestCount}</FieldError>}
             </Field>
 
-            <Field>
+            <Field data-enter-skip>
               <FieldLabel>Table <OptLabel /></FieldLabel>
               <TableStatusPicker
                 tables={tables}
@@ -523,7 +567,7 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
             <SectionLabel>Staff & Notes</SectionLabel>
 
             {employees.length > 0 && (
-              <Field>
+              <Field data-enter-skip>
                 <FieldLabel>Preferred Waiter <OptLabel /></FieldLabel>
                 <Select
                   value={form.preferredWaiterId}
@@ -547,8 +591,10 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
             <Field>
               <FieldLabel>Notes <OptLabel /></FieldLabel>
               <Input
+                ref={notesRef}
                 value={form.notes}
                 onChange={(e) => set("notes", e.target.value)}
+                onKeyDown={handleNotesKeyDown}
                 placeholder="Special requests, allergies, seating preferences…"
                 maxLength={500}
               />
@@ -560,17 +606,22 @@ function NewReservationForm({ tables, employees, onClose, onSaved }) {
       {/* Footer */}
       <div className="shrink-0 px-4 py-3 border-t flex gap-2">
         <Button
+          ref={cancelRef}
+          type="button"
           variant="outline"
           className="flex-1"
+          onKeyDown={handleFooterKeyDown}
           onClick={onClose}
           disabled={pending}
         >
           Cancel
         </Button>
         <Button
+          ref={saveRef}
           type="submit"
           form="reservation-form"
           className="flex-1 gap-2"
+          onKeyDown={handleFooterKeyDown}
           disabled={pending}
         >
           {pending && (
@@ -599,6 +650,35 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
   }));
   const [errors, setErrors] = useState({});
   const updateMut = useUpdateReservation();
+  const enterNav  = useEnterNav({ arrows: true });
+  const cancelRef = useRef(null);
+  const saveRef   = useRef(null);
+  const notesRef  = useRef(null);
+
+  function handleNotesKeyDown(e) {
+    if (e.key === "Enter" || e.key === "ArrowDown") {
+      e.preventDefault();
+      e.stopPropagation();
+      saveRef.current?.focus();
+    } else if (e.key === "ArrowRight" && e.currentTarget.selectionStart === e.currentTarget.value.length) {
+      e.preventDefault();
+      e.stopPropagation();
+      saveRef.current?.focus();
+    }
+  }
+
+  function handleFooterKeyDown(e) {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      cancelRef.current?.focus();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      saveRef.current?.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      notesRef.current?.focus();
+    }
+  }
 
   function set(key, val) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -656,7 +736,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <form id="edit-reservation-form" onSubmit={handleSubmit} className="p-4 space-y-5">
+        <form id="edit-reservation-form" onSubmit={handleSubmit} onKeyDown={enterNav} className="p-4 space-y-5">
 
           <div className="space-y-3">
             <SectionLabel>Guest Information</SectionLabel>
@@ -668,6 +748,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
                 placeholder="Guest name or company"
                 maxLength={100}
                 autoFocus
+                required
                 className={cn(errors.customerName && "border-destructive focus-visible:ring-destructive/30")}
               />
               {errors.customerName && <FieldError>{errors.customerName}</FieldError>}
@@ -680,6 +761,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
                 placeholder="10-digit mobile number"
                 maxLength={10}
                 inputMode="numeric"
+                required
                 className={cn(errors.customerMobile && "border-destructive focus-visible:ring-destructive/30")}
               />
               {errors.customerMobile && <FieldError>{errors.customerMobile}</FieldError>}
@@ -706,12 +788,13 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
                   type="time"
                   value={form.reservationTime}
                   onChange={(e) => set("reservationTime", e.target.value)}
+                  required
                   className={cn(errors.reservationTime && "border-destructive")}
                 />
                 {errors.reservationTime && <FieldError>{errors.reservationTime}</FieldError>}
               </Field>
             </div>
-            <Field>
+            <Field data-enter-skip>
               <FieldLabel>Duration <OptLabel /></FieldLabel>
               <Select value={form.durationMinutes} onValueChange={(v) => set("durationMinutes", v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -733,7 +816,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
               <GuestCountStepper value={form.guestCount} onChange={(v) => set("guestCount", v)} error={errors.guestCount} />
               {errors.guestCount && <FieldError>{errors.guestCount}</FieldError>}
             </Field>
-            <Field>
+            <Field data-enter-skip>
               <FieldLabel>Table <OptLabel /></FieldLabel>
               <TableStatusPicker tables={tables} value={form.tableId} onChange={(v) => set("tableId", v)} />
             </Field>
@@ -744,7 +827,7 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
           <div className="space-y-3">
             <SectionLabel>Staff & Notes</SectionLabel>
             {employees.length > 0 && (
-              <Field>
+              <Field data-enter-skip>
                 <FieldLabel>Preferred Waiter <OptLabel /></FieldLabel>
                 <Select value={form.preferredWaiterId} onValueChange={(v) => set("preferredWaiterId", v)}>
                   <SelectTrigger><SelectValue placeholder="Assign on arrival" /></SelectTrigger>
@@ -760,8 +843,10 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
             <Field>
               <FieldLabel>Notes <OptLabel /></FieldLabel>
               <Input
+                ref={notesRef}
                 value={form.notes}
                 onChange={(e) => set("notes", e.target.value)}
+                onKeyDown={handleNotesKeyDown}
                 placeholder="Special requests, allergies, seating preferences…"
                 maxLength={500}
               />
@@ -771,10 +856,10 @@ function EditReservationForm({ reservation, tables, employees, onClose, onSaved 
       </div>
 
       <div className="shrink-0 px-4 py-3 border-t flex gap-2">
-        <Button variant="outline" className="flex-1" onClick={onClose} disabled={pending}>
+        <Button ref={cancelRef} type="button" variant="outline" className="flex-1" onKeyDown={handleFooterKeyDown} onClick={onClose} disabled={pending}>
           Cancel
         </Button>
-        <Button type="submit" form="edit-reservation-form" className="flex-1 gap-2" disabled={pending}>
+        <Button ref={saveRef} type="submit" form="edit-reservation-form" className="flex-1 gap-2" onKeyDown={handleFooterKeyDown} disabled={pending}>
           {pending && <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />}
           {pending ? "Saving…" : "Update Reservation"}
         </Button>

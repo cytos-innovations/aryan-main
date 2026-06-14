@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ArrowLeft01Icon,
   Clock01Icon,
   AlertCircleIcon,
+  CheckmarkCircle01Icon,
+  Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -34,6 +36,9 @@ import {
   useBillingAddons,
   useCreateCustomAddon,
   useUpdateOrderItemAddons,
+  useUpdateReservationStatus,
+  useCancelReservation,
+  useEmployeesForBilling,
 } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
@@ -70,6 +75,16 @@ function fmtTime(since) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// "HH:MM" (24h) → "h:MM AM/PM"
+function fmtResTime(timeStr) {
+  if (!timeStr) return "";
+  const [h, m] = timeStr.split(":");
+  const hour = parseInt(h, 10);
+  if (isNaN(hour)) return "";
+  const ampm = hour >= 12 ? "PM" : "AM";
+  return `${hour % 12 || 12}:${m} ${ampm}`;
+}
+
 function useNow() {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -95,16 +110,32 @@ const ORDER_TYPE_CFG = {
 
 // ─── Session header bar ───────────────────────────────────────
 
-function SessionHeader({ session, isDraft, selectedTableName, onBack }) {
+function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingReservation, onArrivedPrefill }) {
   const now        = useNow();
   const elapsed    = useMemo(() => calcElapsed(session?.opened_at, now), [session?.opened_at, now]);
   const openedTime = useMemo(() => fmtTime(session?.opened_at),          [session?.opened_at]);
+
+  const resStatusMut = useUpdateReservationStatus();
+  const cancelResMut = useCancelReservation();
+  const [confirmCancelRes, setConfirmCancelRes] = useState(false);
+  const resPending   = resStatusMut.isPending || cancelResMut.isPending;
 
   const statusCfg = SESSION_STATUS_CFG[session?.session_status] ?? SESSION_STATUS_CFG.OPEN;
   const orderCfg  = session?.order_type ? ORDER_TYPE_CFG[session.order_type] : null;
   const isClosed  = session?.session_status === "BILL_PRINTED";
 
   const tableName = session?.table_name ?? selectedTableName ?? "No Table";
+
+  function handleResStatus(status) {
+    if (!pendingReservation) return;
+    // Copy guest name + preferred waiter into the draft pickers on arrival.
+    if (status === "ARRIVED" && isDraft) onArrivedPrefill?.(pendingReservation);
+    resStatusMut.mutate({ reservationId: pendingReservation.id, status });
+  }
+  function handleCancelRes() {
+    if (!pendingReservation) return;
+    cancelResMut.mutate(pendingReservation.id, { onSuccess: () => setConfirmCancelRes(false) });
+  }
 
   return (
     <div className={[
@@ -146,6 +177,48 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack }) {
 
         <div className="flex-1" />
 
+        {/* Reservation actions — when the selected table is RESERVED */}
+        {pendingReservation && (
+          <div className="flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5 text-[11px] text-blue-600 dark:text-blue-300 mr-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
+              <span className="font-medium truncate max-w-35">{pendingReservation.customerName ?? "Reserved"}</span>
+              {pendingReservation.time ? <span className="text-muted-foreground">· {fmtResTime(pendingReservation.time)}</span> : null}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 text-xs text-emerald-600 border-emerald-200 hover:bg-emerald-50 dark:text-emerald-400 dark:border-emerald-800 dark:hover:bg-emerald-950/30"
+              onClick={() => handleResStatus("ARRIVED")}
+              disabled={resPending}
+            >
+              <HugeiconsIcon icon={CheckmarkCircle01Icon} size={12} strokeWidth={2} />
+              Arrived
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 text-xs text-orange-600 border-orange-200 hover:bg-orange-50 dark:text-orange-400 dark:border-orange-800 dark:hover:bg-orange-950/30"
+              onClick={() => handleResStatus("NO_SHOW")}
+              disabled={resPending}
+            >
+              <HugeiconsIcon icon={AlertCircleIcon} size={12} strokeWidth={2} />
+              No Show
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 shrink-0 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+              onClick={() => setConfirmCancelRes(true)}
+              disabled={resPending}
+              title="Cancel reservation"
+            >
+              <HugeiconsIcon icon={Cancel01Icon} size={13} strokeWidth={2} />
+            </Button>
+            <Separator orientation="vertical" className="h-4" />
+          </div>
+        )}
+
         {/* Timer */}
         {!isDraft && elapsed && openedTime && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -155,6 +228,30 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack }) {
         )}
 
       </div>
+
+      {/* Cancel reservation confirmation */}
+      <AlertDialog open={confirmCancelRes} onOpenChange={(o) => { if (!o) setConfirmCancelRes(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Reservation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cancel the reservation for{" "}
+              <span className="font-medium text-foreground">{pendingReservation?.customerName ?? "this guest"}</span>
+              {tableName ? ` at ${tableName}` : ""}? The table will be released back to available.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Reservation</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleCancelRes}
+              disabled={cancelResMut.isPending}
+            >
+              {cancelResMut.isPending ? "Cancelling…" : "Cancel Reservation"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -256,7 +353,8 @@ export default function OrderEntryView() {
   // ── Queries ───────────────────────────────────────────────
   const sessionQuery = useSessionDetail(activeSessionId);
   const menuQuery    = useMenuForBilling();
-  const floorQuery   = useFloorView();
+  const floorQuery     = useFloorView();
+  const employeesQuery = useEmployeesForBilling();
   const cancelMut    = useCancelOrderSession();
   const addItemMut   = useAddOrderItem(activeSessionId);
 
@@ -283,6 +381,38 @@ export default function OrderEntryView() {
   const menu           = menuQuery.data ?? [];
   const isMenuLoading  = menuQuery.isLoading;
   const applicableRate = isDraft ? draftApplicableRate : (session?.applicable_rate ?? 1);
+
+  // Active reservation on the selected table (RESERVED only) — surfaced in the
+  // order header so staff can mark Arrived / No Show / Cancel without opening
+  // the Reservations panel.
+  const pendingReservation = useMemo(() => {
+    if (!selectedTableId) return null;
+    const table = (floorQuery.data ?? []).find((t) => t.id === selectedTableId);
+    if (!table?.reservation_id || table.reservation_status !== "RESERVED") return null;
+    return {
+      id:           table.reservation_id,
+      customerName: table.reservation_customer ?? null,
+      time:         table.reservation_time ?? null,
+      guestCount:   table.reservation_guest_count ?? null,
+      waiterId:     table.reservation_preferred_waiter ?? null,
+    };
+  }, [floorQuery.data, selectedTableId]);
+
+  // When a reservation guest is marked Arrived from the header, copy the
+  // reservation's customer name + preferred waiter into the draft so they show
+  // in the right-panel Customer / Waiter pickers (and carry into the session).
+  const handleArrivedPrefill = useCallback((res) => {
+    if (!res) return;
+    const cfg = {};
+    if (res.customerName) cfg.customerName = res.customerName;
+    if (res.guestCount)   cfg.covers       = res.guestCount;
+    if (res.waiterId != null) {
+      const emp = (employeesQuery.data ?? []).find((e) => e.id === res.waiterId);
+      cfg.waiterId   = res.waiterId;
+      cfg.waiterName = emp?.name ?? null;
+    }
+    if (Object.keys(cfg).length > 0) setDraftConfig(cfg);
+  }, [employeesQuery.data, setDraftConfig]);
 
   // Resolved items (draft uses context, session uses DB query)
   const items          = isDraft ? (draftItems ?? []) : (itemsQuery.data ?? []);
@@ -604,6 +734,8 @@ export default function OrderEntryView() {
         isDraft={isDraft}
         selectedTableName={selectedTableName}
         onBack={handleBack}
+        pendingReservation={pendingReservation}
+        onArrivedPrefill={handleArrivedPrefill}
       />
 
       {/* ── Main body: center+right workspace ── */}
@@ -646,6 +778,7 @@ export default function OrderEntryView() {
                 onQtyEnter={focusSearch}
                 selectedTableName={selectedTableName}
                 onEditAddons={handleEditAddons}
+                pendingReservation={pendingReservation}
               />
             </div>
           </div>

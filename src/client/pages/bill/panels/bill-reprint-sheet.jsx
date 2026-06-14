@@ -59,9 +59,18 @@ function presetRange(key) {
 
 // ─── Bill list item ───────────────────────────────────────────
 
-function BillListItem({ bill, onView }) {
+function BillListItem({ bill, onView, active, itemRef, optionId }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b hover:bg-muted/20 transition-colors">
+    <div
+      ref={itemRef}
+      id={optionId}
+      role="option"
+      aria-selected={active}
+      onClick={() => onView(bill.id)}
+      className={`flex items-center gap-3 px-4 py-3 border-b transition-colors cursor-pointer ${
+        active ? "bg-primary/10 ring-1 ring-inset ring-primary/40" : "hover:bg-muted/20"
+      }`}
+    >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-semibold font-mono">
@@ -113,7 +122,7 @@ function BillListItem({ bill, onView }) {
         variant="ghost"
         size="icon"
         className="h-8 w-8 shrink-0"
-        onClick={() => onView(bill.id)}
+        onClick={(e) => { e.stopPropagation(); onView(bill.id); }}
         title="View bill"
       >
         <HugeiconsIcon icon={EyeIcon} size={15} strokeWidth={2} />
@@ -296,7 +305,9 @@ function TotalsRow({ label, value, accent, small }) {
 // ─── Main sheet component ─────────────────────────────────────
 
 export default function BillReprintSheet({ open, onOpenChange }) {
-  const searchRef = useRef(null);
+  const searchRef   = useRef(null);
+  const resultsRef  = useRef(null);
+  const activeRef   = useRef(null);
 
   const [searchInput, setSearchInput] = useState("");
   const [committed,   setCommitted]   = useState("");
@@ -304,6 +315,18 @@ export default function BillReprintSheet({ open, onOpenChange }) {
   const [customFrom,  setCustomFrom]  = useState(daysAgoStr(6));
   const [customTo,    setCustomTo]    = useState(todayStr());
   const [viewBillId,  setViewBillId]  = useState(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
+
+  // Debounce the typed input into `committed` so results update live as the
+  // user types (no Enter required). 250 ms feels instant without hammering
+  // the backend on every keystroke.
+  useEffect(() => {
+    const term = searchInput.trim();
+    if (term === committed) return;
+    const id = setTimeout(() => setCommitted(term), 250);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
 
   // Derive date range from preset or custom inputs
   const range = preset === "CUSTOM"
@@ -323,6 +346,7 @@ export default function BillReprintSheet({ open, onOpenChange }) {
       setViewBillId(null);
       setCommitted("");
       setSearchInput("");
+      setActiveIndex(-1);
       setTimeout(() => searchRef.current?.focus(), 80);
       // Refetch on every open so newly settled bills always appear
       setTimeout(() => refetch(), 100);
@@ -330,10 +354,39 @@ export default function BillReprintSheet({ open, onOpenChange }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const billList = bills ?? [];
+
+  // Keep the highlighted row valid as the result set changes (new search,
+  // refetch, filter switch). Reset to "nothing highlighted" on every change.
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [committed, preset, customFrom, customTo]);
+
+  // Scroll the highlighted row into view whenever it moves.
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
   function handleSearchKey(e) {
-    if (e.key === "Enter") {
+    if (e.key === "ArrowDown") {
       e.preventDefault();
-      setCommitted(searchInput.trim());
+      if (billList.length === 0) return;
+      setActiveIndex((i) => (i + 1) % billList.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (billList.length === 0) return;
+      setActiveIndex((i) => (i <= 0 ? billList.length - 1 : i - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const target = activeIndex >= 0 ? billList[activeIndex] : billList[0];
+      if (target) setViewBillId(target.id);
+      else setCommitted(searchInput.trim());
+    } else if (e.key === "Escape") {
+      if (searchInput) {
+        e.preventDefault();
+        setSearchInput("");
+        setActiveIndex(-1);
+      }
     }
   }
 
@@ -397,13 +450,17 @@ export default function BillReprintSheet({ open, onOpenChange }) {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   onKeyDown={handleSearchKey}
-                  placeholder="Exact bill no / mobile, or partial customer name… (Enter)"
+                  placeholder="Bill no / mobile / customer name… (↑↓ to navigate)"
                   className="h-8 pl-7 pr-7 text-xs"
+                  role="combobox"
+                  aria-expanded={billList.length > 0}
+                  aria-controls="bill-reprint-results"
+                  aria-activedescendant={activeIndex >= 0 ? `bill-opt-${activeIndex}` : undefined}
                 />
                 {searchInput && (
                   <button
                     type="button"
-                    onClick={() => { setSearchInput(""); setCommitted(""); }}
+                    onClick={() => { setSearchInput(""); setCommitted(""); setActiveIndex(-1); searchRef.current?.focus(); }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />
@@ -450,7 +507,12 @@ export default function BillReprintSheet({ open, onOpenChange }) {
             </div>
 
             {/* Results */}
-            <div className="flex-1 overflow-y-auto">
+            <div
+              ref={resultsRef}
+              id="bill-reprint-results"
+              role="listbox"
+              className="flex-1 overflow-y-auto"
+            >
               {isLoading ? (
                 <div className="p-4 space-y-2">
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -463,7 +525,7 @@ export default function BillReprintSheet({ open, onOpenChange }) {
                   <p className="text-xs font-medium text-destructive">Failed to load bills</p>
                   <p className="text-[10px] text-muted-foreground break-all">{String(error ?? "Unknown error")}</p>
                 </div>
-              ) : (bills ?? []).length === 0 ? (
+              ) : billList.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-48 gap-2 text-muted-foreground">
                   <HugeiconsIcon icon={ReceiptIndianRupeeIcon} size={36} strokeWidth={1.5} className="opacity-20" />
                   <p className="text-xs text-center">
@@ -475,14 +537,23 @@ export default function BillReprintSheet({ open, onOpenChange }) {
               ) : (
                 <>
                   <div className="px-4 py-1.5 text-[10px] text-muted-foreground bg-muted/30 border-b">
-                    {bills.length} bill{bills.length !== 1 ? "s" : ""} found
+                    {billList.length} bill{billList.length !== 1 ? "s" : ""} found
                     {committed && ` for "${committed}"`}
-                    &nbsp;· {range.dateFrom === range.dateTo
-                      ? fmtDate(range.dateFrom)
-                      : `${fmtDate(range.dateFrom)} – ${fmtDate(range.dateTo)}`}
+                    {!committed && (
+                      <>&nbsp;· {range.dateFrom === range.dateTo
+                        ? fmtDate(range.dateFrom)
+                        : `${fmtDate(range.dateFrom)} – ${fmtDate(range.dateTo)}`}</>
+                    )}
                   </div>
-                  {bills.map((bill) => (
-                    <BillListItem key={bill.id} bill={bill} onView={setViewBillId} />
+                  {billList.map((bill, i) => (
+                    <BillListItem
+                      key={bill.id}
+                      bill={bill}
+                      onView={setViewBillId}
+                      active={i === activeIndex}
+                      itemRef={i === activeIndex ? activeRef : undefined}
+                      optionId={`bill-opt-${i}`}
+                    />
                   ))}
                 </>
               )}

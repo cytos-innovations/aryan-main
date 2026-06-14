@@ -41,8 +41,8 @@ const STATUS_DOT = {
 // Trigger button + popover with a search box (name / code) and a
 // scrollable, filterable option list.
 
-function TablePicker({ value, onChange, options, placeholder, disabled, emptyText, triggerRef, onEnter }) {
-  const [open, setOpen]       = useState(false);
+function TablePicker({ value, onChange, options, placeholder, disabled, emptyText, triggerRef, onEnter, autoOpen = false, controlRef }) {
+  const [open, setOpen]       = useState(autoOpen);
   const [q, setQ]             = useState("");
   const [cursor, setCursor]   = useState(-1);
   const listRef               = useRef(null);
@@ -65,6 +65,14 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
   useEffect(() => {
     if (open) { setQ(""); setCursor(-1); }
   }, [open]);
+
+  // Let the parent open this picker imperatively (e.g. on Enter from the
+  // previous step) so the dropdown is ready to type into right away.
+  useEffect(() => {
+    if (!controlRef) return;
+    controlRef.current = { open: () => setOpen(true) };
+    return () => { controlRef.current = null; };
+  }, [controlRef]);
 
   // Reset cursor when filtered list changes
   useEffect(() => { setCursor(-1); }, [filtered]);
@@ -209,7 +217,13 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
   // Map<itemId, qty> — qty is how many units to move (defaults to full qty when checked)
   const [selectedQtys,    setSelectedQtys]    = useState(() => new Map());
 
-  const destPickerRef = useRef(null);
+  const sourcePickerRef = useRef(null);
+  const destPickerRef   = useRef(null);
+  const destControlRef  = useRef(null);
+  const allBtnRef       = useRef(null);
+  const selectBtnRef    = useRef(null);
+  const cancelRef       = useRef(null);
+  const submitRef       = useRef(null);
 
   const shiftMut    = useShiftTable();
   const transferMut = useTransferItemsWithQty();
@@ -274,6 +288,11 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
       setTargetTableId(null);
       setMode("all");
       setSelectedQtys(new Map());
+      // With no pre-selected source the picker auto-opens (its search box takes
+      // focus). When a source is pre-selected, land focus on the trigger instead.
+      if (defaultSessionId != null) {
+        requestAnimationFrame(() => sourcePickerRef.current?.focus());
+      }
     }
   }, [open, defaultSessionId]);
 
@@ -353,9 +372,47 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
     transferMut.mutate({ sourceSessionId, targetTableId, items }, close);
   }
 
+  // ─── Roving arrow-key navigation across the dialog body ──────────
+  // Up/Down walk the vertical chain of rows; Left/Right move within a row.
+  // The pickers handle their own arrows while their dropdown is open, so we
+  // only act when the event originates from one of our navigable controls.
+  function focus(ref) { ref.current?.focus(); }
+
+  function handleDialogKeyDown(e) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown" &&
+        e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+
+    // Grid of focusable rows. Single-cell rows ignore Left/Right.
+    const rows = [
+      [sourcePickerRef],
+      [destPickerRef],
+      [allBtnRef, selectBtnRef],
+      [cancelRef, submitRef],
+    ];
+
+    const active = document.activeElement;
+    let r = -1, c = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const j = rows[i].findIndex((ref) => ref.current === active);
+      if (j !== -1) { r = i; c = j; break; }
+    }
+    if (r === -1) return; // focus isn't on a navigable control (e.g. inside an open popover)
+
+    e.preventDefault();
+    if (e.key === "ArrowDown" && r < rows.length - 1) {
+      focus(rows[r + 1][Math.min(c, rows[r + 1].length - 1)]);
+    } else if (e.key === "ArrowUp" && r > 0) {
+      focus(rows[r - 1][Math.min(c, rows[r - 1].length - 1)]);
+    } else if (e.key === "ArrowRight" && c < rows[r].length - 1) {
+      focus(rows[r][c + 1]);
+    } else if (e.key === "ArrowLeft" && c > 0) {
+      focus(rows[r][c - 1]);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md p-0 gap-0 overflow-hidden">
+      <DialogContent className="sm:max-w-md p-0 gap-0 overflow-hidden" onKeyDown={handleDialogKeyDown}>
         <DialogHeader className="px-5 pt-5 pb-3 border-b">
           <div className="flex items-center gap-2">
             <HugeiconsIcon icon={Exchange01Icon} size={16} strokeWidth={2} className="text-primary shrink-0" />
@@ -373,7 +430,13 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
               options={sourceOptions}
               placeholder="Choose a running table…"
               emptyText="No running tables."
-              onEnter={() => destPickerRef.current?.focus()}
+              triggerRef={sourcePickerRef}
+              autoOpen={defaultSessionId == null}
+              onEnter={() => {
+                destPickerRef.current?.focus();
+                // Open the destination dropdown so the flow continues hands-free.
+                destControlRef.current?.open();
+              }}
             />
           </div>
 
@@ -388,6 +451,8 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
               emptyText="No eligible tables."
               disabled={sourceSessionId == null}
               triggerRef={destPickerRef}
+              controlRef={destControlRef}
+              onEnter={() => requestAnimationFrame(() => submitRef.current?.focus())}
             />
           </div>
 
@@ -396,6 +461,7 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
             <span className="text-xs font-medium text-muted-foreground">What to move</span>
             <div className="grid grid-cols-2 gap-2">
               <Button
+                ref={allBtnRef}
                 type="button"
                 variant={mode === "all" ? "default" : "outline"}
                 size="sm"
@@ -405,6 +471,7 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
                 All items
               </Button>
               <Button
+                ref={selectBtnRef}
                 type="button"
                 variant={mode === "select" ? "default" : "outline"}
                 size="sm"
@@ -499,10 +566,10 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
         </div>
 
         <div className="px-5 pb-5 flex gap-2">
-          <Button type="button" variant="outline" className="flex-1" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button ref={cancelRef} type="button" variant="outline" className="flex-1" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button type="button" className="flex-1 gap-1.5" onClick={handleSubmit} disabled={!canSubmit}>
+          <Button ref={submitRef} type="button" className="flex-1 gap-1.5" onClick={handleSubmit} disabled={!canSubmit}>
             {mode === "all" ? "Shift Table" : "Move Items"}
             <HugeiconsIcon icon={ArrowRight01Icon} size={14} strokeWidth={2} />
           </Button>

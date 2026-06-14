@@ -248,6 +248,12 @@ function TableCard({ table, onClick, now, isOnHold }) {
               </span>
             )}
           </div>
+          {table.session_customer && (
+            <div className="flex items-center gap-1 text-[11px] text-foreground/80 min-w-0">
+              <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} className="shrink-0" />
+              <span className="truncate font-medium">{table.session_customer}</span>
+            </div>
+          )}
           {table.waiter_name && (
             <div className="flex items-center gap-1 text-[11px] text-muted-foreground min-w-0">
               <HugeiconsIcon icon={UserAccountIcon} size={11} strokeWidth={2} className="shrink-0" />

@@ -18,11 +18,31 @@ function toISO(dd, mm, yyyy) {
   return "";
 }
 
+const NEXT_FOCUSABLE_SELECTOR =
+  'input:not([type="hidden"]):not([readonly]):not([disabled]):not([tabindex="-1"]), button[data-slot="select-trigger"]:not([disabled]), textarea:not([disabled])';
+
+// Focus the next focusable field after the date container, skipping the date's
+// own segments. Used after a calendar day is picked so focus moves on (and the
+// popover does not re-open via the container's onFocus).
+function focusFieldAfter(container) {
+  const form = container.closest("form");
+  if (!form) return;
+  const all = Array.from(form.querySelectorAll(NEXT_FOCUSABLE_SELECTOR)).filter(
+    (el) => !el.closest("[data-enter-skip]") && !container.contains(el)
+  );
+  // Find the first field positioned after the date container in document order.
+  const next = all.find(
+    (el) => container.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING
+  );
+  next?.focus();
+}
+
 export function DateInput({ value, onChange, className, disabled }) {
   const [{ dd, mm, yyyy }, setParts] = useState(() => fromISO(value));
   const [open, setOpen] = useState(false);
-  const mmRef   = useRef(null);
-  const yyyyRef = useRef(null);
+  const mmRef    = useRef(null);
+  const yyyyRef  = useRef(null);
+  const rootRef  = useRef(null);
 
   // Sync inward when value changes externally
   useEffect(() => {
@@ -72,7 +92,7 @@ export function DateInput({ value, onChange, className, disabled }) {
     }
   }
 
-  // Calendar selection → emit ISO and close
+  // Calendar selection → emit ISO, close, and advance to the next field.
   function handleDaySelect(date) {
     if (!date) return;
     const d = String(date.getDate()).padStart(2, "0");
@@ -81,6 +101,13 @@ export function DateInput({ value, onChange, className, disabled }) {
     setParts({ dd: d, mm: m, yyyy: y });
     onChange?.({ target: { value: `${y}-${m}-${d}` } });
     setOpen(false);
+    // Move focus to the next field. Defer so it runs after Radix finishes its
+    // own focus restoration on close (which would otherwise re-open the popover
+    // via the container's onFocus handler).
+    const container = rootRef.current;
+    if (container) {
+      requestAnimationFrame(() => focusFieldAfter(container));
+    }
   }
 
   // Convert current value to Date object for Calendar's selected prop
@@ -101,11 +128,24 @@ export function DateInput({ value, onChange, className, disabled }) {
     if (!disabled) setOpen(true);
   }
 
+  // Close the calendar when focus leaves the date field entirely (e.g. Enter
+  // advancing to the next field). Ignore focus moves between the segments and
+  // into the calendar popover itself.
+  function handleBlur(e) {
+    const next = e.relatedTarget;
+    if (next && (e.currentTarget.contains(next) || next.closest?.("[data-radix-popper-content-wrapper]"))) {
+      return;
+    }
+    setOpen(false);
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <div
+        ref={rootRef}
         data-date-input
         onFocus={handleFocus}
+        onBlur={handleBlur}
         className={cn(
           "h-9 flex items-center gap-0.5 rounded-md border border-input bg-transparent px-2.5 shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
           disabled && "pointer-events-none cursor-not-allowed opacity-50",

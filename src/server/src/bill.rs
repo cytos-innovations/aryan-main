@@ -198,6 +198,7 @@ pub struct FloorTableRow {
     pub session_status:           Option<String>,
     pub covers:                   Option<i32>,
     pub waiter_name:              Option<String>,
+    pub session_customer:         Option<String>,
     // Running total from active order items
     pub running_total:            f64,
     pub bill_status:              Option<String>,
@@ -492,6 +493,7 @@ pub async fn get_floor_view(
                 os.session_status,
                 os.covers,
                 ei.name       AS waiter_name,
+                os.customer_name AS session_customer,
                 COALESCE((
                   SELECT SUM(oi.final_amount)
                   FROM   order_item oi
@@ -561,6 +563,7 @@ pub async fn get_floor_view(
         session_status:           r.try_get("session_status").ok().flatten(),
         covers:                   r.try_get::<Option<i32>, _>("covers").ok().flatten(),
         waiter_name:              r.try_get("waiter_name").ok().flatten(),
+        session_customer:         r.try_get("session_customer").ok().flatten(),
         running_total:            r.try_get::<f64, _>("running_total").unwrap_or(0.0),
         bill_status:              r.try_get("bill_status").ok().flatten(),
         reservation_id:               r.try_get("reservation_id").ok().flatten(),
@@ -3747,11 +3750,14 @@ pub async fn search_settled_bills(
 ) -> Result<Vec<BillReprintRow>, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
+    // Escape LIKE wildcards so a literal % or _ in the term doesn't act as a
+    // pattern. The term is then used for case-insensitive contains/prefix
+    // matching across bill no, order no, id, customer name and mobile.
     let search_val: Option<String> = search
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(|s| s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
 
     let rows = sqlx::query(
         "SELECT bm.id,
@@ -3776,10 +3782,11 @@ pub async fn search_settled_bills(
          LEFT JOIN customer_information  ci ON ci.id = bm.customer_id
          WHERE  (bm.bill_status IN ('PAID', 'DUE') OR os.session_status = 'SETTLED')
            AND  ($1::text IS NULL OR (
-                    LOWER(bm.bill_no)                               = LOWER($1)
-                 OR CAST(bm.id AS TEXT)                             = $1
-                 OR COALESCE(os.customer_name, ci.customer_name)    ILIKE $1 || '%'
-                 OR COALESCE(os.customer_mobile, ci.mobile_no1)     = $1
+                    bm.bill_no                                      ILIKE '%' || $1 || '%'
+                 OR os.order_no                                     ILIKE '%' || $1 || '%'
+                 OR CAST(bm.id AS TEXT)                             ILIKE $1 || '%'
+                 OR COALESCE(os.customer_name, ci.customer_name)    ILIKE '%' || $1 || '%'
+                 OR COALESCE(os.customer_mobile, ci.mobile_no1)     ILIKE $1 || '%'
                 ))
            AND  ($2::text IS NULL
                  OR COALESCE(bm.settled_at, bm.created_at)

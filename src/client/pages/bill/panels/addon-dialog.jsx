@@ -217,17 +217,32 @@ export default function AddonDialog({
     });
   }
 
+  // Update the editable rate for an already-selected add-on.
+  function setSelectedRate(menuId, rateStr) {
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
+      const entry = next.get(menuId);
+      if (entry) next.set(menuId, { ...entry, rate: parseFloat(rateStr) || 0, rateStr });
+      return next;
+    });
+  }
+
   function toggle(a) {
     setSelectedMap((prev) => {
       const next = new Map(prev);
-      if (next.has(a.menuId)) next.delete(a.menuId);
-      else next.set(a.menuId, a);
+      if (next.has(a.menuId)) {
+        next.delete(a.menuId);
+      } else {
+        // pre-fill with master rate; store rateStr for the input
+        next.set(a.menuId, { ...a, rateStr: String(a.rate) });
+      }
       return next;
     });
   }
 
   function addFromMaster(a) {
-    const entry = { menuId: a.menu_id, name: a.name, rate: masterRate(a) };
+    const r = masterRate(a);
+    const entry = { menuId: a.menu_id, name: a.name, rate: r, rateStr: String(r) };
     setSelectedMap((prev) => new Map(prev).set(entry.menuId, entry));
     setQuery("");
     setActiveIdx(0);
@@ -239,7 +254,7 @@ export default function AddonDialog({
     if (e.key === "Enter") {
       e.preventDefault();
       if (customName.trim()) { customRateRef.current?.focus(); return; }
-      focusFooterFirst();
+      applyBtnRef.current?.focus();
       return;
     }
     if (e.key === "ArrowUp")    { e.preventDefault(); focusLastRow(); return; }
@@ -387,6 +402,9 @@ export default function AddonDialog({
                     key={a.menuId}
                     rowRef={(el) => { rowRefs.current[globalIdx] = el; }}
                     name={a.name} rate={a.rate} on={on}
+                    editRate={on ? (selectedMap.get(a.menuId)?.rateStr ?? String(a.rate)) : null}
+                    onRateChange={(v) => setSelectedRate(a.menuId, v)}
+                    onApplyFocus={() => applyBtnRef.current?.focus()}
                     onClick={() => toggle(a)}
                     onKeyDown={(e) => onRowKeyDown(e, globalIdx)}
                   />
@@ -406,6 +424,9 @@ export default function AddonDialog({
                     key={a.menuId}
                     rowRef={(el) => { rowRefs.current[globalIdx] = el; }}
                     name={a.name} rate={a.rate} on
+                    editRate={a.rateStr ?? String(a.rate)}
+                    onRateChange={(v) => setSelectedRate(a.menuId, v)}
+                    onApplyFocus={() => applyBtnRef.current?.focus()}
                     onClick={() => toggle(a)}
                     onKeyDown={(e) => onRowKeyDown(e, globalIdx)}
                   />
@@ -477,33 +498,57 @@ export default function AddonDialog({
   );
 }
 
-function AddonRow({ rowRef, name, rate, on, onClick, onKeyDown }) {
+function AddonRow({ rowRef, name, rate, on, editRate, onRateChange, onApplyFocus, onClick, onKeyDown }) {
+  const [focused, setFocused] = useState(false);
   return (
-    <button
-      ref={rowRef}
-      type="button"
-      onClick={onClick}
-      onKeyDown={onKeyDown}
+    <div
       className={[
-        "w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
+        "w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors",
         on ? "border-primary bg-primary/10" : "border-border bg-background hover:bg-muted/50",
+        focused ? "ring-2 ring-ring ring-offset-1" : "",
       ].join(" ")}
     >
-      <span
-        className={[
-          "h-4 w-4 rounded border flex items-center justify-center shrink-0 transition-colors",
-          on ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/40",
-        ].join(" ")}
+      {/* Checkbox toggle — the clickable/focusable part */}
+      <button
+        ref={rowRef}
+        type="button"
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        className="flex items-center gap-2.5 flex-1 min-w-0 text-left focus:outline-none"
       >
-        {on && <HugeiconsIcon icon={CheckmarkCircle02Icon} size={11} strokeWidth={2.5} />}
-      </span>
-      <span className="flex-1 min-w-0 text-xs font-medium truncate">{name}</span>
-      <span className={[
-        "text-xs font-semibold tabular-nums shrink-0",
-        on ? "text-primary" : "text-muted-foreground",
-      ].join(" ")}>
-        +₹{Number(rate).toFixed(2)}
-      </span>
-    </button>
+        <span
+          className={[
+            "h-4 w-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+            on ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/40",
+          ].join(" ")}
+        >
+          {on && <HugeiconsIcon icon={CheckmarkCircle02Icon} size={11} strokeWidth={2.5} />}
+        </span>
+        <span className="flex-1 min-w-0 text-xs font-medium truncate">{name}</span>
+      </button>
+
+      {/* Rate: editable when selected, static when not */}
+      {on && editRate !== null ? (
+        <div className="flex items-center gap-0.5 shrink-0">
+          <span className="text-xs text-muted-foreground">₹</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={editRate}
+            onChange={(e) => { const v = e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*?)\./g, "$1"); onRateChange(v); }}
+            onFocus={(e) => e.target.select()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); onApplyFocus?.(); } }}
+            className="w-16 h-6 rounded border border-primary/40 bg-background px-1.5 text-xs text-right tabular-nums text-primary font-semibold outline-none focus:ring-1 focus:ring-ring"
+          />
+        </div>
+      ) : (
+        <span className="text-xs font-semibold tabular-nums shrink-0 text-muted-foreground">
+          +₹{Number(rate).toFixed(2)}
+        </span>
+      )}
+    </div>
   );
 }
