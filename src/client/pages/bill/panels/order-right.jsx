@@ -139,13 +139,12 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
                     </button>
                     <input
                       ref={b.item.id === kotBatches[0].item.id ? qtyRef : undefined}
-                      type="number"
-                      min="0"
-                      max={maxQ}
+                      type="text"
+                      inputMode="numeric"
                       value={curQ}
                       onChange={(e) => {
-                        const v = parseInt(e.target.value, 10);
-                        if (!isNaN(v)) setKotQty(b.item.id, v, maxQ);
+                        const v = parseInt(e.target.value.replace(/[^0-9]/g, ""), 10);
+                        setKotQty(b.item.id, isNaN(v) ? 0 : v, maxQ);
                       }}
                       onFocus={(e) => e.target.select()}
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); reasonRef.current?.focus(); } }}
@@ -271,6 +270,10 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
   // Draft uses a single synthetic item; session uses the first item's metadata
   const representative = group[0];
+  // Key used to address this draft line in the billing context (menu_id for normal
+  // lines, the line's own id for complimentary lines — see draftLineKey in context).
+  const draftKey = representative.is_complimentary ? representative.id : representative.menu_id;
+  const isComp   = !!representative.is_complimentary;
 
   // Totals across the group
   const totalQty    = isDraft
@@ -291,7 +294,9 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
     kotStatusPriority.find((s) => group.some((i) => i.kot_status === s)) ?? "PENDING"
   );
 
-  const canEdit   = !isBillPrinted && hasPendingQty;
+  // Complimentary lines are fixed at qty 1 — to give more, the user adds the item
+  // again from the Complimentary picker (each free item is its own line).
+  const canEdit   = !isBillPrinted && hasPendingQty && !isComp;
   const canRemove = !isBillPrinted && (hasPendingQty || hasSentQty);
 
   // KOT message: use last item in group (most recent KOT or draft item)
@@ -304,9 +309,10 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   const kotSearch  = useSearchKotMessages(kotInput, isF6Active);
   const kotResults = kotSearch.data ?? [];
 
-  // Auto-focus qty when row freshly added — show only the pending item's qty, not the merged total
+  // Auto-focus qty when row freshly added — show only the pending item's qty, not the merged total.
+  // Complimentary lines are fixed at qty 1, so never enter the editable qty box.
   useEffect(() => {
-    if (isActive && !isF6Active) {
+    if (isActive && !isF6Active && !isComp) {
       const pendingQty = isDraft
         ? representative.quantity
         : (pendingItems[pendingItems.length - 1]?.quantity ?? 1);
@@ -331,7 +337,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   }, [isF6Active]);
 
   function handleKotMsg(message) {
-    if (isDraft) setDraftItemKotMsg(representative.menu_id, message);
+    if (isDraft) setDraftItemKotMsg(draftKey, message);
     else setPendingItemKotMsg(lastItem.id, message);
   }
 
@@ -367,7 +373,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   }
 
   function handleDecrement() {
-    if (isDraft) { updateDraftQty(representative.menu_id, representative.quantity - 1); return; }
+    if (isDraft) { updateDraftQty(draftKey, representative.quantity - 1); return; }
     // If there are pending (unsent) items, decrement those first
     if (hasPendingQty) {
       const target = pendingItems[pendingItems.length - 1];
@@ -381,14 +387,14 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
   function handleIncrement() {
     if (!canEdit) return;
-    if (isDraft) { updateDraftQty(representative.menu_id, representative.quantity + 1); return; }
+    if (isDraft) { updateDraftQty(draftKey, representative.quantity + 1); return; }
     // Increment the last pending item
     const target = pendingItems[pendingItems.length - 1];
     updateQty.mutate({ id: target.id, qty: target.quantity + 1 });
   }
 
   function handleRemove() {
-    if (isDraft) { removeDraftItem(representative.menu_id); return; }
+    if (isDraft) { removeDraftItem(draftKey); return; }
     if (hasPendingQty && !hasSentQty) {
       // All items are still pending — cancel them directly
       for (const p of pendingItems) cancelItem.mutate(p.id);
@@ -424,7 +430,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   function commitQtyEdit(returnToSearch = false) {
     const parsed = parseInt(qtyInput, 10);
     if (!isNaN(parsed) && parsed > 0) {
-      if (isDraft) { updateDraftQty(representative.menu_id, parsed); }
+      if (isDraft) { updateDraftQty(draftKey, parsed); }
       else if (pendingItems.length > 0) {
         const target = pendingItems[pendingItems.length - 1];
         updateQty.mutate({ id: target.id, qty: parsed });
@@ -457,8 +463,9 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
           <KotDot status={groupStatus} />
         </div>
 
-        {/* Name — click to add / edit add-ons (draft, or pending session lines) */}
-        {onEditAddons && (isDraft || (!isBillPrinted && hasPendingQty)) ? (
+        {/* Name — click to add / edit add-ons (draft, or pending session lines).
+            Complimentary lines can't carry add-ons, so they render as static text. */}
+        {!isComp && onEditAddons && (isDraft || (!isBillPrinted && hasPendingQty)) ? (
           <button
             type="button"
             onClick={() => onEditAddons(representative)}
@@ -468,8 +475,13 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
             {representative.item_name}
           </button>
         ) : (
-          <span className="flex-1 min-w-0 text-xs leading-snug truncate font-medium">
-            {representative.item_name}
+          <span className="flex-1 min-w-0 flex items-center gap-1.5 text-xs leading-snug truncate font-medium">
+            <span className="truncate">{representative.item_name}</span>
+            {isComp && (
+              <span className="shrink-0 rounded-sm bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wide leading-none">
+                Comp
+              </span>
+            )}
           </span>
         )}
 
@@ -499,10 +511,10 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
           {qtyEditing ? (
             <input
               ref={qtyInputRef}
-              type="number"
-              min="1"
+              type="text"
+              inputMode="numeric"
               value={qtyInput}
-              onChange={(e) => setQtyInput(e.target.value)}
+              onChange={(e) => setQtyInput(e.target.value.replace(/[^0-9]/g, ""))}
               onBlur={commitQtyEdit}
               onKeyDown={handleQtyKeyDown}
               className="w-8 h-6 text-center text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary px-0.5"
@@ -685,7 +697,9 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
     if (isDraft) {
       const map = new Map();
       for (const item of activeItems) {
-        const key = item.menu_id ?? item.id;
+        // Complimentary draft lines key by their own id so a free line never
+        // merges visually with a paid line of the same menu_id.
+        const key = item.is_complimentary ? `comp:${item.id}` : (item.menu_id ?? item.id);
         if (!map.has(key)) map.set(key, []);
         map.get(key).push(item);
       }
@@ -1131,13 +1145,12 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
               <HugeiconsIcon icon={MinusSignIcon} size={8} strokeWidth={2.5} />
             </button>
             <input
-              type="number"
-              min="1"
-              max="99"
+              type="text"
+              inputMode="numeric"
               value={currentCovers}
               disabled={isClosed}
               onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
+                const v = parseInt(e.target.value.replace(/[^0-9]/g, ""), 10);
                 if (!isNaN(v) && v >= 1) {
                   if (isDraft) onSetDraftConfig({ covers: v });
                   else if (session) updateInfo.mutate({ sessionId, orderType: session.order_type, covers: v, customerName: session.customer_name ?? null });

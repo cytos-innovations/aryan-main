@@ -227,9 +227,18 @@ function BillDetailView({ billId, onClose }) {
             </div>
             {(bill.items ?? []).map((item, i) => (
               <div key={item.id ?? i} className="flex items-center gap-2 px-3 py-1.5 border-t text-xs">
-                <span className="flex-1 min-w-0 truncate font-medium">{item.item_name}</span>
+                <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                  <span className="truncate font-medium">{item.item_name}</span>
+                  {item.is_complimentary && (
+                    <span className="shrink-0 rounded-sm bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wide leading-none">
+                      Comp
+                    </span>
+                  )}
+                </span>
                 <span className="w-8 text-center tabular-nums text-muted-foreground">{item.quantity}</span>
-                <span className="w-16 text-right tabular-nums text-muted-foreground">₹{fmtAmount(item.rate)}</span>
+                <span className="w-16 text-right tabular-nums text-muted-foreground">
+                  {item.is_complimentary ? "Free" : `₹${fmtAmount(item.rate)}`}
+                </span>
                 <span className="w-16 text-right tabular-nums font-semibold">₹{fmtAmount(item.final_amount)}</span>
               </div>
             ))}

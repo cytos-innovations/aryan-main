@@ -940,6 +940,7 @@ CREATE TABLE order_item (
     kot_status VARCHAR(20) DEFAULT 'PENDING', -- PENDING / SENT / PREPARING / READY / SERVED
     item_status VARCHAR(20) DEFAULT 'ACTIVE', -- ACTIVE / CANCELLED / VOID
     kot_id INTEGER, -- Last KOT reference
+    is_complimentary BOOLEAN NOT NULL DEFAULT FALSE, -- No-charge complimentary line (zero rate/tax)
     special_instruction TEXT reference kot_massege (id), --Kitchen instruction
     remarks TEXT, -- General remarks
 
@@ -1069,6 +1070,7 @@ CREATE TABLE bill_item (
     tax_amount NUMERIC(12,2),
     final_amount NUMERIC(12,2),
     kitchen_section_id INTEGER REFERENCES kitchen_section(id),
+    is_complimentary BOOLEAN NOT NULL DEFAULT FALSE, -- No-charge complimentary line
 
     -- Standard Audit & Status Columns
     is_active INTEGER DEFAULT 1,

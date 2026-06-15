@@ -62,7 +62,7 @@ export const billingService = {
   getOrderItems: (sessionId) =>
     invoke("get_order_items", { sessionId }),
 
-  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons }) =>
+  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons, isComplimentary }) =>
     invoke("add_order_item", {
       sessionId,
       menuId,
@@ -70,6 +70,8 @@ export const billingService = {
       specialInstruction:  specialInstruction  ?? null,
       // addons: [{ menuId, rate }] — per-unit charges folded into the line
       addons:              (addons ?? []).map((a) => ({ menuId: a.menuId ?? a.menu_id, rate: a.rate })),
+      // Complimentary lines carry no charge (rate/tax forced to 0 on the backend)
+      isComplimentary:     isComplimentary     ?? false,
     }),
 
   updateOrderItemQty: (orderItemId, quantity) =>

@@ -161,9 +161,11 @@ export function useAddOrderItem(sessionId) {
   return useMutation({
     mutationFn: billingService.addOrderItem,
 
-    onMutate: async ({ menuId, quantity, specialInstruction, addons }) => {
+    onMutate: async ({ menuId, quantity, specialInstruction, addons, isComplimentary }) => {
       await qc.cancelQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
       const prevItems = qc.getQueryData(BQK.ORDER_ITEMS(sessionId));
+
+      const isComp = !!isComplimentary;
 
       if (Array.isArray(prevItems)) {
         const menu     = qc.getQueryData(BQK.MENU) ?? [];
@@ -171,20 +173,22 @@ export function useAddOrderItem(sessionId) {
         const menuItem = menu.find((m) => m.id === menuId);
 
         // Per-unit add-on charge (matches the Rust calc). Lines with add-ons never merge.
-        const addonList = addons ?? [];
+        // Complimentary lines carry no add-ons and no charge.
+        const addonList = isComp ? [] : (addons ?? []);
         const addonRate = r2(addonList.reduce((s, a) => s + (Number(a.rate) || 0), 0));
 
         if (menuItem) {
           const instrKey = specialInstruction ?? null;
 
           // Check for existing PENDING item with same menu + instruction → merge.
-          // Never merge into (or as) an add-on-bearing line.
-          const existingIdx = addonList.length > 0 ? -1 : prevItems.findIndex(
+          // Never merge into (or as) an add-on-bearing or complimentary line.
+          const existingIdx = (addonList.length > 0 || isComp) ? -1 : prevItems.findIndex(
             (i) =>
               i.menu_id === menuId &&
               i.kot_status === "PENDING" &&
               i.item_status === "ACTIVE" &&
               !(Number(i.addon_rate) > 0) &&
+              !i.is_complimentary &&
               (i.special_instruction ?? null) === instrKey,
           );
 
@@ -196,9 +200,10 @@ export function useAddOrderItem(sessionId) {
             next[existingIdx] = { ...existing, quantity: newQty, ...amounts };
             qc.setQueryData(BQK.ORDER_ITEMS(sessionId), next);
           } else {
-            const rate    = selectItemRate(menuItem, session?.applicable_rate ?? 1);
+            const rate    = isComp ? 0 : selectItemRate(menuItem, session?.applicable_rate ?? 1);
+            const taxPct  = isComp ? 0 : (menuItem.tax_percentage ?? 0);
             // Charge per unit = base rate + add-on rate, taxed at the parent rate.
-            const amounts = recalcItem(rate + addonRate, quantity || 1, 0, menuItem.tax_percentage ?? 0);
+            const amounts = recalcItem(rate + addonRate, quantity || 1, 0, taxPct);
             const optimistic = {
               id:                  -(Date.now()),
               code:                0,
@@ -215,13 +220,14 @@ export function useAddOrderItem(sessionId) {
                 rate: a.rate,
               })),
               discount_percent:    0,
-              tax_name:            menuItem.tax_name ?? null,
-              tax_percentage:      menuItem.tax_percentage ?? 0,
-              tax_details:         menuItem.tax_details ?? [],
+              tax_name:            isComp ? null : (menuItem.tax_name ?? null),
+              tax_percentage:      taxPct,
+              tax_details:         isComp ? [] : (menuItem.tax_details ?? []),
               food_type:           menuItem.food_type ?? null,
               food_type_id:        menuItem.food_type_id ?? null,
               kitchen_section_id:  menuItem.kitchen_section_id ?? null,
               is_liquor:           menuItem.is_liquor ?? false,
+              is_complimentary:    isComp,
               kot_status:          "PENDING",
               item_status:         "ACTIVE",
               special_instruction: instrKey,

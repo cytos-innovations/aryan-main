@@ -6,6 +6,7 @@ import {
   AlertCircleIcon,
   CheckmarkCircle01Icon,
   Cancel01Icon,
+  GiftIcon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -50,6 +51,7 @@ import OrderRightPanel from "../panels/order-right";
 import BottomActionBar from "../panels/bottom-action-bar";
 import SettleDialog    from "../panels/settle-dialog";
 import AddonDialog     from "../panels/addon-dialog";
+import ComplimentaryDialog from "../panels/complimentary-dialog";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -110,7 +112,7 @@ const ORDER_TYPE_CFG = {
 
 // ─── Session header bar ───────────────────────────────────────
 
-function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingReservation, onArrivedPrefill }) {
+function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingReservation, onArrivedPrefill, onComplimentary }) {
   const now        = useNow();
   const elapsed    = useMemo(() => calcElapsed(session?.opened_at, now), [session?.opened_at, now]);
   const openedTime = useMemo(() => fmtTime(session?.opened_at),          [session?.opened_at]);
@@ -219,6 +221,19 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingRes
           </div>
         )}
 
+        {/* Complimentary — add free (no-charge) items */}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1 text-xs text-emerald-600 border-emerald-200 hover:bg-emerald-50 dark:text-emerald-400 dark:border-emerald-800 dark:hover:bg-emerald-950/30"
+          onClick={onComplimentary}
+          disabled={isClosed}
+          title="Add complimentary (no-charge) items"
+        >
+          <HugeiconsIcon icon={GiftIcon} size={13} strokeWidth={2} />
+          Complimentary
+        </Button>
+
         {/* Timer */}
         {!isDraft && elapsed && openedTime && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -304,6 +319,7 @@ export default function OrderEntryView() {
 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [settleOpen, setSettleOpen] = useState(false);
+  const [compOpen,   setCompOpen]   = useState(false);
   const [addingId,   setAddingId]   = useState(null);
   const [isKotting,  setIsKotting]  = useState(false);
   // Add-on dialog target:
@@ -596,6 +612,25 @@ export default function OrderEntryView() {
     );
   }
 
+  // Add chosen items as complimentary lines (no charge, no tax). Draft adds to
+  // context; real sessions persist via the add-item mutation with the comp flag.
+  function commitComplimentary(chosenItems) {
+    if (!chosenItems?.length) return;
+    if (!isDraft && session?.session_status === "BILL_PRINTED") return;
+    for (const menuItem of chosenItems) {
+      if (isDraft) {
+        addDraftItem(menuItem, 0, [], true);
+        pushRecentId(menuItem.id);
+        setLastAddedKey(menuItem.id);
+      } else if (activeSessionId && session) {
+        addItemMut.mutate(
+          { sessionId: activeSessionId, menuId: menuItem.id, quantity: 1, specialInstruction: null, addons: [], isComplimentary: true },
+          { onSuccess: () => { pushRecentId(menuItem.id); setLastAddedKey(menuItem.id); } },
+        );
+      }
+    }
+  }
+
   function handleSettle(entries, customer, writeOffAmount = 0) {
     if (!billId || !entries.length) return;
     const isPartPayment = entries.length > 1;
@@ -657,7 +692,8 @@ export default function OrderEntryView() {
           menuId:             item.menu_id,
           quantity:           item.quantity,
           specialInstruction: item.special_instruction ?? null,
-          addons:             item.addons ?? [],
+          addons:             item.is_complimentary ? [] : (item.addons ?? []),
+          isComplimentary:    !!item.is_complimentary,
         }),
       ));
 
@@ -736,6 +772,7 @@ export default function OrderEntryView() {
         onBack={handleBack}
         pendingReservation={pendingReservation}
         onArrivedPrefill={handleArrivedPrefill}
+        onComplimentary={() => setCompOpen(true)}
       />
 
       {/* ── Main body: center+right workspace ── */}
@@ -821,6 +858,18 @@ export default function OrderEntryView() {
           sessionDisc={sessionDisc}
           onSettle={handleSettle}
           isSettling={settleBillMut.isPending}
+        />
+      )}
+
+      {/* ── Complimentary item picker ── */}
+      {compOpen && (
+        <ComplimentaryDialog
+          menu={menu}
+          onConfirm={(chosen) => {
+            setCompOpen(false);
+            commitComplimentary(chosen);
+          }}
+          onClose={() => setCompOpen(false)}
         />
       )}
 

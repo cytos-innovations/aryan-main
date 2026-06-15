@@ -2,6 +2,12 @@ import { createContext, useContext, useReducer, useCallback } from "react";
 import { BILLING_VIEW, ORDER_TYPE } from "../constants/billing";
 
 function r2(n) { return Math.round(n * 100) / 100; }
+
+// Draft lines are addressed by a "key": menu_id for normal lines (so taps of the
+// same item merge), or the line's own (negative) id for complimentary lines so a
+// free line never collides with a paid line of the same menu_id.
+function draftLineKey(i) { return i.is_complimentary ? i.id : i.menu_id; }
+function matchesDraftKey(i, key) { return draftLineKey(i) === key; }
 function calcDraftAmounts(rate, qty, taxPct) {
   const gross = r2(rate * qty);
   const tax   = r2(gross * ((taxPct || 0) / 100));
@@ -82,17 +88,21 @@ function billingReducer(state, action) {
     // ── Draft items ───────────────────────────────────────────────
 
     case "ADD_DRAFT_ITEM": {
-      const { menuItem, rate, addons } = action.payload;
+      const { menuItem, rate, addons, isComplimentary } = action.payload;
+      const isComp = !!isComplimentary;
       // Per-unit add-on charge, taxed at the parent rate (mirrors the Rust calc).
-      const addonList = addons ?? [];
+      // Complimentary lines carry no add-ons and no charge.
+      const addonList = isComp ? [] : (addons ?? []);
       const addonRate = r2(addonList.reduce((s, a) => s + (Number(a.rate) || 0), 0));
-      const effRate   = r2(rate + addonRate);
+      const baseRate  = isComp ? 0 : rate;
+      const taxPct    = isComp ? 0 : (menuItem.tax_percentage ?? 0);
+      const effRate   = r2(baseRate + addonRate);
 
-      // Merge only when neither the existing nor the new line carries add-ons.
-      // (Draft mode keys lines by menu_id, so we keep one add-on config per item.)
-      const existing = addonList.length > 0
+      // Merge only when neither the existing nor the new line carries add-ons,
+      // and neither is complimentary. (Draft mode keys lines by menu_id.)
+      const existing = (addonList.length > 0 || isComp)
         ? null
-        : state.draftItems.find((i) => i.menu_id === menuItem.id && !(Number(i.addon_rate) > 0));
+        : state.draftItems.find((i) => i.menu_id === menuItem.id && !(Number(i.addon_rate) > 0) && !i.is_complimentary);
       if (existing) {
         const newQty = existing.quantity + 1;
         const existingEff = (Number(existing.rate) || 0) + (Number(existing.addon_rate) || 0);
@@ -100,11 +110,11 @@ function billingReducer(state, action) {
         return {
           ...state,
           draftItems: state.draftItems.map((i) =>
-            i.menu_id === menuItem.id ? { ...i, quantity: newQty, ...amounts } : i,
+            i === existing ? { ...i, quantity: newQty, ...amounts } : i,
           ),
         };
       }
-      const amounts = calcDraftAmounts(effRate, 1, menuItem.tax_percentage ?? 0);
+      const amounts = calcDraftAmounts(effRate, 1, taxPct);
       return {
         ...state,
         draftItems: [...state.draftItems, {
@@ -112,7 +122,7 @@ function billingReducer(state, action) {
           menu_id:             menuItem.id,
           item_name:           menuItem.item_name,
           quantity:            1,
-          rate,
+          rate:                baseRate,
           addon_rate:          addonRate,
           addons:              addonList.map((a) => ({
             menu_id: a.menuId ?? a.menu_id,
@@ -120,14 +130,15 @@ function billingReducer(state, action) {
             rate:    a.rate,
           })),
           discount_percent:    0,
-          tax_name:            menuItem.tax_name ?? null,
-          tax_percentage:      menuItem.tax_percentage ?? 0,
-          tax_details:         menuItem.tax_details ?? [],
+          tax_name:            isComp ? null : (menuItem.tax_name ?? null),
+          tax_percentage:      taxPct,
+          tax_details:         isComp ? [] : (menuItem.tax_details ?? []),
           category_id:         menuItem.category_id ?? null,
           category_name:       menuItem.category_name ?? null,
           food_type:           menuItem.food_type ?? null,
           food_type_id:        menuItem.food_type_id ?? null,
           is_liquor:           menuItem.is_liquor ?? false,
+          is_complimentary:    isComp,
           special_instruction: null,
           kot_message:         null,  // selected KOT message (persisted to order_item_modifier on KOT)
           kot_status:          "PENDING",
@@ -142,7 +153,7 @@ function billingReducer(state, action) {
       return {
         ...state,
         draftItems: state.draftItems.map((i) =>
-          i.menu_id === action.payload.menuId
+          matchesDraftKey(i, action.payload.menuId)
             ? { ...i, kot_message: action.payload.message || null }
             : i,
         ),
@@ -163,12 +174,12 @@ function billingReducer(state, action) {
     case "UPDATE_DRAFT_QTY": {
       const { menuId, qty } = action.payload;
       if (qty <= 0) {
-        return { ...state, draftItems: state.draftItems.filter((i) => i.menu_id !== menuId) };
+        return { ...state, draftItems: state.draftItems.filter((i) => !matchesDraftKey(i, menuId)) };
       }
       return {
         ...state,
         draftItems: state.draftItems.map((i) => {
-          if (i.menu_id !== menuId) return i;
+          if (!matchesDraftKey(i, menuId)) return i;
           const effRate = (Number(i.rate) || 0) + (Number(i.addon_rate) || 0);
           return { ...i, quantity: qty, ...calcDraftAmounts(effRate, qty, i.tax_percentage) };
         }),
@@ -182,7 +193,7 @@ function billingReducer(state, action) {
       return {
         ...state,
         draftItems: state.draftItems.map((i) => {
-          if (i.menu_id !== menuId) return i;
+          if (!matchesDraftKey(i, menuId)) return i;
           const effRate = (Number(i.rate) || 0) + addonRate;
           return {
             ...i,
@@ -199,7 +210,7 @@ function billingReducer(state, action) {
     }
 
     case "REMOVE_DRAFT_ITEM":
-      return { ...state, draftItems: state.draftItems.filter((i) => i.menu_id !== action.payload) };
+      return { ...state, draftItems: state.draftItems.filter((i) => !matchesDraftKey(i, action.payload)) };
 
     case "SET_DRAFT_CONFIG":
       return {
@@ -260,8 +271,8 @@ export function BillingProvider({ children }) {
     dispatch({ type: "CLEAR_SESSION" }),
   []);
 
-  const addDraftItem = useCallback((menuItem, rate, addons) =>
-    dispatch({ type: "ADD_DRAFT_ITEM", payload: { menuItem, rate, addons } }),
+  const addDraftItem = useCallback((menuItem, rate, addons, isComplimentary = false) =>
+    dispatch({ type: "ADD_DRAFT_ITEM", payload: { menuItem, rate, addons, isComplimentary } }),
   []);
 
   const updateDraftQty = useCallback((menuId, qty) =>

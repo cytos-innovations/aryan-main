@@ -1610,6 +1610,22 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .await
     .map_err(|e| format!("Migration error (order_item.addon_rate): {e}"))?;
 
+    // Complimentary (no-charge) line marker — zero rate/tax, flagged so it shows
+    // as "Complimentary" on the order panel, KOT, bill and settlement.
+    sqlx::query(
+        "ALTER TABLE order_item ADD COLUMN IF NOT EXISTS is_complimentary BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (order_item.is_complimentary): {e}"))?;
+
+    sqlx::query(
+        "ALTER TABLE bill_item ADD COLUMN IF NOT EXISTS is_complimentary BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (bill_item.is_complimentary): {e}"))?;
+
     // Flag to separate lodge customers from restaurant customers (shared table).
     // No default — the application sets it explicitly on insert.
     sqlx::query(

@@ -514,12 +514,10 @@ export default function TableShiftDialog({ open, onOpenChange, tables = [], defa
                             className="size-5 rounded flex items-center justify-center text-muted-foreground hover:bg-muted text-base leading-none"
                           >−</button>
                           <input
-                            type="number"
-                            min={1}
-                            max={fullQty}
-                            step={1}
+                            type="text"
+                            inputMode="numeric"
                             value={moveQty}
-                            onChange={(e) => setItemQty(item.id, fullQty, e.target.value)}
+                            onChange={(e) => setItemQty(item.id, fullQty, e.target.value.replace(/[^0-9]/g, ""))}
                             onClick={(e) => e.stopPropagation()}
                             className="w-10 text-center text-xs tabular-nums bg-muted rounded border-0 outline-none focus:ring-1 focus:ring-ring py-0.5"
                           />

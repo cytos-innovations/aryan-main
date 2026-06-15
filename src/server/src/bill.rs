@@ -137,6 +137,7 @@ pub struct OrderItemRow {
     pub kot_created_at:       Option<String>,
     pub addon_rate:           f64,
     pub addons:               Vec<OrderItemAddon>,
+    pub is_complimentary:     bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1021,6 +1022,7 @@ pub async fn get_order_items(
                 oi.kot_status, oi.item_status,
                 oi.special_instruction,
                 COALESCE(oi.addon_rate, 0)::float8 AS addon_rate,
+                COALESCE(oi.is_complimentary, FALSE) AS is_complimentary,
                 (SELECT string_agg(oim.modifier_name, ', ' ORDER BY oim.id)
                  FROM   order_item_modifier oim
                  WHERE  oim.order_item_id = oi.id AND oim.is_active = 1
@@ -1111,6 +1113,7 @@ pub async fn get_order_items(
                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
         addon_rate:           r.try_get::<f64, _>("addon_rate").unwrap_or(0.0),
         addons:               addons_by_item.get(&oi_id).cloned().unwrap_or_default(),
+        is_complimentary:     r.try_get("is_complimentary").unwrap_or(false),
         }
     }).collect())
 }
@@ -1124,8 +1127,10 @@ pub async fn add_order_item(
     quantity:            f64,
     special_instruction: Option<String>,
     addons:              Option<Vec<AddonInput>>,
+    is_complimentary:    Option<bool>,
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
+    let is_comp = is_complimentary.unwrap_or(false);
 
     // Resolve applicable_rate for this session's table
     let applicable_rate: i32 = sqlx::query_scalar(
@@ -1189,21 +1194,26 @@ pub async fn add_order_item(
 
     // Per-unit add-on charge: sum of chosen add-on rates. Charged per unit and
     // taxed at the parent item's tax rate (folded into this line's amounts).
-    let addon_list = addons.unwrap_or_default();
+    // Complimentary lines carry no charge: zero rate, no add-ons, no tax.
+    let addon_list = if is_comp { Vec::new() } else { addons.unwrap_or_default() };
     let addon_rate: f64 = round2(addon_list.iter().map(|a| a.rate).sum());
-    let effective_rate  = round2(rate + addon_rate);
+    let rate           = if is_comp { 0.0 } else { rate };
+    let effective_rate = round2(rate + addon_rate);
 
-    // Calculate amounts (base rate + add-on rate, per unit)
+    // Calculate amounts (base rate + add-on rate, per unit). Complimentary → all zero.
     let gross_amount   = round2(effective_rate * quantity);
     let taxable_amount = gross_amount;          // no discount at add time
+    let tax_pct        = if is_comp { 0.0 } else { tax_pct };
     let tax_amount     = round2(taxable_amount * tax_pct / 100.0);
     let final_amount   = round2(taxable_amount + tax_amount);
-    let tax_name_opt: Option<String> = if tax_name.is_empty() { None } else { Some(tax_name) };
+    let tax_name_opt: Option<String> =
+        if is_comp || tax_name.is_empty() { None } else { Some(tax_name) };
 
     // ── Merge: if a PENDING item with same menu + instruction already exists, increment qty ──
     // Lines carrying add-ons are never merged: the same item with a different add-on
-    // set must remain a distinct line. Only merge plain (no add-on) pending lines.
-    let existing = if addon_list.is_empty() {
+    // set must remain a distinct line. Complimentary lines are also never merged with
+    // a paid line. Only merge plain (no add-on, non-comp) pending lines.
+    let existing = if addon_list.is_empty() && !is_comp {
         sqlx::query(
             "SELECT id, quantity::float8 AS quantity
              FROM   order_item
@@ -1264,8 +1274,8 @@ pub async fn add_order_item(
              gross_amount, discount_percent, discount_amount,
              tax_name, tax_percentage, tax_amount, taxable_amount, final_amount,
              food_type_id, kitchen_section_id, special_instruction,
-             kot_status, item_status)
-         VALUES ($1,$2,$3,$4,$5,$6, $7,0,0, $8,$9,$10,$11,$12, $13,$14,$15, 'PENDING','ACTIVE')
+             is_complimentary, kot_status, item_status)
+         VALUES ($1,$2,$3,$4,$5,$6, $7,0,0, $8,$9,$10,$11,$12, $13,$14,$15, $16, 'PENDING','ACTIVE')
          RETURNING id",
     )
     .bind(session_id)
@@ -1283,6 +1293,7 @@ pub async fn add_order_item(
     .bind(food_type_id)
     .bind(kitchen_section_id)
     .bind(special_instruction)
+    .bind(is_comp)
     .fetch_one(&pool)
     .await
     .map_err(|e| format!("Failed to add order item: {e}"))?;
@@ -2174,9 +2185,11 @@ pub async fn generate_bill(
     sqlx::query(
         "INSERT INTO bill_item
             (bill_id, order_item_id, menu_id, item_name, quantity, rate,
-             gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id)
+             gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id,
+             is_complimentary)
          SELECT $1, id, menu_id, item_name, quantity, rate,
-                gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id
+                gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id,
+                COALESCE(is_complimentary, FALSE)
          FROM   order_item
          WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'",
     )
@@ -3694,6 +3707,7 @@ pub struct BillReprintItem {
     pub discount_amount: f64,
     pub tax_amount:      f64,
     pub final_amount:    f64,
+    pub is_complimentary: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -3861,7 +3875,8 @@ pub async fn get_bill_for_reprint(
         "SELECT id, item_name,
                 quantity::float8, rate::float8,
                 gross_amount::float8, discount_amount::float8,
-                tax_amount::float8, final_amount::float8
+                tax_amount::float8, final_amount::float8,
+                COALESCE(is_complimentary, FALSE) AS is_complimentary
          FROM   bill_item
          WHERE  bill_id = $1 AND is_active = 1
          ORDER  BY id",
@@ -3880,6 +3895,7 @@ pub async fn get_bill_for_reprint(
         discount_amount: r.try_get("discount_amount").unwrap_or(0.0),
         tax_amount:      r.try_get("tax_amount").unwrap_or(0.0),
         final_amount:    r.try_get("final_amount").unwrap_or(0.0),
+        is_complimentary: r.try_get("is_complimentary").unwrap_or(false),
     }).collect();
 
     // ── Tax details ───────────────────────────────────────────
