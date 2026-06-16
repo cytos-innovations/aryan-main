@@ -112,7 +112,7 @@ const ORDER_TYPE_CFG = {
 
 // ─── Session header bar ───────────────────────────────────────
 
-function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingReservation, onArrivedPrefill, onComplimentary }) {
+function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingReservation, onArrivedPrefill, onComplimentary, canComplimentary }) {
   const now        = useNow();
   const elapsed    = useMemo(() => calcElapsed(session?.opened_at, now), [session?.opened_at, now]);
   const openedTime = useMemo(() => fmtTime(session?.opened_at),          [session?.opened_at]);
@@ -171,9 +171,11 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingRes
                 {orderCfg.label}
               </span>
             )}
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusCfg.cls}`}>
-              {statusCfg.label}
-            </span>
+            {statusCfg && (
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${statusCfg.cls}`}>
+                {statusCfg.label}
+              </span>
+            )}
           </>
         )}
 
@@ -227,8 +229,8 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingRes
           variant="outline"
           className="h-7 gap-1 text-xs text-emerald-600 border-emerald-200 hover:bg-emerald-50 dark:text-emerald-400 dark:border-emerald-800 dark:hover:bg-emerald-950/30"
           onClick={onComplimentary}
-          disabled={isClosed}
-          title="Add complimentary (no-charge) items"
+          disabled={isClosed || !canComplimentary}
+          title={canComplimentary ? "Add complimentary (no-charge) items" : "Add a regular item first"}
         >
           <HugeiconsIcon icon={GiftIcon} size={13} strokeWidth={2} />
           Complimentary
@@ -612,11 +614,29 @@ export default function OrderEntryView() {
     );
   }
 
+  // A complimentary (₹0) item can't stand on its own — an all-complimentary order
+  // nets ₹0 and can't be settled. Require at least one regular (paid) item first.
+  const hasPaidItem = (items ?? []).some(
+    (i) => i.item_status !== "CANCELLED" && !i.is_complimentary,
+  );
+
+  function openComplimentary() {
+    if (!hasPaidItem) {
+      toast.error("Add at least one regular item before adding complimentary items.");
+      return;
+    }
+    setCompOpen(true);
+  }
+
   // Add chosen items as complimentary lines (no charge, no tax). Draft adds to
   // context; real sessions persist via the add-item mutation with the comp flag.
   function commitComplimentary(chosenItems) {
     if (!chosenItems?.length) return;
     if (!isDraft && session?.session_status === "BILL_PRINTED") return;
+    if (!hasPaidItem) {
+      toast.error("Add at least one regular item before adding complimentary items.");
+      return;
+    }
     for (const menuItem of chosenItems) {
       if (isDraft) {
         addDraftItem(menuItem, 0, [], true);
@@ -772,7 +792,8 @@ export default function OrderEntryView() {
         onBack={handleBack}
         pendingReservation={pendingReservation}
         onArrivedPrefill={handleArrivedPrefill}
-        onComplimentary={() => setCompOpen(true)}
+        onComplimentary={openComplimentary}
+        canComplimentary={hasPaidItem}
       />
 
       {/* ── Main body: center+right workspace ── */}

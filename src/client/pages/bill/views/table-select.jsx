@@ -116,6 +116,7 @@ const STATUS_LABEL = {
   AVAILABLE:        { text: "Available",     cls: "text-muted-foreground" },
   OCCUPIED:         { text: "KOT Sent",      cls: "text-amber-700 dark:text-amber-400" },
   BILL_PRINTED:     { text: "Bill Out",      cls: "text-emerald-700 dark:text-emerald-400" },
+  RESERVED:         { text: "Reserved",      cls: "text-blue-700 dark:text-blue-400" },
   NEAR_RESERVATION: { text: "Reserved Soon", cls: "text-blue-700 dark:text-blue-400" },
   ON_HOLD:          { text: "On Hold",       cls: "text-purple-700 dark:text-purple-400" },
 };
@@ -157,7 +158,7 @@ function TableCard({ table, onClick, now, isOnHold }) {
   const isNear      = status === "NEAR_RESERVATION";   // near-reservation blue state
   const elapsed     = calcElapsed(table.occupied_since, now);
   const orderPill   = isOccupied && table.order_type ? ORDER_TYPE_PILL[table.order_type] : null;
-  const statusLabel = STATUS_LABEL[status];
+  const statusLabel = STATUS_LABEL[status] ?? STATUS_LABEL.AVAILABLE;
 
   // Countdown: positive = minutes until reservation, negative = minutes overdue
   const minsUntil   = isNear ? minsUntilReservation(table.reservation_time, now) : null;

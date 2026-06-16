@@ -3,6 +3,12 @@ import { BILLING_VIEW, ORDER_TYPE } from "../constants/billing";
 
 function r2(n) { return Math.round(n * 100) / 100; }
 
+// Monotonic counter for temporary draft-line ids. Date.now() alone collides when
+// several lines are added in the same millisecond (e.g. picking multiple
+// complimentary items at once), which breaks id-based line keying.
+let draftIdSeq = 0;
+function nextDraftId() { draftIdSeq += 1; return -(Date.now() * 1000 + (draftIdSeq % 1000)); }
+
 // Draft lines are addressed by a "key": menu_id for normal lines (so taps of the
 // same item merge), or the line's own (negative) id for complimentary lines so a
 // free line never collides with a paid line of the same menu_id.
@@ -118,7 +124,7 @@ function billingReducer(state, action) {
       return {
         ...state,
         draftItems: [...state.draftItems, {
-          id:                  -(Date.now()),
+          id:                  nextDraftId(),
           menu_id:             menuItem.id,
           item_name:           menuItem.item_name,
           quantity:            1,

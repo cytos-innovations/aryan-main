@@ -205,7 +205,8 @@ export function useAddOrderItem(sessionId) {
             // Charge per unit = base rate + add-on rate, taxed at the parent rate.
             const amounts = recalcItem(rate + addonRate, quantity || 1, 0, taxPct);
             const optimistic = {
-              id:                  -(Date.now()),
+              // Unique even across same-millisecond adds (e.g. several comp items at once)
+              id:                  -(Date.now() * 1000 + Math.floor(Math.random() * 1000)),
               code:                0,
               order_session_id:    sessionId,
               menu_id:             menuId,
