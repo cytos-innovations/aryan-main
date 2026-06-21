@@ -42,7 +42,7 @@ import { Separator } from "@/components/ui/separator";
 import { usePaymentMethods } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE } from "../constants/billing";
-import { fmtAmount, calcTaxBreakdown } from "../utils/billing-calc";
+import { fmtAmount, calcTaxBreakdown, calcDiscountedTotals } from "../utils/billing-calc";
 
 // Sentinels for the permanent (hard-coded) options in the method dropdown
 const SPLIT_VALUE = "__SPLIT__";
@@ -210,21 +210,31 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [taxExpanded,  setTaxExpanded]  = useState(false);
   const [discExpanded, setDiscExpanded] = useState(false);
 
-  // Category subtotals from items
+  // Discount-before-tax engine — drives the post-discount tax breakdown so the
+  // settle summary matches the printed bill (GST charged on the net value).
+  const discTotals = useMemo(
+    () => calcDiscountedTotals(items ?? [], sessionDisc),
+    [items, sessionDisc],
+  );
+
+  // Category subtotals from items (pre-tax — tax is shown as its own row).
   const categoryTotals = useMemo(() => {
     const map = new Map();
     for (const item of items ?? []) {
       if (item.item_status !== "ACTIVE") continue;
       const catId   = item.category_id ?? "__none__";
       const catName = item.category_name ?? "Other";
-      const amt     = Number(item.final_amount) || 0;
+      const amt     = Number(item.taxable_amount) || 0;
       if (!map.has(catId)) map.set(catId, { name: catName, total: 0 });
       map.get(catId).total += amt;
     }
     return Array.from(map.values()).map((c) => ({ ...c, total: Math.round(c.total * 100) / 100 }));
   }, [items]);
 
-  const taxBreakdown = useMemo(() => calcTaxBreakdown(items ?? []), [items]);
+  const taxBreakdown = useMemo(
+    () => calcTaxBreakdown(items ?? [], discTotals.perItem),
+    [items, discTotals],
+  );
 
   // NC remark state
   const [ncRemark, setNcRemark] = useState("");
@@ -280,7 +290,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   }, [open]);
 
   // ── Auto-fill from an existing customer when a known mobile is typed ──
-  // Fills empty name/address only, so it never clobbers what the user typed.
+  // A confirmed full-mobile match overwrites name/address so the entered
+  // number always pulls in that customer's saved details.
   useEffect(() => {
     if (!open) return;
     const mob = customerMobile.trim();
@@ -295,8 +306,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
         if (!active) return;
         const match = results.find((c) => (c.mobile ?? "").trim() === mob);
         if (match) {
-          if (match.name)    setCustomerName((n) => (n.trim() ? n : match.name));
-          if (match.address) setCustomerAddress((a) => (a.trim() ? a : match.address));
+          if (match.name)    setCustomerName(match.name);
+          if (match.address) setCustomerAddress(match.address);
         }
         setPriorDue(due && due.pending_total > 0 ? due : null);
       } catch { /* lookup is best-effort */ }
@@ -492,7 +503,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
       if (!method) { toast.error("Select a payment method"); return; }
       // Blank amount → settle the full bill amount
       const amt = amount.trim() === "" ? netAmount : Number(amount);
-      if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
+      // A fully-discounted (₹0) bill settles with a zero-amount payment; otherwise require a positive amount.
+      if (Number.isNaN(amt) || amt < 0 || (netAmount > 0 && amt <= 0)) { toast.error("Enter a valid amount"); return; }
       entries = [{ payment_mode: method, amount: amt, reference_no: null }];
       // Short amount → the remainder is written off (unless paying via Due → keep it as a due)
       if (amt < netAmount && !/due/i.test(method)) {
@@ -675,11 +687,11 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                     >
                       <span className="flex items-center gap-1">
                         <HugeiconsIcon icon={StickyNote01Icon} size={10} strokeWidth={2} />
-                        Bill Total
+                        Bill Amount
                       </span>
                       <div className="flex items-center gap-1">
                         <span className="tabular-nums font-medium text-foreground">
-                          ₹{fmtAmount(billTotals?.finalAmount ?? netAmount)}
+                          ₹{fmtAmount(billTotals?.taxableAmount ?? netAmount)}
                         </span>
                         <HugeiconsIcon icon={catExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
                       </div>
@@ -697,43 +709,11 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   </>
                 ) : (
                   <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>Bill Total</span>
+                    <span>Bill Amount</span>
                     <span className="tabular-nums font-medium text-foreground">
-                      ₹{fmtAmount(billTotals?.finalAmount ?? netAmount)}
+                      ₹{fmtAmount(billTotals?.taxableAmount ?? netAmount)}
                     </span>
                   </div>
-                )}
-
-                {/* Tax breakdown — expandable */}
-                {taxBreakdown.length > 0 && taxBreakdown.some((t) => t.tax_amount > 0) && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setTaxExpanded((p) => !p)}
-                      className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <span className="flex items-center gap-1">
-                        <HugeiconsIcon icon={PercentIcon} size={10} strokeWidth={2} />
-                        Tax
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <span className="tabular-nums font-medium text-foreground">
-                          ₹{fmtAmount(taxBreakdown.reduce((s, t) => s + t.tax_amount, 0))}
-                        </span>
-                        <HugeiconsIcon icon={taxExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
-                      </div>
-                    </button>
-                    {taxExpanded && (
-                      <div className="pl-2 space-y-0.5">
-                        {taxBreakdown.map((t) => (
-                          <div key={t.tax_name} className="flex justify-between text-[10px] text-muted-foreground">
-                            <span>{t.tax_name}{t.tax_percentage > 0 ? ` (${t.tax_percentage}%)` : ""}</span>
-                            <span className="tabular-nums">₹{fmtAmount(t.tax_amount)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
                 )}
 
                 {/* Discount / charges — collapsible */}
@@ -820,6 +800,38 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                     </>
                   );
                 })()}
+
+                {/* Tax breakdown — expandable (after discount, per GST: tax on net) */}
+                {taxBreakdown.length > 0 && taxBreakdown.some((t) => t.tax_amount > 0) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setTaxExpanded((p) => !p)}
+                      className="flex w-full items-center justify-between text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <span className="flex items-center gap-1">
+                        <HugeiconsIcon icon={PercentIcon} size={10} strokeWidth={2} />
+                        Tax
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="tabular-nums font-medium text-foreground">
+                          ₹{fmtAmount(taxBreakdown.reduce((s, t) => s + t.tax_amount, 0))}
+                        </span>
+                        <HugeiconsIcon icon={taxExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
+                      </div>
+                    </button>
+                    {taxExpanded && (
+                      <div className="pl-2 space-y-0.5">
+                        {taxBreakdown.map((t) => (
+                          <div key={t.tax_name} className="flex justify-between text-[10px] text-muted-foreground">
+                            <span>{t.tax_name}{t.tax_percentage > 0 ? ` (${t.tax_percentage}%)` : ""}</span>
+                            <span className="tabular-nums">₹{fmtAmount(t.tax_amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
 
                 <div className="flex justify-between text-sm font-semibold border-t pt-1.5 mt-0.5">
                   <span>Net Total</span>

@@ -16,7 +16,7 @@ import { useAuth } from "@/lib/auth";
 import { useBillingContext } from "../state/billing-context";
 import { useGenerateKot, useGenerateCheckKot, useGenerateBill } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
-import { fmtAmount, calcBillTotals, buildMenuLookups, buildCategories } from "../utils/billing-calc";
+import { fmtAmount, calcBillTotals, calcDiscountedTotals, resolveBillDiscount, buildMenuLookups, buildCategories } from "../utils/billing-calc";
 import { BQK } from "../constants/billing";
 
 // ─── Panel mode enum ──────────────────────────────────────────
@@ -192,8 +192,9 @@ function DiscField({ label, value, onChange, readOnly, autoFocus, onKeyDown, inp
 
 
 function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply, onBack }) {
-  const billAmt = totals.finalAmount || 0;
-  const taxAmt  = totals.taxAmount   || 0;
+  // Discount applies to the PRE-TAX (taxable) base — Indian GST law charges tax
+  // on the post-discount value, so all discount maths here use taxableAmount.
+  const billAmt = totals.taxableAmount || 0;
 
   const { auth } = useAuth();
   const capsQuery = useQuery({
@@ -341,17 +342,55 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
   // Effective % for saving (always store as pct equivalent for downstream use)
   const billDiscPct = afterCatDisc > 0 ? r2((billDiscAmt / afterCatDisc) * 100) : 0;
 
-  const net = r2(afterCatDisc - billDiscAmt);
+  // Net = post-discount taxable + tax recomputed on that reduced base + tax-exempt
+  // charges. Computed via the shared engine so it matches the saved bill exactly.
+  const discTotals = useMemo(
+    () => calcDiscountedTotals(items ?? [], { catDiscAmts, billDiscAmt }),
+    [items, catDiscAmts, billDiscAmt],
+  );
+  const net        = discTotals.netAmount;
+  const netTax      = discTotals.taxAmount;     // tax recomputed on the discounted base
+  const netTaxable  = discTotals.taxableAmount;  // taxable AFTER discount
+  const totalDisc   = r2(totalCatDisc + billDiscAmt);
 
-  // ── Mode switch — reset values (% keeps auto_discount if no bill disc, flat resets to 0) ──
+  // ── Mode switch — CONVERT existing values between % and ₹ so the discount the
+  // user already entered is preserved (10% of ₹100 ⇄ ₹10), instead of wiping it.
+  // All conversions use the PRE-switch state (current render closure), so they are
+  // self-consistent regardless of the order React applies the state updates. ──
   function switchMode(mode) {
-    setDiscMode(mode);
-    setBillDiscVal("0");
-    const reset = {};
-    for (const cat of categories) {
-      reset[cat.id] = { value: mode === "pct" ? String(cat.auto_discount ?? 0) : "0" };
+    if (mode === discMode) return;
+
+    // Base the bill-discount conversion on the taxable left after category
+    // discounts, computed from the CURRENT mode's interpretation of catRows.
+    const curCatDisc = r2(
+      categories.reduce((s, cat) => {
+        const raw = parseFloat(catRows[cat.id]?.value) || 0;
+        const amt = discMode === "pct" ? r2(cat.total * raw / 100) : raw;
+        return s + Math.min(amt, cat.total);
+      }, 0),
+    );
+    const base = r2(billAmt - curCatDisc);
+
+    // Convert bill-level discount between % and ₹ using that base.
+    const billRaw = parseFloat(billDiscVal) || 0;
+    if (billRaw > 0 && base > 0) {
+      setBillDiscVal(mode === "flat"
+        ? String(r2(base * Math.min(billRaw, 100) / 100))         // % → ₹
+        : String(r2(Math.min(billRaw, base) / base * 100)));      // ₹ → %
     }
-    setCatRows(reset);
+
+    // Convert each category row using its own taxable total. Zero rows stay zero
+    // (never re-inject auto_discount mid-edit — that caused stale flicker).
+    const next = {};
+    for (const cat of categories) {
+      const raw = parseFloat(catRows[cat.id]?.value) || 0;
+      if (raw <= 0 || cat.total <= 0) { next[cat.id] = { value: "0" }; continue; }
+      next[cat.id] = mode === "flat"
+        ? { value: String(r2(cat.total * raw / 100)) }   // % → ₹
+        : { value: String(r2(raw / cat.total * 100)) };  // ₹ → %
+    }
+    setCatRows(next);
+    setDiscMode(mode);
   }
 
   const saveButtonRef = useRef(null);
@@ -380,9 +419,8 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
   return (
     <div className="px-3 py-2 bg-card border-t space-y-2">
       {/* ── Header row: totals + mode toggle + bill disc ── */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <DiscField label="Tax Amt. :"  value={fmtAmount(taxAmt)}  readOnly />
-        <DiscField label="Bill Amt. :" value={fmtAmount(billAmt)} readOnly />
+      <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
+        <DiscField label="Gross :" value={fmtAmount(billAmt)} readOnly />
 
         {/* % / Flat toggle */}
         <div className="flex items-center gap-0.5 rounded-md border border-border/60 overflow-hidden shrink-0">
@@ -520,14 +558,17 @@ function DiscountModePanel({ totals, items, menu: menuProp, sessionDisc, onApply
         })}
       </div>
 
-      {/* ── Footer: net total + action buttons ── */}
-      <div className="flex items-center gap-2.5 flex-wrap border-t border-border/30 pt-1.5">
-        <DiscField label="Net Amt :" value={fmtAmount(net)} readOnly />
-        {(totalCatDisc > 0 || billDiscAmt > 0) && (
-          <span className="text-xs tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold">
-            Total Disc: −₹{fmtAmount(r2(totalCatDisc + billDiscAmt))}
+      {/* ── Footer: Net Taxable → Disc → Tax → Net Amt (boxed) + actions ── */}
+      <div className="flex items-center gap-x-2.5 gap-y-2 flex-wrap border-t border-border/30 pt-1.5">
+        {/* GST flow, each value boxed — always visible in % and ₹ mode */}
+        <DiscField label="Net Taxable :" value={fmtAmount(netTaxable)} readOnly />
+        {totalDisc > 0 && (
+          <span className="text-sm tabular-nums text-emerald-600 dark:text-emerald-400 font-semibold shrink-0">
+            Total Disc: −₹{fmtAmount(totalDisc)}
           </span>
         )}
+        <DiscField label="Tax :"         value={`+${fmtAmount(netTax)}`} readOnly />
+        <DiscField label="Net Amt :"     value={fmtAmount(net)} readOnly />
 
         <div
           className="flex items-center gap-1.5 ml-auto"
@@ -609,7 +650,8 @@ export default function BottomActionBar({
   const canKot         = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
   // Bill+Print is enabled as long as there is at least one KOT-sent item — pending items are excluded from the bill automatically
   const canBill        = !isDraft && hasSentItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
-  const canSettle      = !isDraft && isClosed && !!billId && (netAmount ?? 0) > 0 && !isSettling;
+  // A 100% discount makes netAmount 0 — still allow settling a ₹0 bill.
+  const canSettle      = !isDraft && isClosed && !!billId && (netAmount ?? 0) >= 0 && !isSettling;
   const kotPending     = isDraft ? isKotting : generateKot.isPending;
   const checkKotPending = isDraft ? isKotting : generateCheckKot.isPending;
   // Hold is only meaningful in draft mode. When restored from hold, always enable (to release).
@@ -664,8 +706,10 @@ export default function BottomActionBar({
     if (pendingKot > 0) {
       toast.warning(`${pendingKot} item${pendingKot > 1 ? "s" : ""} not sent to kitchen will be dropped from the bill.`);
     }
+    // Full bill-level discount (category + bill discount) so the backend reduces
+    // the taxable base and recomputes tax on the net value (GST after discount).
     const payload = sessionDisc ? {
-      billDiscountAmount: Math.round((sessionDisc.totalCatDisc || 0) * 100) / 100,
+      billDiscountAmount: resolveBillDiscount(sessionDisc),
       billNetAmount: sessionDisc.netAmt ?? undefined,
     } : {};
     generateBill.mutate(payload, { onSuccess: clearSession });

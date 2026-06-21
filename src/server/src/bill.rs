@@ -2091,19 +2091,27 @@ pub async fn generate_bill(
 
     let gross_amount:       f64 = totals.try_get::<f64, _>("gross_amount").unwrap_or(0.0);
     let item_discount:      f64 = totals.try_get::<f64, _>("discount_amount").unwrap_or(0.0);
-    let taxable_amount:     f64 = totals.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
-    let tax_amount:         f64 = totals.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
-    let final_amount:       f64 = totals.try_get::<f64, _>("final_amount").unwrap_or(0.0);
-    // Bill-level discount (from the UI discount panel) is added on top of item discounts
-    let extra_disc:         f64 = bill_discount_amount.unwrap_or(0.0).max(0.0);
+    let base_taxable:       f64 = totals.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
+    let base_tax:           f64 = totals.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
+    // Bill-level discount (category + bill discount from the UI panel) is applied
+    // BEFORE tax (Indian GST law): it reduces the taxable base, then tax is
+    // recomputed on the net value. extra_disc never exceeds the taxable base.
+    let extra_disc:         f64 = bill_discount_amount.unwrap_or(0.0).max(0.0).min(base_taxable);
+    // Factor that scales every item's taxable & tax down by the bill discount.
+    // Applied per-line (proportional to taxable) when copying to bill_item /
+    // bill_tax_detail so all stored rows stay internally consistent.
+    let tax_factor:         f64 = if base_taxable > 0.0 { 1.0 - extra_disc / base_taxable } else { 1.0 };
+    let taxable_amount:     f64 = round2(base_taxable - extra_disc);
+    let tax_amount:         f64 = round2(base_tax * tax_factor);
+    let final_amount:       f64 = round2(taxable_amount + tax_amount);
     let discount_amount:    f64 = round2(item_discount + extra_disc);
     let round_off               = round2(final_amount.round() - final_amount);
     // If a UI-computed net_amount was passed (includes misc, service charge etc.) use it,
-    // otherwise derive from final_amount minus extra discount
+    // otherwise derive from the post-discount final amount.
     let net_amount:         f64 = if let Some(n) = bill_net_amount {
         round2(n)
     } else {
-        round2(final_amount - extra_disc + round_off)
+        round2(final_amount + round_off)
     };
 
     // Get session details
@@ -2181,38 +2189,48 @@ pub async fn generate_bill(
         .await
         .ok();
 
-    // Copy KOT-sent order_items → bill_items (pending items not included in bill)
+    // Copy KOT-sent order_items → bill_items (pending items not included in bill).
+    // The bill-level discount is spread per-line: each line's taxable share of the
+    // discount is added to its discount_amount, and its tax is recomputed on the
+    // reduced base via tax_factor so the stored bill is GST-on-net consistent.
     sqlx::query(
         "INSERT INTO bill_item
             (bill_id, order_item_id, menu_id, item_name, quantity, rate,
              gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id,
              is_complimentary)
          SELECT $1, id, menu_id, item_name, quantity, rate,
-                gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id,
+                gross_amount,
+                ROUND((discount_amount + taxable_amount * (1 - $3))::numeric, 2),
+                ROUND((tax_amount * $3)::numeric, 2),
+                ROUND((taxable_amount * $3 + tax_amount * $3)::numeric, 2),
+                kitchen_section_id,
                 COALESCE(is_complimentary, FALSE)
          FROM   order_item
          WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'",
     )
     .bind(bill_id)
     .bind(session_id)
+    .bind(tax_factor)
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to copy bill items: {e}"))?;
 
-    // Insert tax breakdown → bill_tax_detail (KOT-sent items only)
+    // Insert tax breakdown → bill_tax_detail (KOT-sent items only), scaled by the
+    // bill discount so the GST shown on the bill is charged on the net value.
     sqlx::query(
         "INSERT INTO bill_tax_detail (bill_id, tax_name, tax_percentage, taxable_amount, tax_amount)
          SELECT $1,
                 COALESCE(tax_name, 'No Tax'),
                 MAX(tax_percentage),
-                SUM(taxable_amount),
-                SUM(tax_amount)
+                ROUND((SUM(taxable_amount) * $3)::numeric, 2),
+                ROUND((SUM(tax_amount) * $3)::numeric, 2)
          FROM   order_item
          WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'
          GROUP  BY tax_name",
     )
     .bind(bill_id)
     .bind(session_id)
+    .bind(tax_factor)
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to insert tax detail: {e}"))?;

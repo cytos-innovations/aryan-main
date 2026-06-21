@@ -17,6 +17,8 @@ import {
   PrinterIcon,
 } from "@hugeicons/core-free-icons";
 
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
@@ -30,7 +32,7 @@ import {
   useSearchKotMessages,
 } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
-import { calcBillTotals, calcTaxBreakdown, fmtAmount } from "../utils/billing-calc";
+import { calcBillTotals, calcDiscountedTotals, calcTaxBreakdown, recalcSessionDisc, fmtAmount } from "../utils/billing-calc";
 import { FoodTypeDot } from "./menu-center";
 import { CustomerPicker, WaiterPicker } from "./party-pickers";
 import KotMessagePicker from "./kot-message-picker";
@@ -247,7 +249,7 @@ function KotDot({ status }) {
 
 // ─── Merged order item row (groups same menu_id across KOTs) ──
 
-function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter, onEditAddons }) {
+function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter, onEditAddons, blockRemove }) {
   const { auth } = useAuth();
   const updateQty        = useUpdateOrderItemQty(sessionId);
   const cancelItem       = useCancelOrderItem(sessionId);
@@ -279,7 +281,9 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   const totalQty    = isDraft
     ? representative.quantity
     : group.reduce((s, i) => s + Number(i.quantity), 0);
-  const totalAmount = group.reduce((s, i) => s + Number(i.final_amount), 0);
+  // Show the pre-tax (taxable) amount per line — tax is added separately in the
+  // bill totals below, not baked into each line's displayed amount.
+  const totalAmount = group.reduce((s, i) => s + Number(i.taxable_amount), 0);
 
   // Pending (editable) items vs KOT-sent items
   const pendingItems = isDraft ? group : group.filter((i) => i.kot_status === "PENDING");
@@ -372,7 +376,19 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
     if (e.key === "Escape") { onF6Close?.(); }
   }
 
+  // Returns true (and warns) when removing/zeroing this line is blocked because it
+  // is the last paid line and complimentary lines would be left orphaned.
+  function guardLastPaidRemoval() {
+    if (blockRemove) {
+      toast.error("Remove the complimentary items first — an order can't have only complimentary items.");
+      return true;
+    }
+    return false;
+  }
+
   function handleDecrement() {
+    // Decrement that would drop the last paid line to 0 is blocked.
+    if (blockRemove && totalQty <= 1 && guardLastPaidRemoval()) return;
     if (isDraft) { updateDraftQty(draftKey, representative.quantity - 1); return; }
     // If there are pending (unsent) items, decrement those first
     if (hasPendingQty) {
@@ -394,6 +410,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   }
 
   function handleRemove() {
+    if (guardLastPaidRemoval()) return;
     if (isDraft) { removeDraftItem(draftKey); return; }
     if (hasPendingQty && !hasSentQty) {
       // All items are still pending — cancel them directly
@@ -405,6 +422,11 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   }
 
   function handleVoidConfirm(reason, voids) {
+    // Block voiding the entire last paid line while comp lines remain.
+    if (blockRemove) {
+      const totalVoid = voids.reduce((s, v) => s + Number(v.qty), 0);
+      if (totalVoid >= totalQty) { guardLastPaidRemoval(); setVoidOpen(false); return; }
+    }
     for (const v of voids) {
       cancelWithReason.mutate({
         orderItemId:    v.orderItemId,
@@ -688,6 +710,11 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
 
+  // For the "can't leave an order with only complimentary items" guard:
+  // how many active paid (non-comp) lines exist, and are there any comp lines.
+  const hasCompLines  = activeItems.some((i) => i.is_complimentary);
+  const paidLineCount = activeItems.filter((i) => !i.is_complimentary).length;
+
   // Group by menu_id, but split pending vs sent into separate rows when both exist.
   // Draft: always one group per menu_id.
   // Session: if an item has both sent and pending DB rows, show pending as its own
@@ -791,20 +818,28 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
           <kbd className="rounded bg-muted px-0.5 text-[8px] font-mono text-muted-foreground/50 leading-tight">F6</kbd>
         </span>
       </div>
-      {groups.map(([groupKey, groupItems]) => (
-        <MergedOrderItemRow
-          key={groupKey}
-          group={groupItems}
-          sessionId={sessionId}
-          isDraft={isDraft}
-          isBillPrinted={isBillPrinted}
-          isActive={lastItemKey === groupKey}
-          isF6Active={f6ItemKey === groupKey}
-          onF6Close={() => setF6ItemKey(null)}
-          onQtyEnter={onQtyEnter}
-          onEditAddons={onEditAddons}
-        />
-      ))}
+      {groups.map(([groupKey, groupItems]) => {
+        // Guard: an order can't be left with only complimentary (₹0) lines — it
+        // would net ₹0 and couldn't be settled. So when comp lines exist, block
+        // removing the last remaining paid line.
+        const isCompGroup    = groupItems.some((i) => i.is_complimentary);
+        const isLastPaidLine = !isCompGroup && hasCompLines && paidLineCount <= 1;
+        return (
+          <MergedOrderItemRow
+            key={groupKey}
+            group={groupItems}
+            sessionId={sessionId}
+            isDraft={isDraft}
+            isBillPrinted={isBillPrinted}
+            isActive={lastItemKey === groupKey}
+            isF6Active={f6ItemKey === groupKey}
+            onF6Close={() => setF6ItemKey(null)}
+            onQtyEnter={onQtyEnter}
+            onEditAddons={onEditAddons}
+            blockRemove={isLastPaidLine}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -817,6 +852,19 @@ function BillTotals({ items, sessionDisc, menu }) {
   const [discExpanded, setDiscExpanded] = useState(false);
 
   const totals = useMemo(() => calcBillTotals(items ?? []), [items]);
+  // Re-derive the discount amounts from the saved intent against the CURRENT
+  // items so the totals stay live as items are added/removed (the saved
+  // sessionDisc.catDiscAmts/billDiscAmt may be a stale snapshot).
+  const liveDisc = useMemo(
+    () => recalcSessionDisc(items ?? [], sessionDisc, menu) ?? sessionDisc,
+    [items, sessionDisc, menu],
+  );
+  // Discount-before-tax engine: spreads the bill-level discount across items,
+  // reduces each taxable base and recomputes tax at the item's own GST rate.
+  const discTotals = useMemo(
+    () => calcDiscountedTotals(items ?? [], liveDisc),
+    [items, liveDisc],
+  );
 
   // Per-category subtotals — ordered by first appearance
   const categoryTotals = useMemo(() => {
@@ -825,14 +873,19 @@ function BillTotals({ items, sessionDisc, menu }) {
       if (item.item_status !== "ACTIVE") continue;
       const catId   = item.category_id ?? "__none__";
       const catName = item.category_name ?? "Other";
-      const amt     = Number(item.final_amount) || 0;
+      // Pre-tax amount — tax is shown separately in its own row below.
+      const amt     = Number(item.taxable_amount) || 0;
       if (!map.has(catId)) map.set(catId, { name: catName, total: 0 });
       map.get(catId).total += amt;
     }
     return Array.from(map.values()).map((c) => ({ ...c, total: Math.round(c.total * 100) / 100 }));
   }, [items]);
 
-  const taxBreakdown = useMemo(() => calcTaxBreakdown(items ?? []), [items]);
+  // Tax breakdown reflects the post-discount (GST-on-net) figures.
+  const taxBreakdown = useMemo(
+    () => calcTaxBreakdown(items ?? [], discTotals.perItem),
+    [items, discTotals],
+  );
 
   // Build catId → category name: from menu master first (covers draft items), then from order items
   const catNameMap = useMemo(() => {
@@ -846,26 +899,28 @@ function BillTotals({ items, sessionDisc, menu }) {
     return map;
   }, [menu, items]);
 
-  // Build per-category discount rows from new sessionDisc shape (catDiscAmts + catRows)
+  // Build per-category discount rows from the LIVE recomputed discount.
   const catDiscRows = useMemo(() => {
-    if (!sessionDisc?.catDiscAmts) return [];
-    return Object.entries(sessionDisc.catDiscAmts)
+    if (!liveDisc?.catDiscAmts) return [];
+    return Object.entries(liveDisc.catDiscAmts)
       .filter(([, amt]) => Number(amt) > 0)
       .map(([catId, amt]) => {
-        const pctVal  = sessionDisc.catRows?.[catId]?.value;
+        const pctVal  = liveDisc.catRows?.[catId]?.value;
         const pct     = pctVal !== undefined ? Number(pctVal) : null;
         const name    = catNameMap[catId] ?? `Category ${catId}`;
         return { catId, amt: Number(amt), pct, name };
       });
-  }, [sessionDisc, catNameMap]);
+  }, [liveDisc, catNameMap]);
 
   // Fallback to old shape fields so existing saved sessionDisc still renders
-  const legacyDiscAmt = (sessionDisc?.discAmt || 0) + (sessionDisc?.foodDiscAmt || 0) + (sessionDisc?.liquorDiscAmt || 0);
-  const totalDiscAmt  = sessionDisc
-    ? ((sessionDisc.totalCatDisc || 0) + (sessionDisc.billDiscAmt || 0) || legacyDiscAmt)
+  const legacyDiscAmt = (liveDisc?.discAmt || 0) + (liveDisc?.foodDiscAmt || 0) + (liveDisc?.liquorDiscAmt || 0);
+  const totalDiscAmt  = liveDisc
+    ? ((liveDisc.totalCatDisc || 0) + (liveDisc.billDiscAmt || 0) || legacyDiscAmt)
     : 0;
-  const netAmount = sessionDisc?.netAmt ?? totals.finalAmount;
-  const roundOff  = Math.round(netAmount) - netAmount;
+  // Always use the LIVE net (recomputed from current items) so totals update as
+  // items are added/removed — never the frozen sessionDisc.netAmt snapshot.
+  const netAmount = discTotals.netAmount;
+  const roundOff  = discTotals.roundOff;
 
   return (
     <div className="shrink-0 border-t bg-card">
@@ -884,7 +939,7 @@ function BillTotals({ items, sessionDisc, menu }) {
               </span>
               <div className="flex items-center gap-1">
                 <span className="tabular-nums text-foreground font-medium">
-                  ₹{fmtAmount(totals.finalAmount)}
+                  ₹{fmtAmount(totals.taxableAmount)}
                 </span>
                 <HugeiconsIcon icon={catExpanded ? ArrowUp01Icon : ArrowDown01Icon} size={10} strokeWidth={2} />
               </div>
@@ -933,7 +988,7 @@ function BillTotals({ items, sessionDisc, menu }) {
           </>
         )}
 
-        {totals.taxAmount > 0 && (
+        {discTotals.taxAmount > 0 && (
           <>
             <button
               type="button"
@@ -946,7 +1001,7 @@ function BillTotals({ items, sessionDisc, menu }) {
               </span>
               <div className="flex items-center gap-1">
                 <span className="tabular-nums text-foreground font-medium">
-                  ₹{fmtAmount(totals.taxAmount)}
+                  ₹{fmtAmount(discTotals.taxAmount)}
                 </span>
                 <HugeiconsIcon
                   icon={taxExpanded ? ArrowUp01Icon : ArrowDown01Icon}
@@ -959,7 +1014,7 @@ function BillTotals({ items, sessionDisc, menu }) {
               <div className="pl-2 space-y-0.5">
                 {taxBreakdown.map((t) => (
                   <div key={t.tax_name} className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>{t.tax_name}</span>
+                    <span>{t.tax_name}{t.tax_percentage > 0 ? ` (${t.tax_percentage}%)` : ""}</span>
                     <span className="tabular-nums">₹{fmtAmount(t.tax_amount)}</span>
                   </div>
                 ))}
@@ -968,8 +1023,8 @@ function BillTotals({ items, sessionDisc, menu }) {
           </>
         )}
 
-        {/* Bill discount breakdown from saved sessionDisc */}
-        {sessionDisc && totalDiscAmt > 0 && (
+        {/* Bill discount breakdown from the live recomputed discount */}
+        {liveDisc && totalDiscAmt > 0 && (
           <>
             <button
               type="button"
@@ -997,40 +1052,40 @@ function BillTotals({ items, sessionDisc, menu }) {
                   </div>
                 ))}
                 {/* Legacy shape fallback */}
-                {!sessionDisc.catDiscAmts && sessionDisc.foodDiscAmt > 0 && (
+                {!liveDisc.catDiscAmts && liveDisc.foodDiscAmt > 0 && (
                   <div className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>Food Disc ({sessionDisc.foodPct}%)</span>
-                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.foodDiscAmt)}</span>
+                    <span>Food Disc ({liveDisc.foodPct}%)</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(liveDisc.foodDiscAmt)}</span>
                   </div>
                 )}
-                {!sessionDisc.catDiscAmts && sessionDisc.liquorDiscAmt > 0 && (
+                {!liveDisc.catDiscAmts && liveDisc.liquorDiscAmt > 0 && (
                   <div className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>Liquor Disc ({sessionDisc.liquorPct}%)</span>
-                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.liquorDiscAmt)}</span>
+                    <span>Liquor Disc ({liveDisc.liquorPct}%)</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(liveDisc.liquorDiscAmt)}</span>
                   </div>
                 )}
-                {sessionDisc.billDiscAmt > 0 && (
+                {liveDisc.billDiscAmt > 0 && (
                   <div className="flex justify-between text-[10px] text-muted-foreground">
-                    <span>Bill Disc{sessionDisc.billDiscPct > 0 ? ` (${sessionDisc.billDiscPct}%)` : ""}</span>
-                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.billDiscAmt)}</span>
+                    <span>Bill Disc{liveDisc.billDiscPct > 0 ? ` (${liveDisc.billDiscPct}%)` : ""}</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(liveDisc.billDiscAmt)}</span>
                   </div>
                 )}
-                {sessionDisc.sCharge > 0 && (
+                {liveDisc.sCharge > 0 && (
                   <div className="flex justify-between text-[10px] text-muted-foreground">
                     <span>Service Charge</span>
-                    <span className="tabular-nums">+₹{fmtAmount(sessionDisc.sCharge)}</span>
+                    <span className="tabular-nums">+₹{fmtAmount(liveDisc.sCharge)}</span>
                   </div>
                 )}
-                {sessionDisc.miscMinus > 0 && (
+                {liveDisc.miscMinus > 0 && (
                   <div className="flex justify-between text-[10px] text-muted-foreground">
                     <span>Misc Deduct</span>
-                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(sessionDisc.miscMinus)}</span>
+                    <span className="tabular-nums text-emerald-600 dark:text-emerald-400">-₹{fmtAmount(liveDisc.miscMinus)}</span>
                   </div>
                 )}
-                {sessionDisc.misc > 0 && (
+                {liveDisc.misc > 0 && (
                   <div className="flex justify-between text-[10px] text-muted-foreground">
                     <span>Misc Add</span>
-                    <span className="tabular-nums">+₹{fmtAmount(sessionDisc.misc)}</span>
+                    <span className="tabular-nums">+₹{fmtAmount(liveDisc.misc)}</span>
                   </div>
                 )}
               </div>

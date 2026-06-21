@@ -44,7 +44,7 @@ import {
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
 import { saveHold, clearHold } from "../utils/hold-storage";
-import { selectItemRate, getReservationPhase, calcBillTotals, buildMenuLookups, buildCategories } from "../utils/billing-calc";
+import { selectItemRate, getReservationPhase, calcBillTotals, calcDiscountedTotals, recalcSessionDisc, buildMenuLookups, buildCategories } from "../utils/billing-calc";
 
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
@@ -55,13 +55,20 @@ import ComplimentaryDialog from "../panels/complimentary-dialog";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-function toUtcDate(since) {
+// Parse the DB timestamp ("YYYY-MM-DD HH:MM:SS", a tz-naive NaiveDateTime that
+// already matches the device's local clock). Parse it as LOCAL time — appending
+// "Z" would force a UTC reading and shift the result by the device's tz offset.
+function toLocalDate(since) {
   if (!since) return null;
-  return new Date(since.replace(" ", "T") + "Z");
+  const [datePart, timePart = "00:00:00"] = since.trim().split(/[ T]/);
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const [h, mi, s = 0] = timePart.split(":").map(Number);
+  if (!y || !mo || !d) return null;
+  return new Date(y, mo - 1, d, h || 0, mi || 0, s || 0);
 }
 
 function calcElapsed(since, now) {
-  const d = toUtcDate(since);
+  const d = toLocalDate(since);
   if (!d) return null;
   const diff = now - d.getTime();
   if (diff < 0) return "0m";
@@ -72,7 +79,7 @@ function calcElapsed(since, now) {
 }
 
 function fmtTime(since) {
-  const d = toUtcDate(since);
+  const d = toLocalDate(since);
   if (!d) return null;
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -446,66 +453,59 @@ export default function OrderEntryView() {
 
   // Net amount calculation (needed by BottomActionBar + passed to right panel)
   // Uses sentItems so pending (un-KOT'd) items don't inflate the bill total.
+  // Discount is applied BEFORE tax (Indian GST law): the bill-level discount
+  // reduces each item's taxable base and tax is recomputed on the net value.
   const totals    = useMemo(() => calcBillTotals(sentItems), [sentItems]);
-  const billDisc  = Math.round((totals.finalAmount * (Number(discountPercent) || 0)) / 100 * 100) / 100;
-  const afterDisc = Math.round((totals.finalAmount - billDisc) * 100) / 100;
-  const roundOff  = Math.round(afterDisc) - afterDisc;
-  // Use the full saved netAmt (incl. misc, service charge, etc.) when available
-  const netAmount = sessionDisc?.netAmt ?? (afterDisc + roundOff);
+  // Recompute the discount live from saved intent so Settle always matches the
+  // right-panel total as items change.
+  const liveDisc  = useMemo(
+    () => recalcSessionDisc(sentItems, sessionDisc, menu) ?? sessionDisc,
+    [sentItems, sessionDisc, menu],
+  );
+  const discTotals = useMemo(
+    () => calcDiscountedTotals(sentItems, liveDisc),
+    [sentItems, liveDisc],
+  );
+  const netAmount = discTotals.netAmount;
 
-  // Auto-apply category auto_discount whenever items or menu change.
-  // Only updates categories that the user hasn't manually touched (their value matches auto_discount).
+  // Keep the saved discount in sync with the current items. Whenever items or
+  // menu change we re-derive the discount AMOUNTS from the saved INTENT
+  // (per-category % / flat values + bill discount), seeding any newly-added
+  // category with its auto_discount. This makes the bill totals update live as
+  // items are added/removed instead of showing a frozen amount.
   useEffect(() => {
-    if (!menu.length || !items.length) return;
+    if (!menu.length || !items.length) {
+      // No items → drop any stale discount so totals don't show a phantom amount.
+      if (sessionDisc && !items.length) saveSessionDisc(null);
+      return;
+    }
     const { menuIdToCatId, catIdToInfo } = buildMenuLookups(menu);
     const cats = buildCategories(items, menuIdToCatId, catIdToInfo);
-    const hasAuto = cats.some(c => c.auto_discount > 0 && c.allow_discount);
-    if (!hasAuto) return;
 
-    const saved = sessionDisc?.catRows ?? {};
-    const catRows = {};
+    // Seed catRows: keep the user's saved value per category; for categories not
+    // yet in the saved intent, default to their auto_discount (only in % mode).
+    const saved    = sessionDisc?.catRows ?? {};
+    const discMode = sessionDisc?.discMode ?? "pct";
+    const catRows  = {};
+    let hasAnyIntent = (Number(sessionDisc?.billDiscPct) || 0) > 0
+                    || (Number(sessionDisc?.billDiscAmt) || 0) > 0;
     for (const cat of cats) {
       const savedVal = saved[cat.id]?.value;
-      // Keep user's manual value if set; otherwise use auto_discount
-      catRows[cat.id] = {
-        value: savedVal !== undefined ? savedVal : String(cat.auto_discount > 0 ? cat.auto_discount : 0),
-      };
+      const seed = savedVal !== undefined
+        ? savedVal
+        : String(discMode === "pct" && cat.auto_discount > 0 ? cat.auto_discount : 0);
+      catRows[cat.id] = { value: seed };
+      if ((parseFloat(seed) || 0) > 0) hasAnyIntent = true;
     }
 
-    // Compute discount amounts and net
-    let totalCatDisc = 0;
-    const catDiscAmts = {};
-    for (const cat of cats) {
-      const val = parseFloat(catRows[cat.id]?.value) || 0;
-      const catMax = cat.max_discount != null ? cat.max_discount : 100;
-      const cap = cat.allow_discount ? catMax : 0;
-      const disc = Math.round((cat.total * Math.min(val, cap)) / 100 * 100) / 100;
-      catDiscAmts[cat.id] = disc;
-      totalCatDisc += disc;
+    // Nothing to apply and nothing saved → leave as-is (no discount).
+    if (!hasAnyIntent && !sessionDisc) return;
+
+    const recalced = recalcSessionDisc(sentItems, { ...(sessionDisc ?? {}), discMode, catRows }, menu);
+    // Only write when something actually changed, to avoid an update loop.
+    if (recalced && JSON.stringify(recalced) !== JSON.stringify(sessionDisc)) {
+      saveSessionDisc(recalced);
     }
-    totalCatDisc = Math.round(totalCatDisc * 100) / 100;
-
-    const misc         = Number(sessionDisc?.misc)         || 0;
-    const miscMinus    = Number(sessionDisc?.miscMinus)    || 0;
-    const sCharge      = Number(sessionDisc?.sCharge)      || 0;
-    const billDiscPct  = Number(sessionDisc?.billDiscPct)  || 0;
-    const afterCatDisc = Math.round((totals.finalAmount - totalCatDisc) * 100) / 100;
-    const billDiscAmt  = Math.round(afterCatDisc * billDiscPct / 100 * 100) / 100;
-    const newNet       = Math.round((afterCatDisc - billDiscAmt + misc - miscMinus + sCharge) * 100) / 100;
-    const discPct      = totals.finalAmount > 0
-      ? Math.round(((totalCatDisc + billDiscAmt) / totals.finalAmount) * 10000) / 100
-      : 0;
-
-    saveSessionDisc({
-      ...(sessionDisc ?? {}),
-      discMode:     sessionDisc?.discMode ?? "pct",
-      catRows,
-      catDiscAmts,
-      totalCatDisc,
-      billDiscAmt,
-      netAmt:       newNet,
-      discPct,
-    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, menu]);
 

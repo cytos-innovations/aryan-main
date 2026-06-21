@@ -129,9 +129,21 @@ const ORDER_TYPE_PILL = {
 
 // ─── Occupancy timer ─────────────────────────────────────────────
 
-function calcElapsed(since, now) {
+// Parse the DB timestamp ("YYYY-MM-DD HH:MM:SS") as LOCAL time — it's a tz-naive
+// value that already matches the device clock, so forcing "Z" (UTC) would shift it.
+function parseLocal(since) {
   if (!since) return null;
-  const diff = now - new Date(since.replace(" ", "T") + "Z").getTime();
+  const [datePart, timePart = "00:00:00"] = since.trim().split(/[ T]/);
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const [h, mi, s = 0] = timePart.split(":").map(Number);
+  if (!y || !mo || !d) return null;
+  return new Date(y, mo - 1, d, h || 0, mi || 0, s || 0);
+}
+
+function calcElapsed(since, now) {
+  const d = parseLocal(since);
+  if (!d) return null;
+  const diff = now - d.getTime();
   if (diff < 0) return "0m";
   const minutes = Math.floor(diff / 60_000);
   if (minutes < 60) return `${minutes}m`;
