@@ -29,9 +29,9 @@ export const BOTTOM_PANEL_MODE = {
 // ─── Shared helpers ───────────────────────────────────────────
 
 function KbdBadge({ children }) {
-  if (!children) return <span className="h-3.5 block" />;
+  if (!children) return null;
   return (
-    <span className="text-[8px] font-mono px-1 py-0.5 rounded leading-none bg-black/10 dark:bg-white/10 opacity-80">
+    <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded leading-none text-blue-600 dark:text-blue-400 bg-blue-500/10 ring-1 ring-blue-500/30 shrink-0">
       {children}
     </span>
   );
@@ -64,11 +64,13 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
       size="sm"
       onClick={onClick}
       disabled={disabled}
-      className={`h-12 py-1 px-1.5 flex-1 flex flex-col items-center justify-center gap-0.5 min-w-0 ${className}`}
+      className={`h-11 py-1 px-1.5 flex-1 flex flex-col items-center justify-center gap-1 min-w-0 bg-transparent hover:bg-muted/40 disabled:opacity-50 ${className}`}
       {...rest}
     >
-      <HugeiconsIcon icon={icon} size={14} strokeWidth={2} />
-      <span className="text-[10px] leading-none font-medium whitespace-nowrap">{label}</span>
+      <span className="flex items-center gap-1.5 min-w-0">
+        <HugeiconsIcon icon={icon} size={14} strokeWidth={2.2} className="shrink-0" />
+        <span className="text-[13px] leading-none font-bold whitespace-nowrap">{label}</span>
+      </span>
       <KbdBadge>{shortcut}</KbdBadge>
     </Button>
   );
@@ -84,6 +86,7 @@ function BillingModePanel({
   pendingKot,
   onKot, onCheckKot, onBill, onSettle, onSwitchMode, onHold, canHold, isRestoredFromHold,
   isClosed,
+  lastBill,
 }) {
   return (
     <div className="flex items-stretch gap-1.5 px-2 py-1.5">
@@ -93,7 +96,7 @@ function BillingModePanel({
         shortcut="+"
         onClick={onKot}
         disabled={!canKot || kotPending}
-        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
+        className="border-2 border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
       />
       <ActionBtn
         icon={PrinterIcon}
@@ -101,19 +104,18 @@ function BillingModePanel({
         shortcut="Home"
         onClick={onCheckKot}
         disabled={!canKot || checkKotPending}
-        variant="default"
-        className="bg-amber-500 hover:bg-amber-600 text-white border-0 disabled:opacity-50"
+        className="border-2 border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
         data-pos-action="kotprint"
         onKeyDown={makePosTabHandler("kotprint")}
       />
-      <div className="relative flex-1">
+      <div className="relative flex-1 flex">
         <ActionBtn
           icon={PrinterIcon}
           label="Bill+Print"
           shortcut="*"
           onClick={onBill}
           disabled={!canBill || billPending}
-          className="w-full"
+          className="w-full border-2 border-emerald-400 dark:border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
           data-pos-action="billprint"
           onKeyDown={makePosTabHandler("billprint")}
         />
@@ -129,6 +131,7 @@ function BillingModePanel({
         shortcut="/"
         onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.DISCOUNT)}
         disabled={isClosed}
+        className="border-2 border-border"
       />
       <ActionBtn
         icon={Hold01Icon}
@@ -136,10 +139,10 @@ function BillingModePanel({
         shortcut="F2"
         onClick={onHold}
         disabled={!canHold}
-        className={isRestoredFromHold ? "text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-700" : ""}
+        className="border-2 border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400 hover:bg-purple-500/10"
       />
 
-      {/* Settle — prominent, carries the running total */}
+      {/* Settle — carries the running total */}
       <Button
         type="button"
         size="sm"
@@ -147,13 +150,38 @@ function BillingModePanel({
         disabled={!canSettle}
         data-pos-action="settle"
         onKeyDown={makePosTabHandler("settle")}
-        className="h-12 py-1 px-3 flex-[1.9] flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white border-0 disabled:opacity-50"
+        className="h-11 py-1 px-3 flex-[1.5] flex flex-col items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-0 disabled:opacity-50"
       >
-        <HugeiconsIcon icon={CashIcon} size={17} strokeWidth={2} />
-        <span className="text-xs font-semibold">Settle</span>
-        <span className="text-base font-bold tabular-nums tracking-tight">₹{fmtAmount(netAmount ?? 0)}</span>
-        <span className="text-[8px] font-mono px-1 py-0.5 rounded leading-none bg-white/20">F11</span>
+        <span className="flex items-center gap-1.5">
+          <HugeiconsIcon icon={CashIcon} size={15} strokeWidth={2} />
+          <span className="text-[13px] font-bold">Settle</span>
+          <span className="text-sm font-bold tabular-nums tracking-tight">₹{fmtAmount(netAmount ?? 0)}</span>
+        </span>
+        <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded leading-none bg-white/20">F11</span>
       </Button>
+
+      {/* Last settled bill recap — sits after Settle */}
+      <LastSettledBillCard bill={lastBill} />
+    </div>
+  );
+}
+
+// ─── Last settled bill recap (compact, sits in the action row) ─
+
+function LastSettledBillCard({ bill }) {
+  return (
+    <div className="flex flex-col justify-center shrink-0 rounded-md border border-blue-500/30 bg-blue-500/5 px-2.5 py-1 text-blue-700 dark:text-blue-300 min-w-150px">
+      <span className="text-[9px] font-semibold uppercase tracking-wider opacity-70 leading-tight">
+        Last Bill{bill?.table_name ? ` · ${bill.table_name}` : ""}
+      </span>
+      {bill ? (
+        <div className="flex items-center justify-between gap-2 leading-tight">
+          <span className="text-[11px] font-bold tabular-nums">#{bill.bill_no ?? "—"}</span>
+          <span className="text-xs font-bold tabular-nums">₹{fmtAmount(bill.net_amount ?? 0)}</span>
+        </div>
+      ) : (
+        <span className="text-[11px] opacity-60 leading-tight">No bills yet</span>
+      )}
     </div>
   );
 }
@@ -625,11 +653,17 @@ export default function BottomActionBar({
   isKotting, isNearReservation,
   netAmount, billId, isSettling,
   onRequestSettle, settleDialogOpen,
-  onKotDraft, onCancel, onHold,
+  onKotDraft, onCancel, onBack, onHold,
   isRestoredFromHold,
   sessionDisc, onDiscountChange,
 }) {
   const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
+  // Recap of the most recently settled bill, shown under the action row.
+  const lastBillQuery = useQuery({
+    queryKey: ["last-settled-bill"],
+    queryFn:  () => invoke("get_last_settled_bill"),
+    staleTime: 0,
+  });
   const generateKot      = useGenerateKot(sessionId);
   const generateCheckKot = useGenerateCheckKot(sessionId);
   const generateBill     = useGenerateBill(sessionId);
@@ -724,7 +758,7 @@ export default function BottomActionBar({
 
   // ── Ref: always holds the LATEST values without stale closure ─
   const live = useRef({});
-  live.current = { canKot, kotPending, checkKotPending, canBill, billPending: generateBill.isPending, canSettle, canHold, onHold, panelMode, settleDialogOpen, handleKot, handleCheckKot, handleBill, handleSettle, switchMode, isClosed };
+  live.current = { canKot, kotPending, checkKotPending, canBill, billPending: generateBill.isPending, canSettle, canHold, onHold, onBack, panelMode, settleDialogOpen, handleKot, handleCheckKot, handleBill, handleSettle, switchMode, isClosed };
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
@@ -756,7 +790,10 @@ export default function BottomActionBar({
           if (cur.canKot && !cur.checkKotPending) cur.handleCheckKot();
           break;
         case "+":
+          // "+" sends KOT when there's something to send; otherwise it falls
+          // back to going back to the Tables screen (same as Escape).
           if (cur.canKot && !cur.kotPending) cur.handleKot();
+          else if (!cur.canKot) cur.onBack?.();
           break;
         case "/":
           if (!cur.isClosed) setPanelMode(BOTTOM_PANEL_MODE.DISCOUNT);
@@ -810,6 +847,7 @@ export default function BottomActionBar({
             canHold={canHold}
             isRestoredFromHold={isRestoredFromHold}
             isClosed={isClosed}
+            lastBill={lastBillQuery.data}
           />
         )}
 

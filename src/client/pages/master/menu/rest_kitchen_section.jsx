@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
@@ -89,9 +90,13 @@ export default function KitchenSection() {
     onError: (e) => toast.error(String(e)),
   });
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "kitchen_section" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   function openEdit(row) {
@@ -300,6 +305,7 @@ export default function KitchenSection() {
                     value={form.name}
                     maxLength={50}
                     onChange={(e) => setF("name", e.target.value)}
+                    onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                     placeholder="e.g. Main Kitchen"
                     autoFocus
                     required

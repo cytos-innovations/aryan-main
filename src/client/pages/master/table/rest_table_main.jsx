@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
@@ -96,15 +96,10 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
 export default function RestaurantTable() {
   const enterNav = useEnterNav();
   const queryClient = useQueryClient();
-  const { state: navState } = useLocation();
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
-
-  useEffect(() => {
-    if (navState?.openAdd) setDialog({ open: true, mode: "create", data: null });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const query = useQuery({
     queryKey: [...QK, qs],
@@ -155,9 +150,13 @@ export default function RestaurantTable() {
     onError: (e) => toast.error(String(e)),
   });
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "restaurant_table" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   function openEdit(row) {
@@ -322,6 +321,7 @@ export default function RestaurantTable() {
                   <FieldLabel>Table Name <span className="text-destructive">*</span></FieldLabel>
                   <Input value={form.table_name} maxLength={50}
                     onChange={(e) => setForm((f) => ({ ...f, table_name: e.target.value }))}
+                    onBlur={(e) => setForm((f) => ({ ...f, table_name: toTitleCase(e.target.value) }))}
                     placeholder="Table name" required />
                 </Field>
                 <Field>

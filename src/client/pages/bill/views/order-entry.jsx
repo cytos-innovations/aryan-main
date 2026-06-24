@@ -714,6 +714,9 @@ export default function OrderEntryView() {
           specialInstruction: item.special_instruction ?? null,
           addons:             item.is_complimentary ? [] : (item.addons ?? []),
           isComplimentary:    !!item.is_complimentary,
+          // Carry over any per-unit rate the cashier set on the draft line
+          // (e.g. "As Per Size") so the session line keeps the same price.
+          unitRate:           item.is_complimentary ? null : (item.rate ?? null),
         }),
       ));
 
@@ -857,6 +860,7 @@ export default function OrderEntryView() {
             settleDialogOpen={settleOpen}
             onKotDraft={handleKotDraft}
             onCancel={() => setCancelOpen(true)}
+            onBack={handleBack}
             onHold={handleHold}
             isRestoredFromHold={isRestoredFromHold}
             discountPercent={discountPercent}

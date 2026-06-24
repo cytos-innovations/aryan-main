@@ -1,7 +1,8 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -19,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Dialog,
   DialogContent,
@@ -45,53 +47,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 const QK = ["tax-masters"];
 const EMPTY_FORM = { code: "", name: "", tallyCode: "", tallyName: "", glCode: "", glName: "", tallyId: null, glId: null };
 const EMPTY_SLAB = { slabFrom: "", slabTo: "", taxPercentage: "" };
-
-// ─────────────────────────────────────────────────────────────
-// Lookup input — enters a numeric code, auto-fetches name
-// ─────────────────────────────────────────────────────────────
-
-function LookupInput({ label, codeValue, nameValue, onCodeChange, onResolved, lookupCmd, placeholder = "Enter code", required = false }) {
-  const timerRef = useRef(null);
-
-  function handleCodeChange(e) {
-    const val = e.target.value;
-    onCodeChange(val);
-    clearTimeout(timerRef.current);
-    if (!val.trim()) { onResolved(null, ""); return; }
-    timerRef.current = setTimeout(async () => {
-      try {
-        const result = await invoke(lookupCmd, { code: Number(val) });
-        if (result) {
-          onResolved(result.id, result.name);
-        } else {
-          onResolved(null, "");
-          toast.error(`${label} code not found`);
-        }
-      } catch { onResolved(null, ""); }
-    }, 500);
-  }
-
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <Field>
-        <FieldLabel>
-          {label} Code {required && <span className="text-destructive">*</span>}
-        </FieldLabel>
-        <Input
-          type="number"
-          value={codeValue}
-          onChange={handleCodeChange}
-          placeholder={placeholder}
-          min={0}
-        />
-      </Field>
-      <Field>
-        <FieldLabel>{label} Name</FieldLabel>
-        <Input value={nameValue} readOnly placeholder="Auto-fetched" className="bg-muted/50 cursor-default" />
-      </Field>
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────
 // Tax Slab local editor (create mode — no DB yet)
@@ -191,8 +146,9 @@ function SlabEditorLocal({ slabs, onChange }) {
               <td className="px-3 py-1.5">{numCell(addForm.slabTo, setAddForm, "slabTo")}</td>
               <td className="px-3 py-1.5">{numCell(addForm.taxPercentage, setAddForm, "taxPercentage")}</td>
               <td className="px-3 py-1.5 text-right">
-                <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-primary" onClick={addSlab}>
-                  <HugeiconsIcon icon={Add01Icon} size={13} strokeWidth={2.5} />
+                <Button type="button" size="sm" className="h-7 px-3 text-xs" onClick={addSlab}>
+                  <HugeiconsIcon icon={Add01Icon} size={13} strokeWidth={2.5} className="mr-1" />
+                  Add
                 </Button>
               </td>
             </tr>
@@ -343,9 +299,10 @@ function SlabTable({ taxMasterId }) {
                 <td className="px-3 py-1.5">{numInput(addForm.slabTo, setAddForm, "slabTo")}</td>
                 <td className="px-3 py-1.5">{numInput(addForm.taxPercentage, setAddForm, "taxPercentage")}</td>
                 <td className="px-3 py-1.5 text-right">
-                  <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-primary"
+                  <Button type="button" size="sm" className="h-7 px-3 text-xs"
                     onClick={addSlab} disabled={saveMut.isPending}>
-                    <HugeiconsIcon icon={Add01Icon} size={13} strokeWidth={2.5} />
+                    <HugeiconsIcon icon={Add01Icon} size={13} strokeWidth={2.5} className="mr-1" />
+                    Add
                   </Button>
                 </td>
               </tr>
@@ -373,6 +330,15 @@ export default function AccTaxMaster() {
   const { data, isLoading } = useQuery({
     queryKey: [...QK, qs],
     queryFn: () => invoke("get_tax_masters", { qs }),
+  });
+
+  const { data: tallyOptions = [] } = useQuery({
+    queryKey: ["tally-ledgers-all"],
+    queryFn: () => invoke("get_all_tally_ledgers"),
+  });
+  const { data: glOptions = [] } = useQuery({
+    queryKey: ["gl-ledgers-all"],
+    queryFn: () => invoke("get_all_gl_ledgers"),
   });
 
   function inv() { qc.invalidateQueries({ queryKey: QK }); }
@@ -436,10 +402,14 @@ export default function AccTaxMaster() {
 
   // ── Dialog helpers ──────────────────────────────────────────
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY_FORM);
     setPendingSlabs([]);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "tax_master" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   function openEdit(row) {
@@ -626,32 +596,37 @@ export default function AccTaxMaster() {
               <Input
                 value={form.name}
                 onChange={(e) => setF("name", e.target.value)}
+                onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                 placeholder="Enter tax name"
                 autoFocus
               />
             </Field>
 
             {/* Tally Ledger */}
-            <LookupInput
-              label="Tally Ledger"
-              codeValue={form.tallyCode}
-              nameValue={form.tallyName}
-              onCodeChange={(v) => setF("tallyCode", v)}
-              onResolved={(id, name) => setForm((f) => ({ ...f, tallyId: id, tallyName: name }))}
-              lookupCmd="lookup_tally_by_code"
-              required
-            />
+            <Field>
+              <FieldLabel>
+                Tally Ledger <span className="text-destructive">*</span>
+              </FieldLabel>
+              <SearchableSelect
+                options={tallyOptions.map((t) => ({ value: String(t.id), label: `${t.name} (${t.code})` }))}
+                value={form.tallyId != null ? String(form.tallyId) : ""}
+                onSelect={(v) => setForm((f) => ({ ...f, tallyId: v ? Number(v) : null }))}
+                placeholder="Type to search tally ledger…"
+              />
+            </Field>
 
             {/* GL Ledger */}
-            <LookupInput
-              label="GL Ledger"
-              codeValue={form.glCode}
-              nameValue={form.glName}
-              onCodeChange={(v) => setF("glCode", v)}
-              onResolved={(id, name) => setForm((f) => ({ ...f, glId: id, glName: name }))}
-              lookupCmd="lookup_gl_by_code"
-              required
-            />
+            <Field>
+              <FieldLabel>
+                GL Ledger <span className="text-destructive">*</span>
+              </FieldLabel>
+              <SearchableSelect
+                options={glOptions.map((g) => ({ value: String(g.id), label: `${g.name} (${g.code})` }))}
+                value={form.glId != null ? String(form.glId) : ""}
+                onSelect={(v) => setForm((f) => ({ ...f, glId: v ? Number(v) : null }))}
+                placeholder="Type to search GL ledger…"
+              />
+            </Field>
 
             {/* Tax Slabs */}
             <div className="border-t pt-2" data-enter-skip>

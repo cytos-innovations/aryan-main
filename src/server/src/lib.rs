@@ -90,6 +90,8 @@ use master::acc_tax_master::{
     get_tax_masters, create_tax_master, update_tax_master,
     toggle_tax_master_active, delete_tax_master,
     lookup_tally_by_code, lookup_gl_by_code,
+    get_all_tally_ledgers, get_all_gl_ledgers,
+    get_next_master_code,
     get_tax_slabs, save_tax_slab, delete_tax_slab,
 };
 use master::party_ledger::acc_creditor::{
@@ -155,6 +157,8 @@ use bill::{
     // Lookup
     get_tables_for_billing,
     get_menu_for_billing,
+    get_last_settled_bill,
+    get_last_kot,
     get_active_sessions,
     get_floor_view,
     get_restaurant_dashboard,
@@ -168,6 +172,7 @@ use bill::{
     get_order_items,
     add_order_item,
     update_order_item_qty,
+    update_order_item_rate,
     cancel_order_item,
     cancel_order_item_with_reason,
     // KOT
@@ -2169,6 +2174,9 @@ pub fn run() {
             delete_tax_master,
             lookup_tally_by_code,
             lookup_gl_by_code,
+            get_all_tally_ledgers,
+            get_all_gl_ledgers,
+            get_next_master_code,
             get_tax_slabs,
             save_tax_slab,
             delete_tax_slab,
@@ -2270,6 +2278,8 @@ pub fn run() {
             // Billing — lookup data
             get_tables_for_billing,
             get_menu_for_billing,
+            get_last_settled_bill,
+            get_last_kot,
             get_active_sessions,
             get_floor_view,
             get_restaurant_dashboard,
@@ -2283,6 +2293,7 @@ pub fn run() {
             get_order_items,
             add_order_item,
             update_order_item_qty,
+            update_order_item_rate,
             cancel_order_item,
             cancel_order_item_with_reason,
             // Billing — KOT

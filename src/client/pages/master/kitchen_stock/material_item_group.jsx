@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon, PlusSignIcon, MinusSignIcon } from "@hugeicons/core-free-icons";
@@ -151,9 +152,19 @@ export default function MaterialItemGroup() {
     try {
       const result = await invoke("lookup_tax_for_item_group", { code: Number(row.taxCodeInput) });
       if (result) {
+        // Prefill Tax % from the tax master's base slab unless the user
+        // has already typed a value in this row (editable either way).
+        const defaultPct = result.tax_percentage != null ? String(result.tax_percentage) : null;
         setTaxRows((rows) => {
           const updated = [...rows];
-          updated[index] = { ...updated[index], taxId: result.id, taxName: result.name };
+          updated[index] = {
+            ...updated[index],
+            taxId: result.id,
+            taxName: result.name,
+            taxPercentage:
+              updated[index].taxPercentage !== "" ? updated[index].taxPercentage
+                : defaultPct ?? "",
+          };
           return updated;
         });
         // Focus the percentage input of the same row
@@ -225,10 +236,14 @@ export default function MaterialItemGroup() {
 
   // ── Dialog helpers ────────────────────────────────────────
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY_FORM);
     setTaxRows([{ ...EMPTY_TAX_ROW }]);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "item_group" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   async function openEdit(row) {
@@ -410,6 +425,7 @@ export default function MaterialItemGroup() {
               <Field>
                 <FieldLabel>Item Group Name <span className="text-destructive">*</span></FieldLabel>
                 <Input value={form.name} onChange={(e) => setF("name", e.target.value)}
+                  onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                   placeholder="e.g. Beverages" />
               </Field>
             </div>

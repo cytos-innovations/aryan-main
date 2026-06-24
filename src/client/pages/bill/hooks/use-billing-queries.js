@@ -44,6 +44,16 @@ export function useFloorView() {
   });
 }
 
+// Most recently generated KOT — shown as a recap on the floor view.
+export function useLastKot() {
+  return useQuery({
+    queryKey:  ["last-kot"],
+    queryFn:   billingService.getLastKot,
+    staleTime: 0,
+    refetchInterval: 30_000,
+  });
+}
+
 export function useMenuForBilling() {
   return useQuery({
     queryKey: BQK.MENU,
@@ -295,6 +305,45 @@ export function useUpdateOrderItemQty(sessionId) {
   });
 }
 
+// Override a pending order item's per-unit rate ("As Per Size" items).
+export function useUpdateOrderItemRate(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, rate }) => billingService.updateOrderItemRate(id, rate),
+
+    onMutate: async ({ id, rate }) => {
+      await qc.cancelQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      const prevItems = qc.getQueryData(BQK.ORDER_ITEMS(sessionId));
+
+      if (Array.isArray(prevItems)) {
+        const idx = prevItems.findIndex((i) => i.id === id);
+        if (idx !== -1) {
+          const item    = prevItems[idx];
+          const effRate = (Number(rate) || 0) + (Number(item.addon_rate) || 0);
+          const amounts = recalcItem(effRate, item.quantity, item.discount_percent, item.tax_percentage);
+          const next    = [...prevItems];
+          next[idx]     = { ...item, rate: Number(rate) || 0, ...amounts };
+          qc.setQueryData(BQK.ORDER_ITEMS(sessionId), next);
+        }
+      }
+
+      return { prevItems };
+    },
+
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prevItems !== undefined) {
+        qc.setQueryData(BQK.ORDER_ITEMS(sessionId), ctx.prevItems);
+      }
+      toast.error(String(_e));
+    },
+
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
+    },
+  });
+}
+
 // All add-on master items, for the billing add-on dialog search.
 export function useBillingAddons() {
   return useQuery({
@@ -460,6 +509,7 @@ export function useGenerateKot(sessionId) {
       qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
+      qc.invalidateQueries({ queryKey: ["last-kot"] });
       toast.success("KOT generated");
     },
     onError: (e) => toast.error(String(e)),
@@ -476,6 +526,7 @@ export function useGenerateCheckKot(sessionId) {
       qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.ACTIVE_SESSIONS });
+      qc.invalidateQueries({ queryKey: ["last-kot"] });
       toast.success("Check KOT generated");
     },
     onError: (e) => toast.error(String(e)),
@@ -565,6 +616,8 @@ export function useSettleBill(sessionId) {
       qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
       // Invalidate all settled-bills queries so Bill Reprint updates immediately
       qc.invalidateQueries({ queryKey: ["billing-settled-bills"] });
+      // Refresh the "last settled bill" recap shown under the action bar
+      qc.invalidateQueries({ queryKey: ["last-settled-bill"] });
       toast.success("Bill settled");
     },
     onError: (e) => toast.error(String(e)),

@@ -109,6 +109,22 @@ pub async fn create_restaurant_table(
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
+    // Reject duplicate table names. The comparison is case-insensitive AND
+    // whitespace-insensitive, so "Bar 2", "Bar2" and "bar  2" all collide:
+    // both sides are lower-cased and have all whitespace stripped.
+    let dup: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM restaurant_table \
+         WHERE regexp_replace(lower(table_name), '\\s+', '', 'g') \
+             = regexp_replace(lower($1), '\\s+', '', 'g')",
+    )
+    .bind(&table_name)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Duplicate check failed: {e}"))?;
+    if dup > 0 {
+        return Err("A table with this name already exists".to_string());
+    }
+
     if let Some(code_val) = code {
         sqlx::query(
             "INSERT INTO restaurant_table \
@@ -165,6 +181,22 @@ pub async fn update_restaurant_table(
     }
 
     let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Reject duplicate table names (case- & whitespace-insensitive), ignoring this row.
+    let dup: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM restaurant_table \
+         WHERE regexp_replace(lower(table_name), '\\s+', '', 'g') \
+             = regexp_replace(lower($1), '\\s+', '', 'g') \
+           AND id <> $2",
+    )
+    .bind(&table_name)
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Duplicate check failed: {e}"))?;
+    if dup > 0 {
+        return Err("A table with this name already exists".to_string());
+    }
 
     sqlx::query(
         "UPDATE restaurant_table SET \

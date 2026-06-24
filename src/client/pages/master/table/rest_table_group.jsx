@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
@@ -174,9 +175,13 @@ export default function TableGroup() {
     onError: (e) => toast.error(String(e)),
   });
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "table_group" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
   function openEdit(row) {
     setForm({
@@ -395,6 +400,7 @@ export default function TableGroup() {
                   <FieldLabel>Group Name <span className="text-destructive">*</span></FieldLabel>
                   <Input value={form.name} maxLength={50} autoFocus
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    onBlur={(e) => setForm((f) => ({ ...f, name: toTitleCase(e.target.value) }))}
                     placeholder="e.g. Rooftop, Lounge" required />
                 </Field>
               </div>

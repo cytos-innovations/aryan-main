@@ -25,6 +25,7 @@ import { useAuth } from "@/lib/auth";
 import { useBillingContext } from "../state/billing-context";
 import {
   useUpdateOrderItemQty,
+  useUpdateOrderItemRate,
   useCancelOrderItem,
   useCancelOrderItemWithReason,
   useUpdateSessionInfo,
@@ -36,6 +37,9 @@ import { calcBillTotals, calcDiscountedTotals, calcTaxBreakdown, recalcSessionDi
 import { FoodTypeDot } from "./menu-center";
 import { CustomerPicker, WaiterPicker } from "./party-pickers";
 import KotMessagePicker from "./kot-message-picker";
+
+// Max quantity per line — capped at 3 digits (999) at every stage.
+const MAX_QTY = 999;
 
 // ─── Void reason dialog ───────────────────────────────────────
 
@@ -249,18 +253,21 @@ function KotDot({ status }) {
 
 // ─── Merged order item row (groups same menu_id across KOTs) ──
 
-function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter, onEditAddons, blockRemove }) {
+function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Active, onF6Close, isActive, onQtyEnter, onEditAddons, blockRemove, asPerSize }) {
   const { auth } = useAuth();
   const updateQty        = useUpdateOrderItemQty(sessionId);
+  const updateRate       = useUpdateOrderItemRate(sessionId);
   const cancelItem       = useCancelOrderItem(sessionId);
   const cancelWithReason = useCancelOrderItemWithReason(sessionId);
   const {
-    updateDraftQty, removeDraftItem,
+    updateDraftQty, updateDraftItemRate, removeDraftItem,
     setDraftItemKotMsg, setPendingItemKotMsg, pendingItemKotMsgs,
   } = useBillingContext();
 
   const [qtyEditing,   setQtyEditing]   = useState(false);
   const [qtyInput,     setQtyInput]     = useState("");
+  const [rateEditing,  setRateEditing]  = useState(false);
+  const [rateInput,    setRateInput]    = useState("");
   const [kotInput,     setKotInput]     = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [activeIdx,    setActiveIdx]    = useState(-1);
@@ -268,6 +275,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   const [voidOpen,     setVoidOpen]     = useState(false);
   const kotInputRef  = useRef(null);
   const qtyInputRef  = useRef(null);
+  const rateInputRef = useRef(null);
   const dropdownRef  = useRef(null);
 
   // Draft uses a single synthetic item; session uses the first item's metadata
@@ -403,6 +411,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
   function handleIncrement() {
     if (!canEdit) return;
+    if (totalQty >= MAX_QTY) return; // cap at 3 digits
     if (isDraft) { updateDraftQty(draftKey, representative.quantity + 1); return; }
     // Increment the last pending item
     const target = pendingItems[pendingItems.length - 1];
@@ -449,8 +458,14 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
     setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 30);
   }
 
-  function commitQtyEdit(returnToSearch = false) {
-    const parsed = parseInt(qtyInput, 10);
+  // Per-unit rate of the editable (pending) line — used as the default value
+  // when the cashier edits the Amt for an "As Per Size" item.
+  const editablePerUnitRate = isDraft
+    ? Number(representative.rate) || 0
+    : (Number(pendingItems[pendingItems.length - 1]?.rate) || 0);
+
+  function commitQtyEdit(advance = false) {
+    const parsed = Math.min(parseInt(qtyInput, 10), MAX_QTY);
     if (!isNaN(parsed) && parsed > 0) {
       if (isDraft) { updateDraftQty(draftKey, parsed); }
       else if (pendingItems.length > 0) {
@@ -459,7 +474,12 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
       }
     }
     setQtyEditing(false);
-    if (returnToSearch) onQtyEnter?.();
+    if (advance) {
+      // For "As Per Size" lines, the flow continues to the editable Amt field;
+      // otherwise it returns straight to the menu search.
+      if (asPerSize && canEdit) startRateEdit();
+      else onQtyEnter?.();
+    }
   }
 
   function handleQtyKeyDown(e) {
@@ -467,10 +487,35 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
     if (e.key === "Escape") { setQtyEditing(false); onQtyEnter?.(); }
   }
 
+  function startRateEdit() {
+    if (!canEdit || isBillPrinted) return;
+    setRateInput(editablePerUnitRate ? String(editablePerUnitRate) : "");
+    setRateEditing(true);
+    setTimeout(() => { rateInputRef.current?.focus(); rateInputRef.current?.select(); }, 30);
+  }
+
+  function commitRateEdit(advance = false) {
+    const parsed = parseFloat(rateInput);
+    if (!isNaN(parsed) && parsed >= 0) {
+      if (isDraft) { updateDraftItemRate(draftKey, parsed); }
+      else if (pendingItems.length > 0) {
+        const target = pendingItems[pendingItems.length - 1];
+        updateRate.mutate({ id: target.id, rate: parsed });
+      }
+    }
+    setRateEditing(false);
+    if (advance) onQtyEnter?.();
+  }
+
+  function handleRateKeyDown(e) {
+    if (e.key === "Enter")  { e.preventDefault(); commitRateEdit(true); }
+    if (e.key === "Escape") { setRateEditing(false); onQtyEnter?.(); }
+  }
+
   const isMutating  = cancelItem.isPending || cancelWithReason.isPending || updateQty.isPending;
   const showTrashLeft = totalQty === 1;
   const decDisabled = !canRemove || (totalQty <= 1 && !hasSentQty) || isMutating;
-  const incDisabled = !canEdit || updateQty.isPending;
+  const incDisabled = !canEdit || updateQty.isPending || totalQty >= MAX_QTY;
   const delDisabled = !canRemove || isMutating;
 
   // KOT batches passed to void dialog — only sent items (pending are cancelled directly)
@@ -536,7 +581,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
               type="text"
               inputMode="numeric"
               value={qtyInput}
-              onChange={(e) => setQtyInput(e.target.value.replace(/[^0-9]/g, ""))}
+              onChange={(e) => setQtyInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
               onBlur={commitQtyEdit}
               onKeyDown={handleQtyKeyDown}
               className="w-8 h-6 text-center text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary px-0.5"
@@ -562,10 +607,33 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
           </button>
         </div>
 
-        {/* Amount */}
-        <span className="text-xs font-semibold tabular-nums shrink-0 w-14 text-right">
-          ₹{fmtAmount(totalAmount)}
-        </span>
+        {/* Amount — editable (per-unit rate) for "As Per Size" items */}
+        {rateEditing ? (
+          <input
+            ref={rateInputRef}
+            type="text"
+            inputMode="decimal"
+            value={rateInput}
+            onChange={(e) => setRateInput(e.target.value.replace(/[^0-9.]/g, "").slice(0, 9))}
+            onBlur={() => commitRateEdit(false)}
+            onKeyDown={handleRateKeyDown}
+            title="Per-unit rate"
+            className="w-16 h-6 text-right text-xs font-mono font-semibold tabular-nums border rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary px-1 shrink-0"
+          />
+        ) : asPerSize && canEdit ? (
+          <button
+            type="button"
+            onClick={startRateEdit}
+            title="Click to edit rate (As Per Size)"
+            className="text-xs font-semibold tabular-nums shrink-0 w-14 text-right rounded hover:bg-muted hover:underline decoration-dotted underline-offset-2 transition-colors"
+          >
+            ₹{fmtAmount(totalAmount)}
+          </button>
+        ) : (
+          <span className="text-xs font-semibold tabular-nums shrink-0 w-14 text-right">
+            ₹{fmtAmount(totalAmount)}
+          </span>
+        )}
 
         {/* KOT message picker */}
         <div className="flex items-center gap-0.5 shrink-0" title="KOT message — press F6">
@@ -705,8 +773,16 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
 // ─── Order items area ─────────────────────────────────────────
 
-function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, lastAddedKey, onQtyEnter, onEditAddons }) {
+function OrderItemsArea({ sessionId, items, menu, isLoading, isDraft, isBillPrinted, lastAddedKey, onQtyEnter, onEditAddons }) {
   const [f6ItemKey, setF6ItemKey] = useState(null);
+
+  // menu_id → menu item, for resolving the "As Per Size" flag of session lines
+  // (draft lines carry as_per_size on the item itself).
+  const menuById = useMemo(() => {
+    const m = new Map();
+    for (const it of menu ?? []) m.set(it.id, it);
+    return m;
+  }, [menu]);
 
   const activeItems = (items ?? []).filter((i) => i.item_status !== "CANCELLED");
 
@@ -733,10 +809,12 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
       return Array.from(map.entries());
     }
 
-    // For real sessions: group by menu_id first, then split pending from sent
+    // For real sessions: group by menu_id first, then split pending from sent.
+    // Complimentary lines key by their own id so a free line never merges
+    // visually with a paid line of the same menu_id (mirrors the draft branch).
     const byMenu = new Map();
     for (const item of activeItems) {
-      const key = item.menu_id ?? item.id;
+      const key = item.is_complimentary ? `comp:${item.id}` : (item.menu_id ?? item.id);
       if (!byMenu.has(key)) byMenu.set(key, []);
       byMenu.get(key).push(item);
     }
@@ -824,6 +902,12 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
         // removing the last remaining paid line.
         const isCompGroup    = groupItems.some((i) => i.is_complimentary);
         const isLastPaidLine = !isCompGroup && hasCompLines && paidLineCount <= 1;
+        // "As Per Size": draft lines carry the flag; session lines resolve it
+        // from the menu master via menu_id.
+        const rep0 = groupItems[0];
+        const asPerSize = isDraft
+          ? !!rep0.as_per_size
+          : !!menuById.get(rep0.menu_id)?.as_per_size;
         return (
           <MergedOrderItemRow
             key={groupKey}
@@ -837,6 +921,7 @@ function OrderItemsArea({ sessionId, items, isLoading, isDraft, isBillPrinted, l
             onQtyEnter={onQtyEnter}
             onEditAddons={onEditAddons}
             blockRemove={isLastPaidLine}
+            asPerSize={asPerSize}
           />
         );
       })}
@@ -1266,6 +1351,7 @@ export default function OrderRightPanel({
         <OrderItemsArea
           sessionId={sessionId}
           items={items}
+          menu={menu}
           isLoading={isLoadingItems}
           isDraft={isDraft}
           isBillPrinted={isBillPrinted}

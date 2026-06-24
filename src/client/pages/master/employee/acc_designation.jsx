@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -104,9 +105,13 @@ export default function AccDesignation() {
 
   // ── Dialog helpers ────────────────────────────────────────
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY_FORM);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "employee_designation" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   function openEdit(row) {
@@ -267,6 +272,7 @@ export default function AccDesignation() {
               <Input
                 value={form.name}
                 onChange={(e) => setF("name", e.target.value)}
+                onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                 placeholder="e.g. Manager, Waiter, Captain"
                 autoFocus
               />

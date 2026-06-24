@@ -50,6 +50,10 @@ pub struct LookupResult {
     pub id: i32,
     pub code: i64,
     pub name: String,
+    // Default tax % (base/lowest slab). `None` when the field is not
+    // applicable (tally lookups, etc.) or the tax has no slabs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tax_percentage: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -218,6 +222,7 @@ pub async fn get_all_tally_for_item(
         id: r.try_get("id").unwrap_or(0),
         code: r.try_get("code").unwrap_or(0),
         name: r.try_get("name").unwrap_or_default(),
+        tax_percentage: None,
     }).collect())
 }
 
@@ -245,8 +250,15 @@ pub async fn get_all_taxes_for_item(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<LookupResult>, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
+    // Pull each active tax along with the percentage of its base slab
+    // (lowest slab_from). This is offered as the default Tax % when the
+    // tax is picked in a tax chart; the user can still override it.
     let rows = sqlx::query(
-        "SELECT id, code, name FROM tax_master WHERE is_active = 1 ORDER BY code",
+        "SELECT tm.id, tm.code, tm.name, \
+                (SELECT CAST(ts.tax_percentage AS FLOAT8) FROM tax_slab ts \
+                 WHERE ts.tax_master_id = tm.id AND ts.is_active = 1 \
+                 ORDER BY ts.slab_from ASC LIMIT 1) AS tax_percentage \
+         FROM tax_master tm WHERE tm.is_active = 1 ORDER BY tm.code",
     )
     .fetch_all(&pool)
     .await
@@ -255,6 +267,7 @@ pub async fn get_all_taxes_for_item(
         id: r.try_get("id").unwrap_or(0),
         code: r.try_get("code").unwrap_or(0),
         name: r.try_get("name").unwrap_or_default(),
+        tax_percentage: r.try_get::<Option<f64>, _>("tax_percentage").unwrap_or(None),
     }).collect())
 }
 
@@ -276,6 +289,7 @@ pub async fn lookup_tally_for_item_group(
         id: r.try_get("id").unwrap_or(0),
         code: r.try_get("code").unwrap_or(0),
         name: r.try_get("name").unwrap_or_default(),
+        tax_percentage: None,
     }))
 }
 
@@ -287,7 +301,11 @@ pub async fn lookup_tax_for_item_group(
 ) -> Result<Option<LookupResult>, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
     let row = sqlx::query(
-        "SELECT id, code, name FROM tax_master WHERE code = $1 AND is_active = 1 LIMIT 1",
+        "SELECT tm.id, tm.code, tm.name, \
+                (SELECT CAST(ts.tax_percentage AS FLOAT8) FROM tax_slab ts \
+                 WHERE ts.tax_master_id = tm.id AND ts.is_active = 1 \
+                 ORDER BY ts.slab_from ASC LIMIT 1) AS tax_percentage \
+         FROM tax_master tm WHERE tm.code = $1 AND tm.is_active = 1 LIMIT 1",
     )
     .bind(code)
     .fetch_optional(&pool)
@@ -297,6 +315,7 @@ pub async fn lookup_tax_for_item_group(
         id: r.try_get("id").unwrap_or(0),
         code: r.try_get("code").unwrap_or(0),
         name: r.try_get("name").unwrap_or_default(),
+        tax_percentage: r.try_get::<Option<f64>, _>("tax_percentage").unwrap_or(None),
     }))
 }
 

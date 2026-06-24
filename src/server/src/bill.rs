@@ -70,6 +70,9 @@ pub struct MenuItemForBilling {
     pub food_type_id:         i32,
     pub kitchen_section_id:   Option<i32>,
     pub is_liquor:            bool,
+    // True when the item's menu group has "As Per Size" enabled — the cashier
+    // may override the per-unit rate while the line is still editable.
+    pub as_per_size:          bool,
     pub rate_1:               f64,
     pub rate_2:               f64,
     pub rate_3:               f64,
@@ -307,6 +310,86 @@ pub async fn get_tables_for_billing(
     }).collect())
 }
 
+// ─── Last settled bill (for the billing footer recap) ─────────
+
+#[derive(Debug, Serialize)]
+pub struct LastSettledBill {
+    pub bill_no:     Option<String>,
+    pub table_name:  Option<String>,
+    pub net_amount:  f64,
+    pub settled_at:  Option<String>,
+}
+
+/// Most recently settled bill, used to show a quick recap under the billing
+/// action bar. Returns None when nothing has been settled yet.
+#[tauri::command]
+pub async fn get_last_settled_bill(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<LastSettledBill>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let row = sqlx::query(
+        "SELECT bm.bill_no, rt.table_name, bm.net_amount::float8 AS net_amount, bm.settled_at
+         FROM   bill_master bm
+         LEFT JOIN restaurant_table rt ON rt.id = bm.table_id
+         WHERE  bm.settled_at IS NOT NULL
+         ORDER  BY bm.settled_at DESC, bm.id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Failed to load last settled bill: {e}"))?;
+
+    Ok(row.map(|r| LastSettledBill {
+        bill_no:    r.try_get("bill_no").ok().flatten(),
+        table_name: r.try_get("table_name").ok().flatten(),
+        net_amount: r.try_get::<f64, _>("net_amount").unwrap_or(0.0),
+        settled_at: r.try_get::<Option<chrono::NaiveDateTime>, _>("settled_at")
+                     .ok().flatten()
+                     .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
+    }))
+}
+
+// ─── Last KOT (for the floor-view recap) ──────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct LastKot {
+    pub kot_no:      Option<String>,
+    pub table_name:  Option<String>,
+    pub order_no:    Option<String>,
+    pub created_at:  Option<String>,
+}
+
+/// Most recently generated KOT, used for a quick recap on the floor view.
+/// Returns None when no KOT has been generated yet.
+#[tauri::command]
+pub async fn get_last_kot(
+    app:   tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<LastKot>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let row = sqlx::query(
+        "SELECT km.kot_no, rt.table_name, os.order_no, km.created_at
+         FROM   kot_master km
+         LEFT JOIN restaurant_table rt ON rt.id = km.table_id
+         LEFT JOIN order_session os    ON os.id = km.order_session_id
+         ORDER  BY km.created_at DESC, km.id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Failed to load last KOT: {e}"))?;
+
+    Ok(row.map(|r| LastKot {
+        kot_no:     r.try_get("kot_no").ok().flatten(),
+        table_name: r.try_get("table_name").ok().flatten(),
+        order_no:   r.try_get("order_no").ok().flatten(),
+        created_at: r.try_get::<Option<chrono::NaiveDateTime>, _>("created_at")
+                     .ok().flatten()
+                     .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()),
+    }))
+}
+
 #[tauri::command]
 pub async fn get_menu_for_billing(
     app:   tauri::AppHandle,
@@ -325,6 +408,7 @@ pub async fn get_menu_for_billing(
                 mc.food_type_id, ft.name AS food_type,
                 mc.kitchen_section_id,
                 (mc.liquor_group_id IS NOT NULL) AS is_liquor,
+                (mg.as_per_size = 'Y') AS as_per_size,
                 mc.is_addon,
                 mc.rate_1::float8, mc.rate_2::float8,
                 mc.rate_3::float8, mc.rate_4::float8, mc.rate_5::float8,
@@ -414,6 +498,7 @@ pub async fn get_menu_for_billing(
             food_type_id:         r.try_get("food_type_id").unwrap_or(0),
             kitchen_section_id:   r.try_get("kitchen_section_id").ok().flatten(),
             is_liquor:            r.try_get("is_liquor").unwrap_or(false),
+            as_per_size:          r.try_get("as_per_size").unwrap_or(false),
             rate_1:               r.try_get::<f64, _>("rate_1").unwrap_or(0.0),
             rate_2:               r.try_get::<f64, _>("rate_2").unwrap_or(0.0),
             rate_3:               r.try_get::<f64, _>("rate_3").unwrap_or(0.0),
@@ -1128,6 +1213,8 @@ pub async fn add_order_item(
     special_instruction: Option<String>,
     addons:              Option<Vec<AddonInput>>,
     is_complimentary:    Option<bool>,
+    // Optional per-unit rate override (e.g. "As Per Size"); None → master rate.
+    unit_rate:           Option<f64>,
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
     let is_comp = is_complimentary.unwrap_or(false);
@@ -1197,7 +1284,15 @@ pub async fn add_order_item(
     // Complimentary lines carry no charge: zero rate, no add-ons, no tax.
     let addon_list = if is_comp { Vec::new() } else { addons.unwrap_or_default() };
     let addon_rate: f64 = round2(addon_list.iter().map(|a| a.rate).sum());
-    let rate           = if is_comp { 0.0 } else { rate };
+    // Honour a per-unit rate override (As Per Size) for paid lines; comp = 0.
+    let rate = if is_comp {
+        0.0
+    } else {
+        match unit_rate {
+            Some(r) if r >= 0.0 => r,
+            _ => rate,
+        }
+    };
     let effective_rate = round2(rate + addon_rate);
 
     // Calculate amounts (base rate + add-on rate, per unit). Complimentary → all zero.
@@ -1215,7 +1310,7 @@ pub async fn add_order_item(
     // a paid line. Only merge plain (no add-on, non-comp) pending lines.
     let existing = if addon_list.is_empty() && !is_comp {
         sqlx::query(
-            "SELECT id, quantity::float8 AS quantity
+            "SELECT id, quantity::float8 AS quantity, rate::float8 AS rate
              FROM   order_item
              WHERE  order_session_id = $1
                AND  menu_id          = $2
@@ -1241,8 +1336,13 @@ pub async fn add_order_item(
     if let Some(row) = existing {
         let existing_id:  i32 = row.try_get("id").unwrap_or(0);
         let existing_qty: f64 = row.try_get::<f64, _>("quantity").unwrap_or(0.0);
+        // Preserve any per-unit rate the cashier already set on this line
+        // (e.g. an "As Per Size" override) instead of resetting to the master
+        // rate. The merged line is just the same item with a higher qty.
+        let existing_rate: f64 = row.try_get::<f64, _>("rate").unwrap_or(rate);
+        let merge_rate     = round2(existing_rate + addon_rate);
         let new_qty       = existing_qty + quantity;
-        let g             = round2(effective_rate * new_qty);
+        let g             = round2(merge_rate * new_qty);
         let t             = round2(g * tax_pct / 100.0);
         let f             = round2(g + t);
 
@@ -1566,6 +1666,69 @@ pub async fn update_order_item_qty(
     .execute(&pool)
     .await
     .map_err(|e| format!("Failed to update quantity: {e}"))?;
+
+    Ok(())
+}
+
+/// Override the per-unit rate of an order item (used for "As Per Size" groups,
+/// where the cashier sets the price at billing time). Recomputes the line's
+/// amounts from the new rate; only allowed on pending (not yet KOT-sent) lines.
+#[tauri::command]
+pub async fn update_order_item_rate(
+    app:           tauri::AppHandle,
+    state:         tauri::State<'_, AppState>,
+    order_item_id: i32,
+    unit_rate:     f64,
+) -> Result<(), String> {
+    if unit_rate < 0.0 {
+        return Err("Rate cannot be negative".to_string());
+    }
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let row = sqlx::query(
+        "SELECT quantity::float8, COALESCE(addon_rate, 0)::float8 AS addon_rate,
+                discount_percent::float8, tax_percentage::float8, kot_status
+         FROM   order_item WHERE id = $1",
+    )
+    .bind(order_item_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Order item not found: {e}"))?;
+
+    let kot_status: String = row.try_get("kot_status").unwrap_or_default();
+    if kot_status != "PENDING" {
+        return Err("Rate can only be changed before the item is sent to the kitchen".to_string());
+    }
+
+    let quantity:   f64 = row.try_get::<f64, _>("quantity").unwrap_or(0.0);
+    let addon_rate: f64 = row.try_get::<f64, _>("addon_rate").unwrap_or(0.0);
+    let disc_pct:   f64 = row.try_get::<f64, _>("discount_percent").unwrap_or(0.0);
+    let tax_pct:    f64 = row.try_get::<f64, _>("tax_percentage").unwrap_or(0.0);
+
+    let gross_amount   = round2((unit_rate + addon_rate) * quantity);
+    let discount_amt   = round2(gross_amount * disc_pct / 100.0);
+    let taxable_amount = round2(gross_amount - discount_amt);
+    let tax_amount     = round2(taxable_amount * tax_pct / 100.0);
+    let final_amount   = round2(taxable_amount + tax_amount);
+
+    sqlx::query(
+        "UPDATE order_item
+         SET    rate = $1, gross_amount = $2, discount_amount = $3,
+                taxable_amount = $4, tax_amount = $5, final_amount = $6,
+                updated_at = NOW()
+         WHERE  id = $7 AND item_status = 'ACTIVE' AND kot_status = 'PENDING'",
+    )
+    .bind(unit_rate)
+    .bind(gross_amount)
+    .bind(discount_amt)
+    .bind(taxable_amount)
+    .bind(tax_amount)
+    .bind(final_amount)
+    .bind(order_item_id)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to update rate: {e}"))?;
 
     Ok(())
 }

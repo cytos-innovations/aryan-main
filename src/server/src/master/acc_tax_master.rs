@@ -303,6 +303,112 @@ pub async fn lookup_gl_by_code(
 }
 
 // ─────────────────────────────────────────────────────────────
+// Dropdown lists — all active Tally & GL ledgers (id, code, name)
+// ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_all_tally_ledgers(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<TallyLookup>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let rows = sqlx::query(
+        "SELECT id, code, name FROM tally_master WHERE is_active = 1 ORDER BY name ASC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Tally list failed: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .map(|r| TallyLookup {
+            id: r.try_get("id").unwrap_or(0),
+            code: r.try_get("code").unwrap_or(0),
+            name: r.try_get("name").unwrap_or_default(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_all_gl_ledgers(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<GlLookup>, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+    let rows = sqlx::query(
+        "SELECT id, code, name FROM general_ledger WHERE is_active = 1 ORDER BY name ASC",
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("GL list failed: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .map(|r| GlLookup {
+            id: r.try_get("id").unwrap_or(0),
+            code: r.try_get("code").unwrap_or(0),
+            name: r.try_get("name").unwrap_or_default(),
+        })
+        .collect())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Generic next-code preview — MAX(code) + 1 for create dialogs.
+//
+// The returned value is a *suggestion* only; the user may override it,
+// and the backend still auto-assigns via BIGSERIAL if no code is sent.
+//
+// `table` comes from the frontend, so it is validated against a fixed
+// allow-list to prevent SQL injection — never interpolate it otherwise.
+// ─────────────────────────────────────────────────────────────
+
+const NEXT_CODE_TABLES: &[&str] = &[
+    "tax_master",
+    "tally_master",
+    "general_ledger",
+    "supplier_master",     // creditor + debtor (shared)
+    "party_bank",
+    "day_book",
+    "account_groups",
+    "account_categories",
+    "identity_type",
+    "discount_detail",
+    "customer_information",
+    "food_type",
+    "menu_category",
+    "menu_group",
+    "menu_card",
+    "item_group",
+    "item_name",
+    "plan_master",
+    "employee_information",
+    "employee_designation",
+    "kitchen_section",
+    "market_segment",
+    "restaurant_table",
+    "table_group",
+];
+
+#[tauri::command]
+pub async fn get_next_master_code(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    table: String,
+) -> Result<i64, String> {
+    if !NEXT_CODE_TABLES.contains(&table.as_str()) {
+        return Err(format!("Unknown table for code preview: {table}"));
+    }
+    let pool = acquire_pool(&state.pool, &app).await?;
+    // `table` is allow-listed above, so this interpolation is safe.
+    let sql = format!("SELECT COALESCE(MAX(code), 0) + 1 AS next FROM {table}");
+    let next: i64 = sqlx::query_scalar(&sql)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| format!("Next code lookup failed: {e}"))?;
+    Ok(next)
+}
+
+// ─────────────────────────────────────────────────────────────
 // Tax Slabs
 // ─────────────────────────────────────────────────────────────
 

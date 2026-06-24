@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/select";
 
 import { useBillingContext } from "../state/billing-context";
-import { useFloorView } from "../hooks/use-billing-queries";
+import { useFloorView, useLastKot } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
 import { loadHold, clearHold, saveHold, getHeldTableIds } from "../utils/hold-storage";
 import { minsUntilReservation, getReservationPhase } from "../utils/billing-calc";
@@ -513,6 +513,7 @@ export default function TableSelectView({ onOpenReprint }) {
   }, [handleTableShift, handlePrintTable]);
 
   const floorQuery = useFloorView();
+  const lastKotQuery = useLastKot();
   const tables = floorQuery.data ?? [];
 
   // Use a shorter tick interval when any table has an active reservation today
@@ -684,10 +685,6 @@ export default function TableSelectView({ onOpenReprint }) {
           Print Table
           <span className="text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">F9</span>
         </Button>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={() => navigate("/master/table/tables", { state: { openAdd: true } })}>
-          <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
-          Add Table
-        </Button>
         <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setReminderOpen(true)} title="Reservation reminder settings">
           <HugeiconsIcon icon={HotelBellIcon} size={15} strokeWidth={2} />
         </Button>
@@ -724,6 +721,26 @@ export default function TableSelectView({ onOpenReprint }) {
             )}
           </div>
         ))}
+
+        {/* Last KOT recap — pinned to the right edge of the legend row */}
+        {lastKotQuery.data && (
+          <div className="ml-auto flex items-center gap-3 shrink-0 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-0.5 text-amber-700 dark:text-amber-400">
+            <span className="text-[9px] font-semibold uppercase tracking-wider opacity-70">Last KOT</span>
+            <span className="text-[10px] font-bold tabular-nums">{lastKotQuery.data.kot_no ?? "—"}</span>
+            {lastKotQuery.data.table_name && (
+              <span className="flex items-center gap-1 text-[10px]">
+                <span className="opacity-70">Table</span>
+                <span className="font-bold">{lastKotQuery.data.table_name}</span>
+              </span>
+            )}
+            {lastKotQuery.data.order_no && (
+              <span className="flex items-center gap-1 text-[10px]">
+                <span className="opacity-70">Order</span>
+                <span className="font-bold tabular-nums">{lastKotQuery.data.order_no}</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Content ── */}

@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon, FilterHorizontalIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
@@ -32,13 +33,13 @@ const EMPTY = {
   item_barcode: "",
   menu_alias: "",
   kitchen_section_id: "__none__",
-  rate_1: "0",
-  rate_2: "0",
-  rate_3: "0",
-  rate_4: "0",
-  rate_5: "0",
-  consume_quantity: "0",
-  excise_rate: "0",
+  rate_1: "",
+  rate_2: "",
+  rate_3: "",
+  rate_4: "",
+  rate_5: "",
+  consume_quantity: "",
+  excise_rate: "",
   comments: "",
   is_addon: false,
   addon_ids: [],
@@ -333,6 +334,208 @@ function AddonPicker({ options, selectedIds, onChange }) {
   );
 }
 
+// Menu-group Yes/No options (mirrors the Menu Group master form).
+const QA_YN_OPTIONS = [
+  { value: "__none__", label: "— Not Set —" },
+  { value: "Y", label: "Yes" },
+  { value: "N", label: "No" },
+];
+
+const QA_GROUP_EMPTY = {
+  name: "",
+  category_id: "",
+  multiple_recipe: "__none__",
+  as_per_size: "__none__",
+  menu_grp_image: "",
+};
+
+// Quick-add dialog: create a Food Type or a full Menu Group inline without
+// leaving the Menu Card form. The Menu Group variant exposes the same fields
+// as the Menu Group master (category, multiple recipe, as-per-size, image).
+// On success it refreshes the relevant dropdown and hands the newly created
+// record back so it can be auto-selected.
+function QuickAddDialog({ kind, open, onOpenChange, categories, onCreated }) {
+  const enterNav = useEnterNav();
+  const queryClient = useQueryClient();
+  const isGroup = kind === "group";
+
+  const [typeName, setTypeName] = useState("");
+  const [group, setGroup] = useState(QA_GROUP_EMPTY);
+  const imageInputRef = useRef(null);
+
+  const setG = (k, v) => setGroup((g) => ({ ...g, [k]: v }));
+
+  // Reset fields whenever the dialog opens.
+  useEffect(() => {
+    if (open) { setTypeName(""); setGroup(QA_GROUP_EMPTY); }
+  }, [open]);
+
+  const title = isGroup ? "New Menu Group" : "New Food Type";
+  const listKey = isGroup ? "all-menu-groups" : "all-food-types";
+
+  function handleImageChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast.error("Please select an image file"); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => setG("menu_grp_image", ev.target.result);
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  const createMut = useMutation({
+    mutationFn: async () => {
+      const trimmed = (isGroup ? group.name : typeName).trim();
+      if (isGroup) {
+        await invoke("create_menu_group", {
+          name: trimmed,
+          code: null,
+          categoryId: group.category_id ? Number(group.category_id) : null,
+          multipleRecipe: group.multiple_recipe !== "__none__" ? group.multiple_recipe : null,
+          asPerSize: group.as_per_size !== "__none__" ? group.as_per_size : null,
+          menuGrpImage: group.menu_grp_image.trim() || null,
+        });
+      } else {
+        await invoke("create_food_type", { name: trimmed, code: null });
+      }
+      // Refetch the dropdown source and locate the new record by name so the
+      // caller can auto-select it. Returns the freshly created option (or null).
+      const cmd = isGroup ? "get_all_menu_groups" : "get_all_food_types";
+      const list = await queryClient.fetchQuery({ queryKey: [listKey], queryFn: () => invoke(cmd) });
+      return (list ?? []).find((r) => r.name?.toLowerCase() === trimmed.toLowerCase()) ?? null;
+    },
+    onSuccess: (created) => {
+      toast.success(isGroup ? "Menu group created" : "Food type created");
+      // Refresh anywhere these lists are consumed.
+      queryClient.invalidateQueries({ queryKey: [listKey] });
+      onCreated?.(created);
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  function submit(e) {
+    e.preventDefault();
+    const trimmed = (isGroup ? group.name : typeName).trim();
+    if (!trimmed) { toast.error(isGroup ? "Group Name is required" : "Food Type is required"); return; }
+    createMut.mutate();
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {isGroup
+              ? "Add a new menu group. It will be available immediately."
+              : "Add a new food type. It will be available immediately."}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} onKeyDown={enterNav} className="space-y-4">
+          {!isGroup ? (
+            <Field>
+              <FieldLabel>
+                Food Type <span className="text-destructive">*</span>
+              </FieldLabel>
+              <Input
+                value={typeName}
+                onChange={(e) => setTypeName(e.target.value)}
+                onBlur={(e) => setTypeName(toTitleCase(e.target.value))}
+                placeholder="e.g. Vegetarian"
+                autoFocus
+              />
+            </Field>
+          ) : (
+            <>
+              <Field>
+                <FieldLabel>
+                  Group Name <span className="text-destructive">*</span>
+                </FieldLabel>
+                <Input
+                  value={group.name}
+                  onChange={(e) => setG("name", e.target.value)}
+                  onBlur={(e) => setG("name", toTitleCase(e.target.value))}
+                  placeholder="e.g. Beverages"
+                  autoFocus
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel>Category</FieldLabel>
+                <SearchableSelect
+                  options={categories.map((c) => ({ value: String(c.id), label: c.name }))}
+                  value={group.category_id}
+                  onSelect={(v) => setG("category_id", v)}
+                  placeholder="Type to search category…"
+                />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <FieldLabel>Multiple Recipe</FieldLabel>
+                  <Select value={group.multiple_recipe} onValueChange={(v) => setG("multiple_recipe", v)}>
+                    <SelectTrigger onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {QA_YN_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel>As Per Size</FieldLabel>
+                  <Select value={group.as_per_size} onValueChange={(v) => setG("as_per_size", v)}>
+                    <SelectTrigger onKeyDown={enterNav.select}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {QA_YN_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+
+              <Field>
+                <FieldLabel>
+                  Menu Group Image{" "}
+                  <span className="text-muted-foreground font-normal">(optional)</span>
+                </FieldLabel>
+                <div className="flex items-center gap-3">
+                  {group.menu_grp_image ? (
+                    <img src={group.menu_grp_image} alt="Group" className="h-16 w-16 rounded border object-cover shrink-0" />
+                  ) : (
+                    <div className="h-16 w-16 rounded border border-dashed flex items-center justify-center bg-muted shrink-0">
+                      <span className="text-muted-foreground text-[10px]">No image</span>
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-1.5">
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs"
+                      onClick={() => imageInputRef.current?.click()}>
+                      {group.menu_grp_image ? "Change Image" : "Upload Image"}
+                    </Button>
+                    {group.menu_grp_image && (
+                      <Button type="button" variant="ghost" size="sm"
+                        className="text-destructive hover:text-destructive h-7 text-xs"
+                        onClick={() => setG("menu_grp_image", "")}>
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
+                </div>
+              </Field>
+            </>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={createMut.isPending}>
+              {createMut.isPending ? "Saving…" : "Create"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function MenuCardPage() {
   const enterNav = useEnterNav();
   const queryClient = useQueryClient();
@@ -343,6 +546,8 @@ export default function MenuCardPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [recipeRows, setRecipeRows] = useState([]);
+  const [quickAdd, setQuickAdd] = useState({ open: false, kind: null });
+  const consumeRef = useRef(null); // Rate 1 jumps straight here on Enter.
 
   const query = useQuery({
     queryKey: [...QK, qs, groupFilter, typeFilter],
@@ -363,6 +568,12 @@ export default function MenuCardPage() {
   const foodTypesQuery = useQuery({
     queryKey: ["all-food-types"],
     queryFn: () => invoke("get_all_food_types"),
+  });
+
+  // Categories — used by the inline "add menu group" quick-add dialog.
+  const categoriesQuery = useQuery({
+    queryKey: ["all-menu-categories"],
+    queryFn: () => invoke("get_all_menu_categories"),
   });
 
   const kitchenSectionsQuery = useQuery({
@@ -464,10 +675,14 @@ export default function MenuCardPage() {
     onError: (e) => toast.error(String(e)),
   });
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY);
     setRecipeRows([]);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "menu_card" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
   async function openEdit(row) {
     setForm({
@@ -865,6 +1080,7 @@ export default function MenuCardPage() {
                     value={form.name}
                     maxLength={250}
                     onChange={(e) => setF("name", e.target.value)}
+                    onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                     placeholder="Item name"
                     required
                   />
@@ -877,12 +1093,25 @@ export default function MenuCardPage() {
                   <FieldLabel>
                     Menu Group <span className="text-destructive">*</span>
                   </FieldLabel>
-                  <SearchableSelect
-                    options={allGroups.map((g) => ({ value: String(g.id), label: g.name }))}
-                    value={form.menu_group_id}
-                    onSelect={(v) => { setF("menu_group_id", v); setRecipeRows([]); }}
-                    placeholder="Type to search group…"
-                  />
+                  <div className="flex gap-2">
+                    <SearchableSelect
+                      className="flex-1"
+                      options={allGroups.map((g) => ({ value: String(g.id), label: g.name }))}
+                      value={form.menu_group_id}
+                      onSelect={(v) => { setF("menu_group_id", v); setRecipeRows([]); }}
+                      placeholder="Type to search group…"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0"
+                      title="Add new menu group"
+                      onClick={() => setQuickAdd({ open: true, kind: "group" })}
+                    >
+                      <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="mr-1 size-4" />
+                      Add
+                    </Button>
+                  </div>
                 </Field>
                 <Field>
                   <FieldLabel>Category</FieldLabel>
@@ -901,12 +1130,25 @@ export default function MenuCardPage() {
                   <FieldLabel>
                     Food Type <span className="text-destructive">*</span>
                   </FieldLabel>
-                  <SearchableSelect
-                    options={allFoodTypes.map((t) => ({ value: String(t.id), label: t.name }))}
-                    value={form.food_type_id}
-                    onSelect={(v) => setF("food_type_id", v)}
-                    placeholder="Type to search type…"
-                  />
+                  <div className="flex gap-2">
+                    <SearchableSelect
+                      className="flex-1"
+                      options={allFoodTypes.map((t) => ({ value: String(t.id), label: t.name }))}
+                      value={form.food_type_id}
+                      onSelect={(v) => setF("food_type_id", v)}
+                      placeholder="Type to search type…"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0"
+                      title="Add new food type"
+                      onClick={() => setQuickAdd({ open: true, kind: "type" })}
+                    >
+                      <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="mr-1 size-4" />
+                      Add
+                    </Button>
+                  </div>
                 </Field>
                 <Field>
                   <FieldLabel>
@@ -972,8 +1214,32 @@ export default function MenuCardPage() {
                       type="number"
                       min="0"
                       step="0.01"
+                      placeholder="0.00"
                       value={form[key]}
-                      onChange={(e) => setF(key, e.target.value)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        // Typing Rate 1 mirrors the value into Rate 2–5 so all
+                        // rates default to the same price (each still editable).
+                        if (key === "rate_1") {
+                          setForm((f) => ({ ...f, rate_1: v, rate_2: v, rate_3: v, rate_4: v, rate_5: v }));
+                        } else {
+                          setF(key, v);
+                        }
+                      }}
+                      onKeyDown={
+                        key === "rate_1"
+                          ? (e) => {
+                              // Enter on Rate 1 skips Rate 2–5 → straight to Consume.
+                              // stopPropagation prevents the form's enterNav from
+                              // also advancing focus (which would land on Rate 2).
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                consumeRef.current?.focus();
+                              }
+                            }
+                          : undefined
+                      }
                     />
                   </Field>
                 ))}
@@ -984,9 +1250,11 @@ export default function MenuCardPage() {
                 <Field>
                   <FieldLabel>Consume (Cost Rate)</FieldLabel>
                   <Input
+                    ref={consumeRef}
                     type="number"
                     min="0"
                     step="0.01"
+                    placeholder="0.00"
                     value={form.consume_quantity}
                     onChange={(e) => setF("consume_quantity", e.target.value)}
                   />
@@ -997,6 +1265,7 @@ export default function MenuCardPage() {
                     type="number"
                     min="0"
                     step="0.01"
+                    placeholder="0.00"
                     value={form.excise_rate}
                     onChange={(e) => setF("excise_rate", e.target.value)}
                   />
@@ -1101,6 +1370,18 @@ export default function MenuCardPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <QuickAddDialog
+        kind={quickAdd.kind}
+        open={quickAdd.open}
+        onOpenChange={(o) => setQuickAdd((q) => ({ ...q, open: o }))}
+        categories={categoriesQuery.data ?? []}
+        onCreated={(rec) => {
+          if (!rec) return;
+          if (quickAdd.kind === "group") { setF("menu_group_id", String(rec.id)); setRecipeRows([]); }
+          else { setF("food_type_id", String(rec.id)); }
+        }}
+      />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent>

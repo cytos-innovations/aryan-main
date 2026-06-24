@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -218,7 +219,9 @@ export default function MenuCategory() {
       toast.error(`"${tax.name}" is already added`);
       return;
     }
-    const newRow = { taxCodeInput: String(tax.code), taxId: tax.id, taxName: tax.name, taxPercentage: "" };
+    // Prefill the Tax % from the tax master's base slab (editable here).
+    const defaultPct = tax.tax_percentage != null ? String(tax.tax_percentage) : "";
+    const newRow = { taxCodeInput: String(tax.code), taxId: tax.id, taxName: tax.name, taxPercentage: defaultPct };
     setTaxRows((rows) => {
       const hasOnlyEmptyRow = rows.length === 1 && !rows[0].taxId;
       return hasOnlyEmptyRow ? [newRow] : [...rows, newRow];
@@ -307,10 +310,14 @@ export default function MenuCategory() {
 
   // ── Dialog helpers ────────────────────────────────────────
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY_FORM);
     setTaxRows([{ ...EMPTY_TAX_ROW }]);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "menu_category" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   async function openEdit(row) {
@@ -637,6 +644,7 @@ export default function MenuCategory() {
                 <Input
                   value={form.name}
                   onChange={(e) => setF("name", e.target.value)}
+                  onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                   placeholder="e.g. Food"
                   maxLength={30}
                 />

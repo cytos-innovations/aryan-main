@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -17,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Dialog,
   DialogContent,
@@ -61,102 +63,8 @@ const EMPTY_FORM = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Tally lookup input
-// ─────────────────────────────────────────────────────────────
-
-function TallyLookupInput({ codeValue, nameValue, onCodeChange, onResolved }) {
-  const timerRef = useRef(null);
-
-  function handleChange(e) {
-    const val = e.target.value;
-    onCodeChange(val);
-    clearTimeout(timerRef.current);
-    if (!val.trim()) { onResolved(null, ""); return; }
-    timerRef.current = setTimeout(async () => {
-      try {
-        const result = await invoke("lookup_tally_by_code", { code: Number(val) });
-        if (result) {
-          onResolved(result.id, result.name);
-        } else {
-          onResolved(null, "");
-          toast.error("Tally Ledger code not found");
-        }
-      } catch { onResolved(null, ""); }
-    }, 500);
-  }
-
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <Field>
-        <FieldLabel>
-          Tally Ledger Code <span className="text-destructive">*</span>
-        </FieldLabel>
-        <Input type="number" value={codeValue} onChange={handleChange} placeholder="Enter code" min={0} />
-      </Field>
-      <Field>
-        <FieldLabel>Tally Ledger Name</FieldLabel>
-        <Input value={nameValue} readOnly placeholder="Auto-fetched" className="bg-muted/50 cursor-default" />
-      </Field>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────
-
-function SearchableSelect({ options, value, onSelect, placeholder = "Select…", className = "" }) {
-  const [query, setQuery]   = useState("");
-  const [open, setOpen]     = useState(false);
-  const [active, setActive] = useState(0);
-  const containerRef        = useRef(null);
-  const listRef             = useRef(null);
-  const inputRef            = useRef(null);
-  const selected = options.find((o) => o.value === value) ?? null;
-  const displayText = open ? query : (selected?.label ?? "");
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q));
-  }, [query, options]);
-  useEffect(() => { setActive(0); }, [filtered.length]);
-  useEffect(() => {
-    if (!open || !listRef.current) return;
-    listRef.current.children[active]?.scrollIntoView({ block: "nearest" });
-  }, [active, open]);
-  useEffect(() => {
-    function onDown(e) { if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false); }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, []);
-  function focusNext() {
-    const input = inputRef.current; if (!input) return;
-    const all = Array.from(document.querySelectorAll('input:not([disabled]):not([readonly]),textarea:not([disabled]):not([readonly]),button:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter((el) => !el.closest("[data-radix-popper-content-wrapper]"));
-    const idx = all.indexOf(input); if (idx !== -1 && all[idx + 1]) all[idx + 1].focus();
-  }
-  function pick(opt) { onSelect(opt.value); setOpen(false); setQuery(""); setTimeout(focusNext, 0); }
-  function onKeyDown(e) {
-    if (!open) { if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); setQuery(""); setOpen(true); setActive(0); } return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); if (filtered[active]) pick(filtered[active]); }
-    else if (e.key === "Escape") { setOpen(false); setQuery(""); }
-  }
-  return (
-    <div ref={containerRef} className={`relative ${className}`}>
-      <input ref={inputRef} type="text" value={displayText} onChange={(e) => { setQuery(e.target.value); setOpen(true); }} onFocus={() => { setQuery(""); setOpen(true); setActive(0); }} onKeyDown={onKeyDown} placeholder={placeholder} autoComplete="off" className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-muted-foreground" />
-      {open && filtered.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
-          <div ref={listRef} className="max-h-52 overflow-y-auto">
-            {filtered.map((opt, i) => (
-              <div key={opt.value} onMouseDown={(e) => { e.preventDefault(); pick(opt); }} onMouseEnter={() => setActive(i)} className={["cursor-pointer px-3 py-2 text-sm", i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent"].join(" ")}>{opt.label}</div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function AccDebtor() {
   const enterNav = useEnterNav();
@@ -174,6 +82,11 @@ export default function AccDebtor() {
   const { data: segments = [] } = useQuery({
     queryKey: ["market-segments-all"],
     queryFn: () => invoke("get_all_market_segments"),
+  });
+
+  const { data: tallyOptions = [] } = useQuery({
+    queryKey: ["tally-ledgers-all"],
+    queryFn: () => invoke("get_all_tally_ledgers"),
   });
 
   function inv() { qc.invalidateQueries({ queryKey: QK }); }
@@ -241,9 +154,13 @@ export default function AccDebtor() {
 
   // ── Dialog helpers ──────────────────────────────────────────
 
-  function openCreate() {
+  async function openCreate() {
     setForm(EMPTY_FORM);
     setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "supplier_master" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
   }
 
   function openEdit(row) {
@@ -450,7 +367,7 @@ export default function AccDebtor() {
               <FieldLabel>
                 Party Name <span className="text-destructive">*</span>
               </FieldLabel>
-              <Input value={form.name} onChange={(e) => setF("name", e.target.value)} placeholder="Enter party name" autoFocus />
+              <Input value={form.name} onChange={(e) => setF("name", e.target.value)} onBlur={(e) => setF("name", toTitleCase(e.target.value))} placeholder="Enter party name" autoFocus />
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
@@ -482,12 +399,17 @@ export default function AccDebtor() {
               <Input type="email" value={form.emailId} onChange={(e) => setF("emailId", e.target.value)} placeholder="email@example.com" />
             </Field>
 
-            <TallyLookupInput
-              codeValue={form.tallyCode}
-              nameValue={form.tallyName}
-              onCodeChange={(v) => setF("tallyCode", v)}
-              onResolved={(id, name) => setForm((f) => ({ ...f, tallyId: id, tallyName: name }))}
-            />
+            <Field>
+              <FieldLabel>
+                Tally Ledger <span className="text-destructive">*</span>
+              </FieldLabel>
+              <SearchableSelect
+                options={tallyOptions.map((t) => ({ value: String(t.id), label: `${t.name} (${t.code})` }))}
+                value={form.tallyId != null ? String(form.tallyId) : ""}
+                onSelect={(v) => setForm((f) => ({ ...f, tallyId: v ? Number(v) : null }))}
+                placeholder="Type to search tally ledger…"
+              />
+            </Field>
 
             <div className="grid grid-cols-2 gap-3">
               <Field>

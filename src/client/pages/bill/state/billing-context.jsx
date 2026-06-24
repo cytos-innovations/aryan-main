@@ -144,6 +144,7 @@ function billingReducer(state, action) {
           food_type:           menuItem.food_type ?? null,
           food_type_id:        menuItem.food_type_id ?? null,
           is_liquor:           menuItem.is_liquor ?? false,
+          as_per_size:         menuItem.as_per_size ?? false,
           is_complimentary:    isComp,
           special_instruction: null,
           kot_message:         null,  // selected KOT message (persisted to order_item_modifier on KOT)
@@ -188,6 +189,21 @@ function billingReducer(state, action) {
           if (!matchesDraftKey(i, menuId)) return i;
           const effRate = (Number(i.rate) || 0) + (Number(i.addon_rate) || 0);
           return { ...i, quantity: qty, ...calcDraftAmounts(effRate, qty, i.tax_percentage) };
+        }),
+      };
+    }
+
+    case "UPDATE_DRAFT_ITEM_RATE": {
+      // Override the per-unit base rate for an "As Per Size" line. Add-on rate
+      // is preserved; amounts recompute from (newRate + addonRate) * qty.
+      const { menuId, rate } = action.payload;
+      const newRate = Math.max(0, Number(rate) || 0);
+      return {
+        ...state,
+        draftItems: state.draftItems.map((i) => {
+          if (!matchesDraftKey(i, menuId)) return i;
+          const effRate = newRate + (Number(i.addon_rate) || 0);
+          return { ...i, rate: newRate, ...calcDraftAmounts(effRate, i.quantity, i.tax_percentage) };
         }),
       };
     }
@@ -285,6 +301,10 @@ export function BillingProvider({ children }) {
     dispatch({ type: "UPDATE_DRAFT_QTY", payload: { menuId, qty } }),
   []);
 
+  const updateDraftItemRate = useCallback((menuId, rate) =>
+    dispatch({ type: "UPDATE_DRAFT_ITEM_RATE", payload: { menuId, rate } }),
+  []);
+
   const removeDraftItem = useCallback((menuId) =>
     dispatch({ type: "REMOVE_DRAFT_ITEM", payload: menuId }),
   []);
@@ -322,6 +342,7 @@ export function BillingProvider({ children }) {
       clearSession,
       addDraftItem,
       updateDraftQty,
+      updateDraftItemRate,
       removeDraftItem,
       setDraftItemAddons,
       setDraftItemKotMsg,

@@ -8,6 +8,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const billingService = {
 
+  // Most recent KOT (floor-view recap)
+  getLastKot: () => invoke("get_last_kot"),
+
   // ── Lookup / reference data ──────────────────────────────────
 
   /** All tables with current_status, table_group info, applicable_rate */
@@ -62,7 +65,7 @@ export const billingService = {
   getOrderItems: (sessionId) =>
     invoke("get_order_items", { sessionId }),
 
-  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons, isComplimentary }) =>
+  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons, isComplimentary, unitRate }) =>
     invoke("add_order_item", {
       sessionId,
       menuId,
@@ -72,10 +75,15 @@ export const billingService = {
       addons:              (addons ?? []).map((a) => ({ menuId: a.menuId ?? a.menu_id, rate: a.rate })),
       // Complimentary lines carry no charge (rate/tax forced to 0 on the backend)
       isComplimentary:     isComplimentary     ?? false,
+      // Optional per-unit rate override (e.g. "As Per Size"); null → use master rate
+      unitRate:            unitRate ?? null,
     }),
 
   updateOrderItemQty: (orderItemId, quantity) =>
     invoke("update_order_item_qty", { orderItemId, quantity }),
+
+  updateOrderItemRate: (orderItemId, unitRate) =>
+    invoke("update_order_item_rate", { orderItemId, unitRate }),
 
   // Add-ons (session-scoped item modifiers)
   getBillingAddons: () => invoke("get_billing_addons"),

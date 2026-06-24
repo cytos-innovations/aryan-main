@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
@@ -69,7 +70,14 @@ export default function LodgeIdentity() {
     onError: (e) => toast.error(String(e)),
   });
 
-  function openCreate() { setForm(EMPTY); setDialog({ open: true, mode: "create", data: null }); }
+  async function openCreate() {
+    setForm(EMPTY);
+    setDialog({ open: true, mode: "create", data: null });
+    try {
+      const next = await invoke("get_next_master_code", { table: "identity_type" });
+      setForm((f) => ({ ...f, code: String(next) }));
+    } catch { /* leave code blank — backend will auto-assign */ }
+  }
   function openEdit(row) {
     setForm({ code: String(row.code ?? ""), name: row.name });
     setDialog({ open: true, mode: "edit", data: row });
@@ -217,6 +225,7 @@ export default function LodgeIdentity() {
                   value={form.name}
                   maxLength={50}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  onBlur={(e) => setForm((f) => ({ ...f, name: toTitleCase(e.target.value) }))}
                   placeholder="e.g. Aadhaar, PAN, Passport"
                   required
                 />
