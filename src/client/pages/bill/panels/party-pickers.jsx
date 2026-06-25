@@ -312,12 +312,15 @@ function FieldWithIcon({ icon, placeholder, value, onChange, maxLength, inputRef
 
 // ─── Waiter picker ────────────────────────────────────────────
 
-export function WaiterPicker({ waiterName, disabled, onSelect }) {
+export function WaiterPicker({ waiterName, disabled, onSelect, autoOpen = false }) {
   const [open,   setOpen]   = useState(false);
   const [query,  setQuery]  = useState("");
   const [cursor, setCursor] = useState(-1);
   const searchRef = useRef(null);
   const itemRefs  = useRef([]);
+
+  // Pop open on mount when requested (used by the settle-dialog tip gate).
+  useEffect(() => { if (autoOpen) setOpen(true); }, [autoOpen]);
 
   const empQuery  = useEmployeesForBilling();
   const employees = empQuery.data ?? [];

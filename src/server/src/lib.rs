@@ -1631,6 +1631,15 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .await
     .map_err(|e| format!("Migration error (bill_item.is_complimentary): {e}"))?;
 
+    // Tip given to the waiter, captured at settlement. Stored on the bill so the
+    // tip summary report can sum it per waiter. Added on top of the net total.
+    sqlx::query(
+        "ALTER TABLE bill_master ADD COLUMN IF NOT EXISTS tip_amount NUMERIC(12,2) NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (bill_master.tip_amount): {e}"))?;
+
     // Flag to separate lodge customers from restaurant customers (shared table).
     // No default — the application sets it explicitly on insert.
     sqlx::query(

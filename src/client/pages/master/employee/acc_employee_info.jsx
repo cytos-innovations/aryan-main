@@ -132,6 +132,8 @@ export default function AccEmployeeInfo() {
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [showLeave, setShowLeave] = useState(false);
+  const [showFinancial, setShowFinancial] = useState(false);
 
   function setF(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
@@ -150,7 +152,7 @@ export default function AccEmployeeInfo() {
   function buildPayload(f) {
     return {
       name: f.name,
-      code: f.code || null,
+      code: String(f.code).trim() ? Number(f.code) : null,
       add1: f.add1 || null,
       add2: f.add2 || null,
       add3: f.add3 || null,
@@ -206,11 +208,13 @@ export default function AccEmployeeInfo() {
 
   async function openCreate() {
     setForm(EMPTY_FORM);
+    setShowLeave(false);
+    setShowFinancial(false);
     setDialog({ open: true, mode: "create", data: null });
     try {
       const next = await invoke("get_next_master_code", { table: "employee_information" });
       setForm((f) => ({ ...f, code: String(next) }));
-    } catch { /* leave code blank — backend will auto-assign */ }
+    } catch { /* leave code blank — backend will auto-assign via sequence */ }
   }
 
   function openEdit(row) {
@@ -238,6 +242,11 @@ export default function AccEmployeeInfo() {
       advanceTot: row.advance_tot != null ? String(row.advance_tot) : "",
       target: row.target != null ? String(row.target) : "",
     });
+    setShowLeave(
+      [row.sl_total, row.sl_bal, row.cl_total, row.cl_bal, row.spl_total, row.spl_bal]
+        .some((v) => Number(v) > 0)
+    );
+    setShowFinancial([row.advance_tot, row.target].some((v) => Number(v) > 0));
     setDialog({ open: true, mode: "edit", data: row });
   }
 
@@ -351,6 +360,13 @@ export default function AccEmployeeInfo() {
     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">{children}</p>
   );
 
+  const SectionToggle = ({ children, checked, onCheckedChange }) => (
+    <div className="flex items-center justify-between mb-3">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{children}</p>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
+  );
+
   // ── Render ────────────────────────────────────────────────
 
   return (
@@ -389,21 +405,18 @@ export default function AccEmployeeInfo() {
           <form onSubmit={handleSubmit} onKeyDown={enterNav} className="space-y-4">
 
             {/* ── Identification ─────────────────────────── */}
-            <div className="grid grid-cols-1 gap-3">
-              {/* Code field hidden — not shown in form
+            <div className="grid grid-cols-[120px_1fr] gap-3">
               <Field>
                 <FieldLabel>Code</FieldLabel>
                 <Input
                   value={form.code}
                   onChange={(e) => setF("code", e.target.value)}
-                  placeholder={isEditMode ? "" : "e.g. EMP001"}
+                  placeholder={isEditMode ? "" : "Auto"}
                   maxLength={20}
-                  autoFocus
                   readOnly={isEditMode}
                   className={isEditMode ? "bg-muted cursor-not-allowed" : ""}
                 />
               </Field>
-              */}
               <Field>
                 <FieldLabel>
                   Employee Name <span className="text-destructive">*</span>
@@ -413,6 +426,7 @@ export default function AccEmployeeInfo() {
                   onChange={(e) => setF("name", e.target.value)}
                   onBlur={(e) => setF("name", toTitleCase(e.target.value))}
                   placeholder="Full name"
+                  autoFocus
                 />
               </Field>
             </div>
@@ -500,7 +514,10 @@ export default function AccEmployeeInfo() {
 
             {/* ── Leave Balance ─────────────────────────── */}
             <div className="border-t pt-3">
-              <SectionLabel>Leave Balance</SectionLabel>
+              <SectionToggle checked={showLeave} onCheckedChange={setShowLeave}>
+                Leave Balance
+              </SectionToggle>
+              {showLeave && (
               <div className="grid grid-cols-3 gap-3">
                 <Field>
                   <FieldLabel>SL Total</FieldLabel>
@@ -530,11 +547,15 @@ export default function AccEmployeeInfo() {
                 </Field>
                 <div />
               </div>
+              )}
             </div>
 
             {/* ── Financial ─────────────────────────────── */}
             <div className="border-t pt-3">
-              <SectionLabel>Financial</SectionLabel>
+              <SectionToggle checked={showFinancial} onCheckedChange={setShowFinancial}>
+                Financial
+              </SectionToggle>
+              {showFinancial && (
               <div className="grid grid-cols-2 gap-3">
                 <Field>
                   <FieldLabel>Total Advance</FieldLabel>
@@ -545,6 +566,7 @@ export default function AccEmployeeInfo() {
                   <Input type="number" value={form.target} onChange={(e) => setF("target", e.target.value)} placeholder="0.00" min={0} step={0.01} />
                 </Field>
               </div>
+              )}
             </div>
 
             <DialogFooter>

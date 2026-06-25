@@ -36,7 +36,7 @@ const RATE_OPTIONS = [
 const EMPTY = {
   code: "",
   table_name: "",
-  table_group_id: "__none__",
+  table_group_id: "",
   applicable_rate: "1",
 };
 
@@ -100,6 +100,7 @@ export default function RestaurantTable() {
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
+  const tableNameRef = useRef(null); // Focus target after each successful create.
 
   const query = useQuery({
     queryKey: [...QK, qs],
@@ -115,13 +116,27 @@ export default function RestaurantTable() {
   const inv = () => queryClient.invalidateQueries({ queryKey: QK });
 
   const createMut = useMutation({
-    mutationFn: (d) => invoke("create_restaurant_table", {
-      code: d.code ? parseInt(d.code) : null,
-      tableName: d.table_name,
-      tableGroupId: d.table_group_id !== "__none__" ? parseInt(d.table_group_id) : null,
-      applicableRate: parseInt(d.applicable_rate),
-    }),
-    onSuccess: () => { toast.success("Table created"); inv(); closeDialog(); },
+    mutationFn: async (d) => {
+      await invoke("create_restaurant_table", {
+        code: d.code ? parseInt(d.code) : null,
+        tableName: d.table_name,
+        tableGroupId: parseInt(d.table_group_id),
+        applicableRate: parseInt(d.applicable_rate),
+      });
+      return d.table_name.trim();
+    },
+    onSuccess: async (savedName) => {
+      toast.success(`${savedName} added`);
+      inv();
+      // Keep the dialog open but reset to a fresh, blank form for the next table.
+      setForm(EMPTY);
+      try {
+        const next = await invoke("get_next_master_code", { table: "restaurant_table" });
+        setForm((f) => ({ ...f, code: String(next) }));
+      } catch { /* leave code blank — backend will auto-assign */ }
+      // Return focus to Table Name for the next entry.
+      tableNameRef.current?.focus();
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -130,7 +145,7 @@ export default function RestaurantTable() {
       id: d.id,
       code: d.code ? parseInt(d.code) : null,
       tableName: d.table_name,
-      tableGroupId: d.table_group_id !== "__none__" ? parseInt(d.table_group_id) : null,
+      tableGroupId: d.table_group_id ? parseInt(d.table_group_id) : null,
       applicableRate: parseInt(d.applicable_rate),
     }),
     onSuccess: () => { toast.success("Table updated"); inv(); closeDialog(); },
@@ -163,7 +178,7 @@ export default function RestaurantTable() {
     setForm({
       code: row.code ? String(row.code) : "",
       table_name: row.table_name,
-      table_group_id: row.table_group_id ? String(row.table_group_id) : "__none__",
+      table_group_id: row.table_group_id ? String(row.table_group_id) : "",
       applicable_rate: String(row.applicable_rate ?? 1),
     });
     setDialog({ open: true, mode: "edit", data: row });
@@ -184,6 +199,7 @@ export default function RestaurantTable() {
   function handleSubmit(e) {
     e.preventDefault();
     if (!form.table_name.trim()) { toast.error("Table name is required"); return; }
+    if (!form.table_group_id) { toast.error("Table Group is required"); return; }
     if (dialog.mode === "create") createMut.mutate(form);
     else updateMut.mutate({ id: dialog.data.id, ...form });
   }
@@ -319,7 +335,7 @@ export default function RestaurantTable() {
               <div className="grid grid-cols-2 gap-3">
                 <Field>
                   <FieldLabel>Table Name <span className="text-destructive">*</span></FieldLabel>
-                  <Input value={form.table_name} maxLength={50}
+                  <Input ref={tableNameRef} autoFocus value={form.table_name} maxLength={50}
                     onChange={(e) => setForm((f) => ({ ...f, table_name: e.target.value }))}
                     onBlur={(e) => setForm((f) => ({ ...f, table_name: toTitleCase(e.target.value) }))}
                     placeholder="Table name" required />
@@ -336,14 +352,14 @@ export default function RestaurantTable() {
               </div>
 
               <Field>
-                <FieldLabel>Table Group</FieldLabel>
+                <FieldLabel>Table Group <span className="text-destructive">*</span></FieldLabel>
                 <SearchableSelect
-                  options={[{ value: "__none__", label: "None" }, ...allGroups.map((g) => ({ value: String(g.id), label: g.name }))]}
+                  options={allGroups.map((g) => ({ value: String(g.id), label: g.name }))}
                   value={form.table_group_id}
                   onSelect={handleGroupChange}
                   placeholder="Type to search group…"
                 />
-                {dialog.mode === "edit" && form.table_group_id !== "__none__" && (
+                {dialog.mode === "edit" && form.table_group_id && (
                   <p className="text-xs text-muted-foreground mt-1">
                     Group cannot be changed after assignment.
                   </p>
@@ -358,7 +374,7 @@ export default function RestaurantTable() {
                   onSelect={(v) => setForm((f) => ({ ...f, applicable_rate: v }))}
                   placeholder="Select rate…"
                 />
-                {form.table_group_id !== "__none__" && (
+                {form.table_group_id && (
                   <p className="text-xs text-muted-foreground mt-1">
                     Auto-filled from group. You may override.
                   </p>

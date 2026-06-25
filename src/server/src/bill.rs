@@ -2560,11 +2560,16 @@ pub async fn settle_bill(
     reference_no:   Option<String>,
     part_payments:  Vec<PartPaymentInput>,
     write_off_amount: f64,
+    tip_amount:       Option<f64>,
     customer_name:    Option<String>,
     customer_mobile:  Option<String>,
     customer_address: Option<String>,
 ) -> Result<(), String> {
     let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Tip sits on top of the net total. `payment_amount` already includes it, so
+    // strip it back out to learn how much was applied to the bill itself.
+    let tip = round2(tip_amount.unwrap_or(0.0).max(0.0));
 
     // Persist customer snapshot on the session (delivery / takeaway captures)
     if customer_name.is_some() || customer_mobile.is_some() || customer_address.is_some() {
@@ -2636,6 +2641,11 @@ pub async fn settle_bill(
             None    => format!("{} payment ₹{:.2}", payment_type, payment_amount),
         }
     };
+    let payment_remark = if tip > 0.0 {
+        format!("{} · incl. tip ₹{:.2}", payment_remark, tip)
+    } else {
+        payment_remark
+    };
 
     let pay_id: i32 = sqlx::query_scalar(
         "INSERT INTO payment_master (bill_id, payment_type, payment_amount, reference_no, remarks)
@@ -2667,7 +2677,9 @@ pub async fn settle_bill(
 
     // Determine settlement type
     // NC: payment_amount = 0, write_off_amount = net_amount (frontend sets this)
-    let total_paid   = round2(payment_amount);
+    // The tip is excluded from the amount applied to the bill — it's not revenue
+    // against the net total, just a pass-through to the waiter.
+    let total_paid   = round2((payment_amount - tip).max(0.0));
     let pending      = if is_nc_method { 0.0 } else { round2((net_amount - total_paid - write_off_amount).max(0.0)) };
     let is_due       = !is_nc_method && (is_due_method || pending > 0.5);
     let settlement_type = if is_nc_method               { "NC" }
@@ -2728,12 +2740,13 @@ pub async fn settle_bill(
     sqlx::query(
         "UPDATE bill_master
          SET    paid_amount = $1, due_amount = $2, write_off_amount = $3,
-                bill_status = $4, settled_at = NOW(), updated_at = NOW()
-         WHERE  id = $5",
+                tip_amount = $4, bill_status = $5, settled_at = NOW(), updated_at = NOW()
+         WHERE  id = $6",
     )
     .bind(total_paid)
     .bind(pending)
     .bind(write_off_amount)
+    .bind(tip)
     .bind(new_bill_status)
     .bind(bill_id)
     .execute(&pool)

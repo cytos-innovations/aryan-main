@@ -40,6 +40,7 @@ import {
   useUpdateReservationStatus,
   useCancelReservation,
   useEmployeesForBilling,
+  useUpdateSessionParty,
 } from "../hooks/use-billing-queries";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
@@ -387,6 +388,7 @@ export default function OrderEntryView() {
   const itemsQuery   = useOrderItems(activeSessionId);
   const billSummary  = useBillSummary(activeSessionId);
   const settleBillMut = useSettleBill(activeSessionId);
+  const updatePartyMut = useUpdateSessionParty(activeSessionId);
 
   // Add-ons
   const addonsQuery     = useBillingAddons();
@@ -443,6 +445,18 @@ export default function OrderEntryView() {
   const items          = isDraft ? (draftItems ?? []) : (itemsQuery.data ?? []);
   const isLoadingItems = !isDraft && itemsQuery.isLoading;
   const billId         = billSummary.data?.bill_id ?? null;
+
+  // Map of menu_id → total quantity in the current order, so the menu grid can
+  // show a qty badge on items already added on the right.
+  const menuQtyMap = useMemo(() => {
+    const map = {};
+    for (const i of items) {
+      if (i.item_status === "CANCELLED") continue;
+      if (i.menu_id == null) continue;
+      map[i.menu_id] = (map[i.menu_id] ?? 0) + Number(i.quantity || 0);
+    }
+    return map;
+  }, [items]);
 
   // For billing/settlement: only KOT-sent items count. Pending items stay in the order
   // but are excluded from the bill total and settle amount.
@@ -651,17 +665,19 @@ export default function OrderEntryView() {
     }
   }
 
-  function handleSettle(entries, customer, writeOffAmount = 0) {
+  function handleSettle(entries, customer, writeOffAmount = 0, tipAmount = 0) {
     if (!billId || !entries.length) return;
     const isPartPayment = entries.length > 1;
     const paymentType   = isPartPayment ? PAYMENT_TYPE.PART : entries[0].payment_mode;
-    const paymentAmount = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const tip           = Number(tipAmount) || 0;
+    // Tip rides on top of the amount applied to the bill; backend strips it out.
+    const paymentAmount = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0) + tip;
     const referenceNo   = isPartPayment ? null : (entries[0]?.reference_no ?? null);
     const partPayments  = isPartPayment ? entries : [];
     settleBillMut.mutate(
       {
         sessionId: activeSessionId, billId, paymentType, paymentAmount,
-        referenceNo, partPayments, writeOffAmount: writeOffAmount ?? 0,
+        referenceNo, partPayments, writeOffAmount: writeOffAmount ?? 0, tipAmount: tip,
         customerName:    customer?.name    ?? null,
         customerMobile:  customer?.mobile  ?? null,
         customerAddress: customer?.address ?? null,
@@ -672,6 +688,19 @@ export default function OrderEntryView() {
           if (discKey) { try { localStorage.removeItem(discKey); } catch { /* ignore */ } }
           clearSession();
         },
+      },
+    );
+  }
+
+  // Assign a waiter to the live session from the settle dialog's tip gate. The
+  // mutation invalidates session detail + floor view so the waiter reflects
+  // everywhere (right panel, floor card, settle dialog).
+  function handleAssignWaiterFromSettle(w, { onDone } = {}) {
+    if (!activeSessionId || !w?.id) return;
+    updatePartyMut.mutate(
+      { sessionId: activeSessionId, waiterId: w.id },
+      {
+        onSuccess: () => { toast.success(`Waiter assigned: ${w.name}`); onDone?.(); },
       },
     );
   }
@@ -816,6 +845,7 @@ export default function OrderEntryView() {
                 onAddItem={handleAddItem}
                 applicableRate={applicableRate}
                 addingId={addingId}
+                menuQtyMap={menuQtyMap}
                 onSearchRef={(ref) => { searchRefHandle.current = ref; }}
               />
             </div>
@@ -883,6 +913,8 @@ export default function OrderEntryView() {
           sessionDisc={sessionDisc}
           onSettle={handleSettle}
           isSettling={settleBillMut.isPending}
+          onAssignWaiter={handleAssignWaiterFromSettle}
+          isAssigningWaiter={updatePartyMut.isPending}
         />
       )}
 

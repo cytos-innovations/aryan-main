@@ -144,7 +144,7 @@ pub async fn create_employee(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     name: String,
-    code: Option<String>,
+    code: Option<i64>,
     add1: Option<String>,
     add2: Option<String>,
     add3: Option<String>,
@@ -170,7 +170,6 @@ pub async fn create_employee(
     if name.is_empty() {
         return Err("Employee name is required".to_string());
     }
-    let code = code.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
     let pool = acquire_pool(&state.pool, &app).await?;
 
     let map_err = |e: sqlx::Error| {
@@ -182,40 +181,52 @@ pub async fn create_employee(
         }
     };
 
-    let id: i32 = sqlx::query_scalar(
-        "INSERT INTO employee_information \
-         (code, name, add1, add2, add3, desig_id, department, esi_no, pf_no, \
-          doj, dol, sl_total, sl_bal, cl_total, cl_bal, spl_total, spl_bal, \
-          con_person_no, emer_ph_no, resi_ph_no, advance_tot, target) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, \
-                 $10::DATE, $11::DATE, $12, $13, $14, $15, $16, $17, \
-                 $18, $19, $20, $21, $22) RETURNING id",
-    )
-    .bind(code.as_deref())
-    .bind(&name)
-    .bind(add1.as_deref())
-    .bind(add2.as_deref())
-    .bind(add3.as_deref())
-    .bind(desig_id)
-    .bind(department.as_deref())
-    .bind(esi_no.as_deref())
-    .bind(pf_no.as_deref())
-    .bind(doj.as_deref())
-    .bind(dol.as_deref())
-    .bind(sl_total)
-    .bind(sl_bal)
-    .bind(cl_total)
-    .bind(cl_bal)
-    .bind(spl_total)
-    .bind(spl_bal)
-    .bind(con_person_no.as_deref())
-    .bind(emer_ph_no.as_deref())
-    .bind(resi_ph_no.as_deref())
-    .bind(advance_tot)
-    .bind(target)
-    .fetch_one(&pool)
-    .await
-    .map_err(map_err)?;
+    // `code` is a BIGSERIAL column. When the caller supplies one, insert it;
+    // otherwise omit the column so the sequence assigns the next value.
+    let columns = "name, add1, add2, add3, desig_id, department, esi_no, pf_no, \
+                   doj, dol, sl_total, sl_bal, cl_total, cl_bal, spl_total, spl_bal, \
+                   con_person_no, emer_ph_no, resi_ph_no, advance_tot, target";
+    let placeholders = "$1, $2, $3, $4, $5, $6, $7, $8, \
+                        $9::DATE, $10::DATE, $11, $12, $13, $14, $15, $16, \
+                        $17, $18, $19, $20, $21";
+    let sql = match code {
+        Some(_) => format!(
+            "INSERT INTO employee_information (code, {columns}) \
+             VALUES ($22, {placeholders}) RETURNING id"
+        ),
+        None => format!(
+            "INSERT INTO employee_information ({columns}) \
+             VALUES ({placeholders}) RETURNING id"
+        ),
+    };
+
+    let mut q = sqlx::query_scalar::<_, i32>(&sql)
+        .bind(&name)
+        .bind(add1.as_deref())
+        .bind(add2.as_deref())
+        .bind(add3.as_deref())
+        .bind(desig_id)
+        .bind(department.as_deref())
+        .bind(esi_no.as_deref())
+        .bind(pf_no.as_deref())
+        .bind(doj.as_deref())
+        .bind(dol.as_deref())
+        .bind(sl_total)
+        .bind(sl_bal)
+        .bind(cl_total)
+        .bind(cl_bal)
+        .bind(spl_total)
+        .bind(spl_bal)
+        .bind(con_person_no.as_deref())
+        .bind(emer_ph_no.as_deref())
+        .bind(resi_ph_no.as_deref())
+        .bind(advance_tot)
+        .bind(target);
+    if let Some(code_val) = code {
+        q = q.bind(code_val);
+    }
+
+    let id: i32 = q.fetch_one(&pool).await.map_err(map_err)?;
 
     Ok(id)
 }
@@ -229,7 +240,7 @@ pub async fn update_employee(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: i32,
-    code: Option<String>,
+    code: Option<i64>,
     name: String,
     add1: Option<String>,
     add2: Option<String>,
@@ -256,12 +267,11 @@ pub async fn update_employee(
     if name.is_empty() {
         return Err("Employee name is required".to_string());
     }
-    let code = code.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
     let pool = acquire_pool(&state.pool, &app).await?;
 
     sqlx::query(
         "UPDATE employee_information SET \
-         code = $1, name = $2, add1 = $3, add2 = $4, add3 = $5, \
+         code = COALESCE($1, code), name = $2, add1 = $3, add2 = $4, add3 = $5, \
          desig_id = $6, department = $7, esi_no = $8, pf_no = $9, \
          doj = $10::DATE, dol = $11::DATE, \
          sl_total = $12, sl_bal = $13, cl_total = $14, cl_bal = $15, \
@@ -270,7 +280,7 @@ pub async fn update_employee(
          advance_tot = $21, target = $22, updated_at = NOW() \
          WHERE id = $23",
     )
-    .bind(code.as_deref())
+    .bind(code)
     .bind(&name)
     .bind(add1.as_deref())
     .bind(add2.as_deref())

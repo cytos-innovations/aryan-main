@@ -64,7 +64,7 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
       size="sm"
       onClick={onClick}
       disabled={disabled}
-      className={`h-11 py-1 px-1.5 flex-1 flex flex-col items-center justify-center gap-1 min-w-0 bg-transparent hover:bg-muted/40 disabled:opacity-50 ${className}`}
+      className={`h-11 py-1 px-1.5 flex-1 flex flex-col items-center justify-center gap-1 min-w-0 disabled:opacity-50 ${className}`}
       {...rest}
     >
       <span className="flex items-center gap-1.5 min-w-0">
@@ -96,7 +96,7 @@ function BillingModePanel({
         shortcut="+"
         onClick={onKot}
         disabled={!canKot || kotPending}
-        className="border-2 border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+        className="border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/40"
       />
       <ActionBtn
         icon={PrinterIcon}
@@ -104,7 +104,7 @@ function BillingModePanel({
         shortcut="Home"
         onClick={onCheckKot}
         disabled={!canKot || checkKotPending}
-        className="border-2 border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+        className="border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/40"
         data-pos-action="kotprint"
         onKeyDown={makePosTabHandler("kotprint")}
       />
@@ -115,7 +115,7 @@ function BillingModePanel({
           shortcut="*"
           onClick={onBill}
           disabled={!canBill || billPending}
-          className="w-full border-2 border-emerald-400 dark:border-emerald-500 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+          className="w-full border border-sky-200 dark:border-sky-900/60 bg-sky-50/60 dark:bg-sky-950/20 text-sky-700 dark:text-sky-300 hover:bg-sky-100/70 dark:hover:bg-sky-950/40"
           data-pos-action="billprint"
           onKeyDown={makePosTabHandler("billprint")}
         />
@@ -131,7 +131,7 @@ function BillingModePanel({
         shortcut="/"
         onClick={() => onSwitchMode(BOTTOM_PANEL_MODE.DISCOUNT)}
         disabled={isClosed}
-        className="border-2 border-border"
+        className="border border-border bg-muted/30 text-foreground/80 hover:bg-muted/60"
       />
       <ActionBtn
         icon={Hold01Icon}
@@ -139,7 +139,7 @@ function BillingModePanel({
         shortcut="F2"
         onClick={onHold}
         disabled={!canHold}
-        className="border-2 border-purple-400 dark:border-purple-500 text-purple-600 dark:text-purple-400 hover:bg-purple-500/10"
+        className="border border-purple-200 dark:border-purple-900/60 bg-purple-50/60 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300 hover:bg-purple-100/70 dark:hover:bg-purple-950/40"
       />
 
       {/* Settle — carries the running total */}
@@ -150,14 +150,14 @@ function BillingModePanel({
         disabled={!canSettle}
         data-pos-action="settle"
         onKeyDown={makePosTabHandler("settle")}
-        className="h-11 py-1 px-3 flex-[1.5] flex flex-col items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-0 disabled:opacity-50"
+        className="h-11 py-1 px-3 flex-[1.5] flex flex-col items-center justify-center gap-1 border border-emerald-300 dark:border-emerald-700 bg-emerald-100/70 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-200/70 dark:hover:bg-emerald-900/50 disabled:opacity-50"
       >
         <span className="flex items-center gap-1.5">
           <HugeiconsIcon icon={CashIcon} size={15} strokeWidth={2} />
           <span className="text-[13px] font-bold">Settle</span>
           <span className="text-sm font-bold tabular-nums tracking-tight">₹{fmtAmount(netAmount ?? 0)}</span>
         </span>
-        <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded leading-none bg-white/20">F11</span>
+        <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded leading-none bg-emerald-600/15 dark:bg-emerald-400/15">F11</span>
       </Button>
 
       {/* Last settled bill recap — sits after Settle */}

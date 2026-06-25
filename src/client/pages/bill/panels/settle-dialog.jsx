@@ -24,6 +24,8 @@ import {
   BarcodeScanIcon,
   SmartphoneWifiIcon,
   GiftIcon,
+  Coins01Icon,
+  UserGroupIcon,
 } from "@hugeicons/core-free-icons";
 
 import {
@@ -34,12 +36,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+} from "@/components/ui/alert-dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 
 import { usePaymentMethods } from "../hooks/use-billing-queries";
+import { WaiterPicker } from "./party-pickers";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE } from "../constants/billing";
 import { fmtAmount, calcTaxBreakdown, calcDiscountedTotals } from "../utils/billing-calc";
@@ -174,7 +185,7 @@ function SearchableSelect({ options, value, onSelect, onSelectDone, onArrowNav, 
   );
 }
 
-export default function SettleDialog({ open, onOpenChange, session, netAmount, billTotals, items, menu, sessionDisc, onSettle, isSettling }) {
+export default function SettleDialog({ open, onOpenChange, session, netAmount, billTotals, items, menu, sessionDisc, onSettle, isSettling, onAssignWaiter, isAssigningWaiter }) {
   const methodsQuery = usePaymentMethods();
   const methods      = methodsQuery.data ?? [];
 
@@ -202,8 +213,18 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [customerAddress, setCustomerAddress] = useState("");
   const [method,          setMethod]          = useState("");
   const [amount,          setAmount]          = useState("");
+  const [tip,             setTip]             = useState("");  // tip for the waiter (on top of net)
   const [duePaidNow,      setDuePaidNow]      = useState("");  // partial due: paid now
   const [priorDue,        setPriorDue]        = useState(null); // customer's existing dues
+
+  // "Assign a waiter first" gate — opened when a tip is entered with no waiter.
+  const [waiterPromptOpen, setWaiterPromptOpen] = useState(false);
+  // Once the user clicks "Add" in that prompt, reveal the inline waiter picker.
+  const [waiterPickerOpen, setWaiterPickerOpen] = useState(false);
+
+  const waiterId   = session?.waiter_id ?? null;
+  const waiterName = session?.waiter_name ?? null;
+  const hasWaiter  = waiterId != null;
 
   // Bill summary expand state
   const [catExpanded,  setCatExpanded]  = useState(false);
@@ -247,6 +268,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const nameRef        = useRef(null);
   const methodRef      = useRef(null);
   const amountRef      = useRef(null);
+  const tipRef         = useRef(null);
   const splitMethodRef = useRef(null);
   const duePaidRef     = useRef(null);
   const ncRemarkRef    = useRef(null);
@@ -273,6 +295,9 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
     setCustomerMobile(session?.customer_mobile ?? "");
     setCustomerAddress(session?.customer_address ?? "");
     setAmount("");
+    setTip("");
+    setWaiterPromptOpen(false);
+    setWaiterPickerOpen(false);
     setDuePaidNow("");
     setNcRemark("");
     setPriorDue(null);
@@ -323,9 +348,13 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const splitBalance = Math.round((netAmount - splitTotal) * 100) / 100;
   const splitBalanced = Math.abs(splitBalance) <= 0.01;
 
-  // Single-payment shortfall / change preview
-  const enteredAmt   = amount.trim() === "" ? netAmount : (Number(amount) || 0);
-  const diff         = Math.round((netAmount - enteredAmt) * 100) / 100; // >0 short, <0 change
+  // Tip rides on top of the net total → amount payable = net + tip.
+  const tipNum         = tip.trim() === "" ? 0 : Math.max(0, Number(tip) || 0);
+  const amountPayable  = Math.round((netAmount + tipNum) * 100) / 100;
+
+  // Single-payment shortfall / change preview (measured against amount payable)
+  const enteredAmt   = amount.trim() === "" ? amountPayable : (Number(amount) || 0);
+  const diff         = Math.round((amountPayable - enteredAmt) * 100) / 100; // >0 short, <0 change
   const isDueMethod  = /due/i.test(method);
 
   // Partial-due maths: amount paid now (blank = nothing) and the balance due.
@@ -472,9 +501,45 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
     }
   }
 
+  // ── Tip ────────────────────────────────────────────────────
+  // A tip can only be given once a waiter is assigned to the table. If the user
+  // starts typing a tip without one, blank it and raise the "assign first" gate.
+  function handleTipChange(v) {
+    const hasValue = v.trim() !== "" && Number(v) > 0;
+    if (hasValue && !hasWaiter) {
+      setTip("");
+      setWaiterPromptOpen(true);
+      return;
+    }
+    setTip(v);
+  }
+
+  // From the gate: "Add" → reveal the inline waiter picker.
+  function onPromptAdd() {
+    setWaiterPromptOpen(false);
+    setWaiterPickerOpen(true);
+  }
+
+  // Inline picker selection → assign on the live session; the parent refetches
+  // the session + floor view so the new waiter shows everywhere. Once the
+  // session reports a waiter, the tip input unlocks.
+  function handleAssignWaiter(w) {
+    if (!w?.id || !onAssignWaiter) return;
+    setWaiterPickerOpen(false);
+    onAssignWaiter(w, {
+      onDone: () => { setTimeout(() => tipRef.current?.focus(), 120); },
+    });
+  }
+
   // ── Settle ────────────────────────────────────────────────
   function handleSettle() {
     if (isSettling) return;
+
+    // A tip without an assigned waiter is not allowed — raise the gate instead.
+    if (tipNum > 0 && !hasWaiter) {
+      setWaiterPromptOpen(true);
+      return;
+    }
 
     // Customer validation — required for delivery / takeaway and for Due
     if (mustCapture) {
@@ -501,10 +566,14 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
       writeOff = netAmount;
     } else {
       if (!method) { toast.error("Select a payment method"); return; }
-      // Blank amount → settle the full bill amount
-      const amt = amount.trim() === "" ? netAmount : Number(amount);
+      // Blank amount → settle the full amount payable (net + tip).
+      // The field holds what the customer hands over (incl. tip), so peel the
+      // tip back off to get the portion applied against the bill.
+      const paid = amount.trim() === "" ? amountPayable : Number(amount);
+      if (Number.isNaN(paid) || paid < 0) { toast.error("Enter a valid amount"); return; }
+      const amt = Math.round((paid - tipNum) * 100) / 100; // bill portion only
       // A fully-discounted (₹0) bill settles with a zero-amount payment; otherwise require a positive amount.
-      if (Number.isNaN(amt) || amt < 0 || (netAmount > 0 && amt <= 0)) { toast.error("Enter a valid amount"); return; }
+      if (amt < 0 || (netAmount > 0 && amt <= 0)) { toast.error("Enter a valid amount"); return; }
       entries = [{ payment_mode: method, amount: amt, reference_no: null }];
       // Short amount → the remainder is written off (unless paying via Due → keep it as a due)
       if (amt < netAmount && !/due/i.test(method)) {
@@ -518,7 +587,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
       address: customerAddress.trim() || null,
     };
 
-    onSettle(entries, customer, writeOff);
+    onSettle(entries, customer, writeOff, tipNum);
     onOpenChange(false);
   }
 
@@ -639,7 +708,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   if (picked === SPLIT_VALUE)      splitMethodRef.current?.focus();
                   else if (picked === DUE_VALUE)   duePaidRef.current?.focus();
                   else if (picked === NC_VALUE)    ncRemarkRef.current?.focus();
-                  else                             amountRef.current?.focus();
+                  // Plain method → land on Tip first (Enter there moves to Amount).
+                  else                             tipRef.current?.focus();
                 }, 0);
               }}
               placeholder={methodsQuery.isLoading ? "Loading…" : "Type or select method…"}
@@ -833,13 +903,82 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   </>
                 )}
 
-                <div className="flex justify-between text-sm font-semibold border-t pt-1.5 mt-0.5">
+                <div className={`flex justify-between text-sm font-semibold border-t pt-1.5 mt-0.5 ${tipNum > 0 ? "" : ""}`}>
                   <span>Net Total</span>
                   <span className="tabular-nums">₹{fmtAmount(netAmount)}</span>
                 </div>
+                {tipNum > 0 && (
+                  <>
+                    <div className="flex justify-between text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <HugeiconsIcon icon={Coins01Icon} size={10} strokeWidth={2} />
+                        Tip{waiterName ? ` (${waiterName})` : ""}
+                      </span>
+                      <span className="tabular-nums text-foreground">+₹{fmtAmount(tipNum)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-bold border-t pt-1.5 mt-0.5">
+                      <span>Amount Payable</span>
+                      <span className="tabular-nums">₹{fmtAmount(amountPayable)}</span>
+                    </div>
+                  </>
+                )}
               </div>
             );
           })()}
+
+          {/* ── Tip for the waiter (on top of net total) ── */}
+          {!isNc && (
+            <Field>
+              <FieldLabel className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <HugeiconsIcon icon={Coins01Icon} size={13} strokeWidth={2} />
+                  Tip for Waiter{" "}
+                  <span className="text-muted-foreground font-normal text-xs">(optional)</span>
+                </span>
+                {hasWaiter ? (
+                  <span className="flex items-center gap-1 text-[11px] font-normal text-emerald-600 dark:text-emerald-400">
+                    <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
+                    {waiterName}
+                  </span>
+                ) : (
+                  <WaiterPicker
+                    waiterName={null}
+                    autoOpen={waiterPickerOpen}
+                    disabled={isAssigningWaiter}
+                    onSelect={handleAssignWaiter}
+                  />
+                )}
+              </FieldLabel>
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
+                <Input
+                  ref={tipRef}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={tip}
+                  onChange={(e) => handleTipChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      // Advance to the amount field (or the relevant next field
+                      // when the method isn't a plain single payment).
+                      if (isDue)       duePaidRef.current?.focus();
+                      else if (isSplit) document.getElementById("split-method-input")?.focus();
+                      else             amountRef.current?.focus();
+                    }
+                  }}
+                  placeholder="0.00"
+                  className="pl-6 font-mono"
+                />
+              </div>
+              {!hasWaiter && (
+                <p className="text-[11px] text-muted-foreground">
+                  Assign a waiter to this table before adding a tip.
+                </p>
+              )}
+            </Field>
+          )}
 
           {/* ── Due — optional part-payment now, balance recorded as due ── */}
           {isDue && (
@@ -906,7 +1045,9 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
             <Field>
               <FieldLabel>
                 Enter Amount{" "}
-                <span className="text-muted-foreground font-normal text-xs">(blank = full bill)</span>
+                <span className="text-muted-foreground font-normal text-xs">
+                  (blank = {tipNum > 0 ? "bill + tip" : "full bill"})
+                </span>
               </FieldLabel>
               <div className="relative">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
@@ -917,8 +1058,14 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   step="0.01"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSettle(); } }}
-                  placeholder={fmtAmount(netAmount)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      // Move focus to the Settle button; a final Enter there settles.
+                      document.getElementById("settle-dialog-settle-btn")?.focus();
+                    }
+                  }}
+                  placeholder={fmtAmount(amountPayable)}
                   className="pl-6 font-mono"
                 />
               </div>
@@ -1041,6 +1188,31 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* ── "Assign a waiter first" gate ── */}
+      <AlertDialog open={waiterPromptOpen} onOpenChange={setWaiterPromptOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <HugeiconsIcon icon={UserGroupIcon} size={18} strokeWidth={2} className="text-amber-500" />
+              Assign a waiter first
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              A tip can only be recorded against a waiter. Assign one to this table
+              to continue — the waiter will be saved on the order and shown everywhere.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button variant="outline" onClick={() => setWaiterPromptOpen(false)}>
+              Cancel
+            </Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white border-0" onClick={onPromptAdd}>
+              <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2.5} className="mr-1" />
+              Add
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

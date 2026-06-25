@@ -163,7 +163,7 @@ function useNow(intervalMs = 60_000) {
 
 // ─── Table Card ──────────────────────────────────────────────────
 
-function TableCard({ table, onClick, now, isOnHold }) {
+function TableCard({ table, onClick, now, isOnHold, isFocused, cardRef }) {
   const status      = isOnHold ? "ON_HOLD" : getTableStatus(table, now);
   const phase       = getReservationPhase(table, now);
   const isOccupied  = status === "OCCUPIED" || status === "BILL_PRINTED";
@@ -180,6 +180,7 @@ function TableCard({ table, onClick, now, isOnHold }) {
 
   return (
     <button
+      ref={cardRef}
       type="button"
       onClick={() => onClick(table, status, phase)}
       className={[
@@ -187,6 +188,7 @@ function TableCard({ table, onClick, now, isOnHold }) {
         "ring-1 shadow-xs overflow-hidden cursor-pointer active:scale-[0.98]",
         STATUS_RING[status],
         STATUS_BG[status],
+        isFocused ? "ring-2 ring-primary ring-offset-2 ring-offset-background z-10" : "",
       ].join(" ")}
     >
       {/* Top accent strip */}
@@ -316,7 +318,7 @@ function TableCard({ table, onClick, now, isOnHold }) {
 
 // ─── Table Group Section ──────────────────────────────────────────
 
-function TableGroupSection({ groupName, tables, onTableClick, now, heldTableIds }) {
+function TableGroupSection({ groupName, tables, onTableClick, now, heldTableIds, focusedId, registerCardRef }) {
   return (
     <div>
       <div className="flex items-center gap-2 mb-2.5">
@@ -328,7 +330,15 @@ function TableGroupSection({ groupName, tables, onTableClick, now, heldTableIds 
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3">
         {tables.map((t) => (
-          <TableCard key={t.id} table={t} onClick={onTableClick} now={now} isOnHold={heldTableIds?.has(t.id)} />
+          <TableCard
+            key={t.id}
+            table={t}
+            onClick={onTableClick}
+            now={now}
+            isOnHold={heldTableIds?.has(t.id)}
+            isFocused={focusedId === t.id}
+            cardRef={(el) => registerCardRef(t.id, el)}
+          />
         ))}
       </div>
     </div>
@@ -485,7 +495,15 @@ export default function TableSelectView({ onOpenReprint }) {
   const [tableShiftOpen,  setTableShiftOpen]  = useState(false);
   // Re-render trigger when hold state changes
   const [holdVersion, setHoldVersion] = useState(0);
+  // Keyboard navigation: id of the currently focused table card (null = none / search has focus)
+  const [focusedId, setFocusedId] = useState(null);
   const searchRef = useRef(null);
+  // Map of table id → card DOM node, used for geometry-based arrow navigation
+  const cardRefs = useRef(new Map());
+  const registerCardRef = useCallback((id, el) => {
+    if (el) cardRefs.current.set(id, el);
+    else cardRefs.current.delete(id);
+  }, []);
 
   // Auto-focus search on mount; also refresh held-table snapshot when this view becomes active
   useEffect(() => {
@@ -545,6 +563,17 @@ export default function TableSelectView({ onOpenReprint }) {
     }
     return [...map.entries()];
   }, [filtered]);
+
+  // Flat list of visible table ids in render order (across all groups)
+  const orderedIds = useMemo(
+    () => groups.flatMap(([, ts]) => ts.map((t) => t.id)),
+    [groups],
+  );
+
+  // Drop stale focus when the focused table is filtered out / no longer visible
+  useEffect(() => {
+    if (focusedId != null && !orderedIds.includes(focusedId)) setFocusedId(null);
+  }, [orderedIds, focusedId]);
 
   // Which table IDs have held drafts in localStorage
   const heldTableIds = useMemo(
@@ -655,6 +684,108 @@ export default function TableSelectView({ onOpenReprint }) {
     },
     [search, tables, handleTableClick, heldTableIds],
   );
+
+  // ── Arrow-key navigation across table cards ──────────────────────
+  // Left/Right move ±1 in flat render order; Up/Down jump to the geometrically
+  // nearest card in the previous/next row (handles responsive column counts and
+  // group boundaries since it works off live DOM positions).
+  const moveFocus = useCallback(
+    (dir) => {
+      if (orderedIds.length === 0) return;
+
+      // No current focus → entering the grid: focus the first card.
+      if (focusedId == null || !orderedIds.includes(focusedId)) {
+        setFocusedId(orderedIds[0]);
+        return;
+      }
+
+      if (dir === "left" || dir === "right") {
+        const idx = orderedIds.indexOf(focusedId);
+        const next = dir === "left" ? idx - 1 : idx + 1;
+        if (next >= 0 && next < orderedIds.length) setFocusedId(orderedIds[next]);
+        return;
+      }
+
+      // Up / Down — geometry based.
+      const curEl = cardRefs.current.get(focusedId);
+      if (!curEl) return;
+      const cur = curEl.getBoundingClientRect();
+      const curCenterX = cur.left + cur.width / 2;
+      const rowTol = cur.height / 2; // rows are "different" if vertical centers differ by > half a card
+
+      let best = null;
+      let bestScore = Infinity;
+      for (const id of orderedIds) {
+        if (id === focusedId) continue;
+        const el = cardRefs.current.get(id);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        const dy = (r.top + r.height / 2) - (cur.top + cur.height / 2);
+        if (dir === "up" && dy >= -rowTol) continue;   // must be above
+        if (dir === "down" && dy <= rowTol) continue;  // must be below
+        // Prefer closest row, then closest horizontal alignment.
+        const dx = Math.abs((r.left + r.width / 2) - curCenterX);
+        const score = Math.abs(dy) * 4 + dx;
+        if (score < bestScore) { bestScore = score; best = id; }
+      }
+      if (best != null) setFocusedId(best);
+    },
+    [orderedIds, focusedId],
+  );
+
+  // Keep the focused card visible and blur the search input while navigating.
+  useEffect(() => {
+    if (focusedId == null) return;
+    const el = cardRefs.current.get(focusedId);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusedId]);
+
+  // Global arrow-key + Enter handler for grid navigation.
+  useEffect(() => {
+    function onKey(e) {
+      // Ignore when a modifier is held (don't hijack browser/OS shortcuts).
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const arrowMap = {
+        ArrowUp: "up",
+        ArrowDown: "down",
+        ArrowLeft: "left",
+        ArrowRight: "right",
+      };
+      const dir = arrowMap[e.key];
+
+      if (dir) {
+        const active = document.activeElement;
+        const inSearch = active === searchRef.current;
+        // While typing in search, let Left/Right move the text cursor; only Up/Down
+        // (or arrows once a card is already focused) take over grid navigation.
+        if (inSearch && (dir === "left" || dir === "right") && focusedId == null) return;
+        e.preventDefault();
+        if (inSearch) searchRef.current?.blur();
+        moveFocus(dir);
+        return;
+      }
+
+      if (e.key === "Enter" && focusedId != null) {
+        const table = tables.find((t) => t.id === focusedId);
+        if (!table) return;
+        e.preventDefault();
+        const status = heldTableIds.has(table.id) ? "ON_HOLD" : getTableStatus(table, Date.now());
+        const phase  = getReservationPhase(table, Date.now());
+        handleTableClick(table, status, phase);
+        return;
+      }
+
+      // Escape returns control to the search box.
+      if (e.key === "Escape" && focusedId != null) {
+        e.preventDefault();
+        setFocusedId(null);
+        searchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [moveFocus, focusedId, tables, heldTableIds, handleTableClick]);
 
   // Pickup: also enters draft mode, no table
   function handlePickup() {
@@ -788,6 +919,8 @@ export default function TableSelectView({ onOpenReprint }) {
                 onTableClick={handleTableClick}
                 now={now}
                 heldTableIds={heldTableIds}
+                focusedId={focusedId}
+                registerCardRef={registerCardRef}
               />
             ))}
           </div>

@@ -145,7 +145,11 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
       document.querySelectorAll(
         'input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly]), button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       ),
-    ).filter((el) => !el.closest("[data-radix-popper-content-wrapper]"));
+    ).filter(
+      (el) =>
+        !el.closest("[data-radix-popper-content-wrapper]") &&
+        !el.closest("[data-enter-skip]"),
+    );
     const idx = focusable.indexOf(input);
     if (idx !== -1 && focusable[idx + 1]) focusable[idx + 1].focus();
   }
@@ -209,8 +213,21 @@ function AddonPicker({ options, selectedIds, onChange }) {
   const [query, setQuery]   = useState("");
   const [open, setOpen]     = useState(false);
   const [active, setActive] = useState(0);
+  // True once the user has moved through the list with Up/Down — tells Enter to
+  // add the highlighted item even on an empty search.
+  const [navigated, setNavigated] = useState(false);
   const containerRef        = useRef(null);
   const listRef             = useRef(null);
+  const inputRef            = useRef(null);
+
+  // Leave the add-on search without picking anything: focus the form's submit
+  // (Create / Save Changes) button so the next Enter saves the item.
+  function focusSubmit() {
+    const input = inputRef.current;
+    const form = input?.closest("form");
+    const submitBtn = form?.querySelector('button[type="submit"]:not([disabled])');
+    submitBtn?.focus();
+  }
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -246,15 +263,31 @@ function AddonPicker({ options, selectedIds, onChange }) {
     onChange([...selectedIds, String(id)]);
     setQuery("");
     setActive(0);
+    setNavigated(false);
   }
   function remove(id) {
     onChange(selectedIds.filter((x) => x !== String(id)));
   }
 
   function onKeyDown(e) {
-    if (e.key === "ArrowDown")    { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-    else if (e.key === "Enter")   { e.preventDefault(); if (filtered[active]) add(filtered[active].id); }
+    if (e.key === "ArrowDown")    { e.preventDefault(); setOpen(true); setNavigated(true); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setOpen(true); setNavigated(true); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      // stopPropagation so the form's enterNav doesn't ALSO advance focus
+      // (which would skip a field) — we handle navigation ourselves here.
+      e.stopPropagation();
+      // Add the highlighted option when the user has either typed a search or
+      // moved the highlight with the arrow keys. Enter on an untouched, empty
+      // search means "no add-on" — jump focus to Create instead. After adding,
+      // focus stays in the search box so more add-ons can be picked.
+      if ((query.trim() || navigated) && filtered[active]) {
+        add(filtered[active].id);
+      } else {
+        setOpen(false);
+        focusSubmit();
+      }
+    }
     else if (e.key === "Escape")  { setOpen(false); }
   }
 
@@ -263,9 +296,10 @@ function AddonPicker({ options, selectedIds, onChange }) {
       {/* Search box + dropdown */}
       <div ref={containerRef} className="relative">
         <input
+          ref={inputRef}
           type="text"
           value={query}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); setNavigated(false); }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
           placeholder="Search add-ons to add…"
@@ -286,10 +320,13 @@ function AddonPicker({ options, selectedIds, onChange }) {
                   <div
                     key={opt.id}
                     onMouseDown={(e) => { e.preventDefault(); add(opt.id); }}
-                    onMouseEnter={() => setActive(i)}
+                    onMouseEnter={() => { setActive(i); setNavigated(true); }}
                     className={[
                       "flex items-center justify-between cursor-pointer px-3 py-2 text-sm",
-                      i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                      // Only show the highlight once the user has actually moved
+                      // through the list (arrows/hover) or typed a search — so no
+                      // row looks pre-selected when the dropdown first opens.
+                      (navigated || query.trim()) && i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
                     ].join(" ")}
                   >
                     <span>{opt.name}</span>
@@ -548,6 +585,7 @@ export default function MenuCardPage() {
   const [recipeRows, setRecipeRows] = useState([]);
   const [quickAdd, setQuickAdd] = useState({ open: false, kind: null });
   const consumeRef = useRef(null); // Rate 1 jumps straight here on Enter.
+  const itemNameRef = useRef(null); // Focus target after each successful create.
 
   const query = useQuery({
     queryKey: [...QK, qs, groupFilter, typeFilter],
@@ -638,12 +676,21 @@ export default function MenuCardPage() {
         ...buildPayload(f),
       });
       await invoke("save_menu_recipes", { menuId: newId, recipes });
+      return f.name.trim();
     },
-    onSuccess: () => {
-      toast.success("Menu card created");
+    onSuccess: async (savedName) => {
+      toast.success(`${savedName} added`);
       inv();
       queryClient.invalidateQueries({ queryKey: ["addon-items"] });
-      closeDialog();
+      // Keep the dialog open but reset to a fresh, blank form for the next item.
+      setForm(EMPTY);
+      setRecipeRows([]);
+      try {
+        const next = await invoke("get_next_master_code", { table: "menu_card" });
+        setForm((f) => ({ ...f, code: String(next) }));
+      } catch { /* leave code blank — backend will auto-assign */ }
+      // Return focus to Item Name for the next entry.
+      itemNameRef.current?.focus();
     },
     onError: (e) => toast.error(String(e)),
   });
@@ -1077,6 +1124,8 @@ export default function MenuCardPage() {
                     Item Name <span className="text-destructive">*</span>
                   </FieldLabel>
                   <Input
+                    ref={itemNameRef}
+                    autoFocus
                     value={form.name}
                     maxLength={250}
                     onChange={(e) => setF("name", e.target.value)}
@@ -1104,6 +1153,8 @@ export default function MenuCardPage() {
                     <Button
                       type="button"
                       variant="outline"
+                      tabIndex={-1}
+                      data-enter-skip
                       className="shrink-0"
                       title="Add new menu group"
                       onClick={() => setQuickAdd({ open: true, kind: "group" })}
@@ -1141,6 +1192,8 @@ export default function MenuCardPage() {
                     <Button
                       type="button"
                       variant="outline"
+                      tabIndex={-1}
+                      data-enter-skip
                       className="shrink-0"
                       title="Add new food type"
                       onClick={() => setQuickAdd({ open: true, kind: "type" })}

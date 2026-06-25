@@ -232,8 +232,9 @@ function FoodTypeLegend() {
 
 // ─── Menu Item Card ───────────────────────────────────────────────
 
-function MenuItemCard({ item, applicableRate, onClick, isAdding, cardIdx, onCardKeyDown }) {
+function MenuItemCard({ item, applicableRate, onClick, isAdding, orderQty = 0, cardIdx, onCardKeyDown }) {
   const price = selectItemRate(item, applicableRate);
+  const inOrder = orderQty > 0;
 
   return (
     <button
@@ -243,9 +244,12 @@ function MenuItemCard({ item, applicableRate, onClick, isAdding, cardIdx, onCard
       disabled={isAdding}
       data-card-idx={cardIdx}
       className={[
-        "relative flex flex-col rounded-lg border bg-card text-left",
+        "relative flex flex-col rounded-lg border text-left",
         "cursor-pointer select-none overflow-hidden",
-        "hover:border-primary/40 hover:bg-primary/5 hover:shadow-sm",
+        inOrder
+          ? "border-primary/50 bg-primary/5"
+          : "border bg-card hover:border-primary/40 hover:bg-primary/5",
+        "hover:shadow-sm",
         "active:scale-[0.97] transition-all duration-100",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         "disabled:opacity-60 disabled:pointer-events-none",
@@ -269,17 +273,28 @@ function MenuItemCard({ item, applicableRate, onClick, isAdding, cardIdx, onCard
         <span className="flex-1 text-xs font-medium leading-snug line-clamp-2 min-w-0">
           {item.item_name}
         </span>
+        {item.code != null && item.code !== "" && (
+          <span className="shrink-0 font-mono text-[10px] font-semibold text-muted-foreground tabular-nums leading-snug">
+            {item.code}
+          </span>
+        )}
       </div>
 
 
-      {/* Price + add icon */}
+      {/* Price + qty / add icon */}
       <div className="mt-auto pt-2 flex items-end justify-between pl-1">
         <span className="text-xs font-bold tabular-nums text-foreground">
           ₹{price.toFixed(2)}
         </span>
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity rounded bg-primary/10 p-0.5">
-          <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={2.5} className="text-primary" />
-        </div>
+        {inOrder ? (
+          <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold tabular-nums text-primary-foreground leading-none">
+            ×{orderQty}
+          </span>
+        ) : (
+          <div className="opacity-0 group-hover:opacity-100 transition-opacity rounded bg-primary/10 p-0.5">
+            <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={2.5} className="text-primary" />
+          </div>
+        )}
       </div>
 
       {/* Liquor badge */}
@@ -326,7 +341,7 @@ function CenterSkeleton() {
 
 // ─── Main component ───────────────────────────────────────────────
 
-export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicableRate, addingId, onSearchRef }) {
+export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicableRate, addingId, menuQtyMap = {}, onSearchRef }) {
   const { selectedMenuGroupId, selectedMenuCategoryId } = useBillingContext();
   const [search, setSearch] = useState("");
   const searchRef = useRef(null);
@@ -522,6 +537,7 @@ export default function MenuCenterPanel({ menu, isLoading, onAddItem, applicable
                 applicableRate={applicableRate}
                 onClick={onAddItem}
                 isAdding={addingId === item.id}
+                orderQty={menuQtyMap[item.id] ?? 0}
                 cardIdx={idx}
                 totalCards={displayItems.length}
                 onCardKeyDown={(e) => {

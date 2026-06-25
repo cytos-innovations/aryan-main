@@ -147,7 +147,7 @@ export const billingService = {
    * @param {Array<{payment_mode,amount,reference_no}>} params.partPayments
    * @param {number} params.writeOffAmount
    */
-  settleBill: ({ sessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount, customerName, customerMobile, customerAddress }) =>
+  settleBill: ({ sessionId, billId, paymentType, paymentAmount, referenceNo, partPayments, writeOffAmount, tipAmount, customerName, customerMobile, customerAddress }) =>
     invoke("settle_bill", {
       sessionId,
       billId,
@@ -156,6 +156,7 @@ export const billingService = {
       referenceNo:     referenceNo     ?? null,
       partPayments:    partPayments    ?? [],
       writeOffAmount:  writeOffAmount  ?? 0,
+      tipAmount:       tipAmount       ?? 0,
       customerName:    customerName    ?? null,
       customerMobile:  customerMobile  ?? null,
       customerAddress: customerAddress ?? null,
