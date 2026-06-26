@@ -1211,12 +1211,13 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
   const updateInfo  = useUpdateSessionInfo(sessionId);
   const updateParty = useUpdateSessionParty(sessionId);
   const {
-    draftCustomerId, draftCustomerName, draftCustomerMobile, draftWaiterName,
+    draftCustomerId, draftCustomerName, draftCustomerMobile, draftWaiterName, modifyMode,
   } = useBillingContext();
 
   const currentOrderType = isDraft ? draftOrderType : session?.order_type;
   const currentCovers    = isDraft ? draftCovers    : (session?.covers ?? 1);
-  const isClosed         = !isDraft && session?.session_status === "BILL_PRINTED";
+  // Modify mode keeps a bill-printed session editable (covers, etc.).
+  const isClosed         = !isDraft && session?.session_status === "BILL_PRINTED" && !modifyMode;
   // Customer/waiter can still be assigned after bill is printed (until settled)
   const isPartyLocked    = !isDraft && session?.session_status === "SETTLED";
 
@@ -1328,8 +1329,11 @@ export default function OrderRightPanel({
   selectedTableName,
   onEditAddons,
 }) {
+  const { modifyMode } = useBillingContext();
   const tableName     = session?.table_name ?? selectedTableName ?? null;
-  const isBillPrinted = !isDraft && session?.session_status === "BILL_PRINTED";
+  // In modify mode a bill-printed session is intentionally editable, so item
+  // rows are not locked (they route removals through the existing void-with-reason flow).
+  const isBillPrinted = !isDraft && session?.session_status === "BILL_PRINTED" && !modifyMode;
   // Totals widget shows only KOT-sent items (what will actually appear on the bill)
   const totalsItems   = billedItems ?? items;
 

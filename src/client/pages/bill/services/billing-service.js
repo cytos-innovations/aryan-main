@@ -65,7 +65,7 @@ export const billingService = {
   getOrderItems: (sessionId) =>
     invoke("get_order_items", { sessionId }),
 
-  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons, isComplimentary, unitRate }) =>
+  addOrderItem: ({ sessionId, menuId, quantity, specialInstruction, addons, isComplimentary, unitRate, asCorrection }) =>
     invoke("add_order_item", {
       sessionId,
       menuId,
@@ -77,6 +77,8 @@ export const billingService = {
       isComplimentary:     isComplimentary     ?? false,
       // Optional per-unit rate override (e.g. "As Per Size"); null → use master rate
       unitRate:            unitRate ?? null,
+      // Modify Bill: mark the line billable-without-KOT (a correction)
+      asCorrection:        asCorrection ?? false,
     }),
 
   updateOrderItemQty: (orderItemId, quantity) =>
@@ -133,6 +135,24 @@ export const billingService = {
   generateBill: (sessionId, billDiscountAmount, billNetAmount) =>
     invoke("generate_bill", {
       sessionId,
+      billDiscountAmount: billDiscountAmount ?? null,
+      billNetAmount:      billNetAmount      ?? null,
+    }),
+
+  /**
+   * Save corrections made to a bill-printed table (Modify Bill) and write the
+   * audit log. Re-aggregates the bill via the backend's bill-update path.
+   */
+  saveModifiedBill: ({ sessionId, reason, changes, oldNetAmount, newNetAmount, oldItemCount, newItemCount, modifiedBy, billDiscountAmount, billNetAmount }) =>
+    invoke("save_modified_bill", {
+      sessionId,
+      reason,
+      changesJson:        changes        ?? null,
+      oldNetAmount:       oldNetAmount    ?? 0,
+      newNetAmount:       newNetAmount    ?? 0,
+      oldItemCount:       oldItemCount    ?? 0,
+      newItemCount:       newItemCount    ?? 0,
+      modifiedBy:         modifiedBy      ?? null,
       billDiscountAmount: billDiscountAmount ?? null,
       billNetAmount:      billNetAmount      ?? null,
     }),

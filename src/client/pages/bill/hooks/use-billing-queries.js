@@ -603,6 +603,23 @@ export function useGenerateBill(sessionId) {
   });
 }
 
+export function useSaveModifiedBill(sessionId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: billingService.saveModifiedBill,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.ORDER_ITEMS(sessionId) });
+      qc.invalidateQueries({ queryKey: BQK.FLOOR_VIEW });
+      qc.invalidateQueries({ queryKey: BQK.TABLES });
+      toast.success("Bill modified & saved");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+}
+
 export function useSettleBill(sessionId) {
   const qc = useQueryClient();
   return useMutation({

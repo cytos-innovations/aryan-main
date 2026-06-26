@@ -41,11 +41,13 @@ import {
   useCancelReservation,
   useEmployeesForBilling,
   useUpdateSessionParty,
+  useSaveModifiedBill,
 } from "../hooks/use-billing-queries";
+import { useAuth } from "@/lib/auth";
 import { billingService } from "../services/billing-service";
 import { ORDER_TYPE, BILLING_VIEW, BQK, PAYMENT_TYPE } from "../constants/billing";
 import { saveHold, clearHold } from "../utils/hold-storage";
-import { selectItemRate, getReservationPhase, calcBillTotals, calcDiscountedTotals, recalcSessionDisc, buildMenuLookups, buildCategories } from "../utils/billing-calc";
+import { selectItemRate, getReservationPhase, calcBillTotals, calcDiscountedTotals, recalcSessionDisc, buildMenuLookups, buildCategories, resolveBillDiscount } from "../utils/billing-calc";
 
 import MenuCenterPanel, { pushRecentId } from "../panels/menu-center";
 import OrderRightPanel from "../panels/order-right";
@@ -120,7 +122,7 @@ const ORDER_TYPE_CFG = {
 
 // ─── Session header bar ───────────────────────────────────────
 
-function SessionHeader({ session, isDraft, selectedTableName, selectedTableGroupName, onBack, pendingReservation, onArrivedPrefill, onComplimentary, canComplimentary }) {
+function SessionHeader({ session, isDraft, modifyMode, selectedTableName, selectedTableGroupName, onBack, pendingReservation, onArrivedPrefill, onComplimentary, canComplimentary }) {
   const now        = useNow();
   const elapsed    = useMemo(() => calcElapsed(session?.opened_at, now), [session?.opened_at, now]);
   const openedTime = useMemo(() => fmtTime(session?.opened_at),          [session?.opened_at]);
@@ -191,6 +193,13 @@ function SessionHeader({ session, isDraft, selectedTableName, selectedTableGroup
               </span>
             )}
           </>
+        )}
+
+        {modifyMode && (
+          <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold bg-amber-200 text-amber-900 dark:bg-amber-800/60 dark:text-amber-100 inline-flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-600 dark:bg-amber-300" />
+            Modify Mode
+          </span>
         )}
 
         <div className="flex-1" />
@@ -321,6 +330,7 @@ export default function OrderEntryView() {
     draftCustomerId,
     draftWaiterId,
     isRestoredFromHold,
+    modifyMode,
     addDraftItem,
     updateDraftQty,
     removeDraftItem,
@@ -396,6 +406,15 @@ export default function OrderEntryView() {
   const billSummary  = useBillSummary(activeSessionId);
   const settleBillMut = useSettleBill(activeSessionId);
   const updatePartyMut = useUpdateSessionParty(activeSessionId);
+  const saveModifiedMut = useSaveModifiedBill(activeSessionId);
+  const { auth } = useAuth();
+
+  // ── Modify Bill state ──────────────────────────────────────
+  const [modifyReasonOpen, setModifyReasonOpen] = useState(false);
+  const [modifyReason,     setModifyReason]     = useState("");
+  // Baseline snapshot of the bill as it was when modify mode was entered, used
+  // to build the before/after diff written to the modify log.
+  const modifyBaseline = useRef(null);
 
   // Add-ons
   const addonsQuery     = useBillingAddons();
@@ -477,6 +496,27 @@ export default function OrderEntryView() {
   // Discount is applied BEFORE tax (Indian GST law): the bill-level discount
   // reduces each item's taxable base and tax is recomputed on the net value.
   const totals    = useMemo(() => calcBillTotals(sentItems), [sentItems]);
+
+  // Capture the original bill state once when entering modify mode, so the save
+  // step can record an accurate before→after diff in the modify log.
+  useEffect(() => {
+    if (!modifyMode || isDraft) { modifyBaseline.current = null; return; }
+    if (modifyBaseline.current) return;            // already captured
+    if (isLoadingItems || !items.length) return;   // wait for items to load
+    modifyBaseline.current = {
+      netAmount: netAmount,
+      itemCount: sentItems.length,
+      lines: sentItems.map((i) => ({
+        menu_id:   i.menu_id,
+        item_name: i.item_name,
+        quantity:  Number(i.quantity) || 0,
+        rate:      Number(i.rate) || 0,
+      })),
+      customerName: session?.customer_name ?? null,
+      waiterName:   session?.waiter_name ?? null,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modifyMode, isDraft, isLoadingItems, items.length]);
   // Recompute the discount live from saved intent so Settle always matches the
   // right-panel total as items change.
   const liveDisc  = useMemo(
@@ -587,7 +627,9 @@ export default function OrderEntryView() {
   // Entry point from the menu grid. If the item offers add-ons, prompt for them;
   // otherwise add instantly (fast path unchanged).
   function handleAddItem(menuItem) {
-    if (!isDraft && session?.session_status === "BILL_PRINTED") return;
+    // A bill-printed session is normally locked, EXCEPT in modify mode where
+    // added items become billing corrections (no KOT, immediately billable).
+    if (!isDraft && session?.session_status === "BILL_PRINTED" && !modifyMode) return;
     if (menuItem.addons?.length > 0) {
       setAddonTarget({ mode: "add", menuItem });
       return;
@@ -623,7 +665,7 @@ export default function OrderEntryView() {
     if (!activeSessionId || !session) return;
     setAddingId(menuItem.id);
     addItemMut.mutate(
-      { sessionId: activeSessionId, menuId: menuItem.id, quantity: 1, specialInstruction: null, addons },
+      { sessionId: activeSessionId, menuId: menuItem.id, quantity: 1, specialInstruction: null, addons, asCorrection: modifyMode },
       {
         onSuccess: () => {
           pushRecentId(menuItem.id);
@@ -694,6 +736,97 @@ export default function OrderEntryView() {
           // Clear persisted discount after successful settlement
           if (discKey) { try { localStorage.removeItem(discKey); } catch { /* ignore */ } }
           clearSession();
+        },
+      },
+    );
+  }
+
+  // ── Modify Bill: save corrections + audit log ──────────────
+  // Open the reason prompt (required) before saving.
+  function requestModifySave() {
+    setModifyReason("");
+    setModifyReasonOpen(true);
+  }
+
+  // Build a compact before→after diff of the lines for the audit log.
+  function buildModifyChanges() {
+    const base = modifyBaseline.current;
+    const before = base?.lines ?? [];
+    const after = sentItems.map((i) => ({
+      menu_id:   i.menu_id,
+      item_name: i.item_name,
+      quantity:  Number(i.quantity) || 0,
+      rate:      Number(i.rate) || 0,
+    }));
+
+    // Net quantity per menu_id, before vs after → added / removed / changed
+    const sumByMenu = (lines) => {
+      const m = {};
+      for (const l of lines) {
+        if (!m[l.menu_id]) m[l.menu_id] = { item_name: l.item_name, qty: 0 };
+        m[l.menu_id].qty += l.quantity;
+      }
+      return m;
+    };
+    const b = sumByMenu(before);
+    const a = sumByMenu(after);
+    const ids = new Set([...Object.keys(b), ...Object.keys(a)]);
+    const itemChanges = [];
+    for (const id of ids) {
+      const bq = b[id]?.qty ?? 0;
+      const aq = a[id]?.qty ?? 0;
+      if (bq === aq) continue;
+      itemChanges.push({
+        menu_id:   Number(id),
+        item_name: a[id]?.item_name ?? b[id]?.item_name ?? "",
+        old_qty:   bq,
+        new_qty:   aq,
+        action:    bq === 0 ? "added" : aq === 0 ? "removed" : "qty_changed",
+      });
+    }
+
+    return {
+      items: itemChanges,
+      discount: {
+        before: base?.netAmount ?? null,
+        after:  netAmount,
+        applied_pct: discountPercent,
+      },
+      party: {
+        old_customer: base?.customerName ?? null,
+        new_customer: session?.customer_name ?? null,
+        old_waiter:   base?.waiterName ?? null,
+        new_waiter:   session?.waiter_name ?? null,
+      },
+    };
+  }
+
+  function handleModifySave() {
+    const reason = modifyReason.trim();
+    if (!reason) {
+      toast.error("Please enter a reason for modifying the bill.");
+      return;
+    }
+    const base = modifyBaseline.current;
+    const billDiscountAmount = sessionDisc ? resolveBillDiscount(sessionDisc) : null;
+    saveModifiedMut.mutate(
+      {
+        sessionId: activeSessionId,
+        reason,
+        changes:      buildModifyChanges(),
+        oldNetAmount: base?.netAmount ?? 0,
+        newNetAmount: netAmount,
+        oldItemCount: base?.itemCount ?? 0,
+        newItemCount: sentItems.length,
+        modifiedBy:   auth?.user?.id ?? null,
+        billDiscountAmount,
+        billNetAmount: sessionDisc?.netAmt ?? undefined,
+      },
+      {
+        onSuccess: () => {
+          setModifyReasonOpen(false);
+          clearSession();
+          setView(BILLING_VIEW.TABLE_SELECT);
         },
       },
     );
@@ -827,6 +960,7 @@ export default function OrderEntryView() {
       <SessionHeader
         session={session}
         isDraft={isDraft}
+        modifyMode={modifyMode}
         selectedTableName={selectedTableName}
         selectedTableGroupName={selectedTableGroupName}
         onBack={handleBack}
@@ -904,6 +1038,9 @@ export default function OrderEntryView() {
             discountPercent={discountPercent}
             sessionDisc={sessionDisc}
             onDiscountChange={saveSessionDisc}
+            modifyMode={modifyMode}
+            onModifySave={requestModifySave}
+            isModifySaving={saveModifiedMut.isPending}
           />
         </div>
       </div>
@@ -993,6 +1130,41 @@ export default function OrderEntryView() {
               disabled={cancelMut.isPending}
             >
               {isDraft ? "Discard" : cancelMut.isPending ? "Cancelling…" : "Cancel Order"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Modify Bill: mandatory reason before saving ── */}
+      <AlertDialog open={modifyReasonOpen} onOpenChange={(o) => { if (!o && !saveModifiedMut.isPending) setModifyReasonOpen(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reason for Modifying Bill</AlertDialogTitle>
+            <AlertDialogDescription>
+              This change will be logged for the owner to review. Please describe why this
+              bill is being modified (e.g. "Item added by mistake", "Customer requested extra dish").
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <textarea
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+            value={modifyReason}
+            onChange={(e) => setModifyReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleModifySave(); }
+            }}
+            rows={3}
+            maxLength={500}
+            placeholder="Enter reason…"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none"
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saveModifiedMut.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleModifySave(); }}
+              disabled={saveModifiedMut.isPending || !modifyReason.trim()}
+            >
+              {saveModifiedMut.isPending ? "Saving…" : "Save & Print"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

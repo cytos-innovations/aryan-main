@@ -14,9 +14,11 @@ import {
   HotelBellIcon,
   PrinterIcon,
   Exchange01Icon,
+  PencilEdit01Icon,
 } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
 
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -492,13 +494,20 @@ function ReminderSettingsDialog({ open, onOpenChange }) {
 
 export default function TableSelectView({ onOpenReprint }) {
   const navigate = useNavigate();
-  const { setSession } = useBillingContext();
+  const { setSession, modifyModeOn, setModifyModeOn } = useBillingContext();
+  const { can } = useAuth();
+  const canModifyBill = can("modify-bill:view");
 
   const [search,          setSearch]          = useState("");
   const [groupFilter,     setGroupFilter]     = useState("__all__");
   const [reservationOpen, setReservationOpen] = useState(false);
   const [reminderOpen,    setReminderOpen]    = useState(false);
   const [tableShiftOpen,  setTableShiftOpen]  = useState(false);
+  // Modify Bill — when ON, only bill-printed tables are shown and clicking one
+  // opens it in modify mode for corrections. Lives in billing-context so it
+  // persists across the floor → order-entry → floor view swap.
+  const modifyMode = modifyModeOn;
+  const setModifyMode = setModifyModeOn;
   // Re-render trigger when hold state changes
   const [holdVersion, setHoldVersion] = useState(0);
   // Keyboard navigation: id of the currently focused table card (null = none / search has focus)
@@ -566,9 +575,16 @@ export default function TableSelectView({ onOpenReprint }) {
     }
   }, [groupNames, groupFilter]);
 
+  // Turn modify mode off if the permission disappears (e.g. app switch).
+  useEffect(() => {
+    if (modifyMode && !canModifyBill) setModifyMode(false);
+  }, [modifyMode, canModifyBill]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return tables.filter((t) => {
+      // Modify mode: only bill-printed tables are eligible for correction.
+      if (modifyMode && getTableStatus(t, now) !== "BILL_PRINTED") return false;
       const group = t.table_group_name ?? "Ungrouped";
       if (groupFilter !== "__all__" && group !== groupFilter) return false;
       if (!q) return true;
@@ -578,7 +594,7 @@ export default function TableSelectView({ onOpenReprint }) {
         String(t.code ?? "").toLowerCase().includes(q)
       );
     });
-  }, [tables, search, groupFilter]);
+  }, [tables, search, groupFilter, modifyMode, now]);
 
 
   const groups = useMemo(() => {
@@ -689,12 +705,18 @@ export default function TableSelectView({ onOpenReprint }) {
         return;
       }
 
-      // OCCUPIED or BILL_PRINTED — resume existing session
+      // OCCUPIED or BILL_PRINTED — resume existing session.
+      // In modify mode, only bill-printed tables reach here; flag the session so
+      // order entry unlocks correction behaviours.
       if (table.session_id) {
-        setSession(table.session_id, table.id, table.table_name, undefined, undefined, undefined, { tableGroupName: table.table_group_name });
+        const enterModify = modifyMode && status === "BILL_PRINTED";
+        setSession(table.session_id, table.id, table.table_name, undefined, undefined, undefined, {
+          tableGroupName: table.table_group_name,
+          modifyMode:     enterModify,
+        });
       }
     },
-    [setSession],
+    [setSession, modifyMode],
   );
 
   // Direct-open on Enter: if search is purely numeric and matches a table code, open it
@@ -844,6 +866,25 @@ export default function TableSelectView({ onOpenReprint }) {
           Print Table
           <span className="text-[9px] font-mono px-1 py-px rounded bg-muted text-muted-foreground leading-none">F9</span>
         </Button>
+        {/* Modify Bill — only for users granted the permission. Toggle restricts the
+            floor to bill-printed tables and opens them in correction mode. */}
+        {canModifyBill && (
+          <button
+            type="button"
+            onClick={() => setModifyMode(!modifyMode)}
+            className={[
+              "h-8 px-2.5 shrink-0 inline-flex items-center gap-1.5 rounded-md border text-xs font-medium transition-colors",
+              modifyMode
+                ? "border-amber-400 bg-amber-100 text-amber-800 dark:border-amber-600 dark:bg-amber-900/40 dark:text-amber-200"
+                : "border-border bg-card text-foreground/80 hover:bg-muted/60",
+            ].join(" ")}
+            title={modifyMode ? "Modify mode is ON — showing bill-printed tables only" : "Turn on Modify Bill mode"}
+          >
+            <HugeiconsIcon icon={PencilEdit01Icon} size={14} strokeWidth={2} />
+            Modify Bill
+            <Switch checked={modifyMode} className="ml-0.5 pointer-events-none scale-90" />
+          </button>
+        )}
         <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => setReminderOpen(true)} title="Reservation reminder settings">
           <HugeiconsIcon icon={HotelBellIcon} size={15} strokeWidth={2} />
         </Button>
@@ -920,6 +961,16 @@ export default function TableSelectView({ onOpenReprint }) {
         )}
       </div>
 
+      {/* ── Modify-mode banner ── */}
+      {modifyMode && (
+        <div className="shrink-0 bg-amber-100/80 dark:bg-amber-900/30 border-b border-amber-300 dark:border-amber-700 px-4 py-1.5 flex items-center gap-2">
+          <HugeiconsIcon icon={PencilEdit01Icon} size={13} strokeWidth={2} className="text-amber-700 dark:text-amber-300 shrink-0" />
+          <span className="text-[11px] font-medium text-amber-800 dark:text-amber-200">
+            Modify Bill mode — showing bill-printed tables only. Open a table to add/remove items, change discount, customer or waiter, then Print + Save.
+          </span>
+        </div>
+      )}
+
       {/* ── Content ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {floorQuery.isLoading ? (
@@ -936,9 +987,11 @@ export default function TableSelectView({ onOpenReprint }) {
             <HugeiconsIcon icon={TableIcon} size={44} strokeWidth={1.5} className="opacity-30" />
             <div className="text-center">
               <p className="text-sm font-medium">
-                {search || groupFilter !== "__all__"
-                  ? "No tables match your filters."
-                  : "No tables configured."}
+                {modifyMode
+                  ? "No bill-printed tables to modify."
+                  : search || groupFilter !== "__all__"
+                    ? "No tables match your filters."
+                    : "No tables configured."}
               </p>
               {!search && groupFilter === "__all__" && (
                 <p className="text-xs mt-1 text-muted-foreground/70">

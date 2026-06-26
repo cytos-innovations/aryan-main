@@ -1225,6 +1225,37 @@ CREATE TABLE table_session_history (
     updated_by INTEGER REFERENCES users(id)
 );
 
+-- MODIFIED BILL LOG
+-- Audit trail for the "Modify Bill" feature: records every correction made to a
+-- bill-printed table before settlement. changes_json holds the full before/after
+-- diff (items added/removed/qty, discount, customer, waiter) so the owner can
+-- later review what was changed and why.
+
+CREATE TABLE IF NOT EXISTS modified_bill_log (
+    id               SERIAL PRIMARY KEY,
+    code             BIGSERIAL UNIQUE,
+    order_session_id INTEGER REFERENCES order_session(id),
+    bill_id          INTEGER REFERENCES bill_master(id),
+    table_id         INTEGER REFERENCES restaurant_table(id),
+    old_net_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+    new_net_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+    old_item_count   INTEGER NOT NULL DEFAULT 0,
+    new_item_count   INTEGER NOT NULL DEFAULT 0,
+    reason           TEXT NOT NULL,
+    changes_json     JSONB,
+    -- Plain INTEGERs (no users FK): the acting user may come from another
+    -- application's user store (e.g. restaurant-management superadmin).
+    modified_by      INTEGER,
+    modified_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Standard Audit & Status Columns
+    is_active        INTEGER DEFAULT 1,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by       INTEGER,
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by       INTEGER
+);
+
 -- USER DISCOUNT CAPS
 -- Per-user maximum discount percentages enforced at billing
 

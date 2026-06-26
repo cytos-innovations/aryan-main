@@ -33,7 +33,7 @@ const TABS = [
 const TRANSACTION_MODULE_GROUPS = [
   {
     label: "Restaurant",
-    modules: ["cal-incentive"],
+    modules: ["cal-incentive", "modify-bill"],
   },
 ];
 
@@ -69,9 +69,10 @@ const MODULE_DISPLAY_NAMES = {
   "lodge-market-segment":   "Market Segment",
   "lodge-plan":             "Plan Master",
   "acc-tax-master":         "Tax Master",
+  "modify-bill":            "Modify Bill",
 };
 
-const TRANSACTION_MODULES = new Set(["cal-incentive"]);
+const TRANSACTION_MODULES = new Set(["cal-incentive", "modify-bill"]);
 
 function getTabForPerm(permName) {
   const [module] = permName.split(":");

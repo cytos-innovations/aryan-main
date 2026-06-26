@@ -1215,9 +1215,13 @@ pub async fn add_order_item(
     is_complimentary:    Option<bool>,
     // Optional per-unit rate override (e.g. "As Per Size"); None → master rate.
     unit_rate:           Option<f64>,
+    // Modify Bill: when true the line is marked KOT-sent immediately (billable
+    // without going to the kitchen) — it's a billing correction, not a new order.
+    as_correction:       Option<bool>,
 ) -> Result<i32, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
     let is_comp = is_complimentary.unwrap_or(false);
+    let as_correction = as_correction.unwrap_or(false);
 
     // Resolve applicable_rate for this session's table
     let applicable_rate: i32 = sqlx::query_scalar(
@@ -1308,7 +1312,9 @@ pub async fn add_order_item(
     // Lines carrying add-ons are never merged: the same item with a different add-on
     // set must remain a distinct line. Complimentary lines are also never merged with
     // a paid line. Only merge plain (no add-on, non-comp) pending lines.
-    let existing = if addon_list.is_empty() && !is_comp {
+    // Correction lines (modify mode) are never merged — each is inserted as a
+    // distinct, immediately-billable line so the change is clearly auditable.
+    let existing = if addon_list.is_empty() && !is_comp && !as_correction {
         sqlx::query(
             "SELECT id, quantity::float8 AS quantity, rate::float8 AS rate
              FROM   order_item
@@ -1368,6 +1374,9 @@ pub async fn add_order_item(
         return Ok(existing_id);
     }
 
+    // Correction lines are billable immediately (kot_status = 'SENT') and never
+    // sent to the kitchen; normal lines start PENDING until a KOT is punched.
+    let kot_status = if as_correction { "SENT" } else { "PENDING" };
     let item_id: i32 = sqlx::query_scalar(
         "INSERT INTO order_item
             (order_session_id, menu_id, item_name, quantity, rate, addon_rate,
@@ -1375,7 +1384,7 @@ pub async fn add_order_item(
              tax_name, tax_percentage, tax_amount, taxable_amount, final_amount,
              food_type_id, kitchen_section_id, special_instruction,
              is_complimentary, kot_status, item_status)
-         VALUES ($1,$2,$3,$4,$5,$6, $7,0,0, $8,$9,$10,$11,$12, $13,$14,$15, $16, 'PENDING','ACTIVE')
+         VALUES ($1,$2,$3,$4,$5,$6, $7,0,0, $8,$9,$10,$11,$12, $13,$14,$15, $16, $17,'ACTIVE')
          RETURNING id",
     )
     .bind(session_id)
@@ -1394,6 +1403,7 @@ pub async fn add_order_item(
     .bind(kitchen_section_id)
     .bind(special_instruction)
     .bind(is_comp)
+    .bind(kot_status)
     .fetch_one(&pool)
     .await
     .map_err(|e| format!("Failed to add order item: {e}"))?;
@@ -2325,6 +2335,47 @@ pub async fn generate_bill(
         .await
         .ok();
 
+        // Refresh the stored bill lines + tax breakdown so a re-bill (e.g. after a
+        // Modify Bill correction) reflects the current items. Delete + re-copy keeps
+        // bill_item / bill_tax_detail consistent with the updated order_item set; for
+        // an unchanged reprint this simply re-writes identical rows.
+        sqlx::query("DELETE FROM bill_item WHERE bill_id = $1").bind(bid).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM bill_tax_detail WHERE bill_id = $1").bind(bid).execute(&pool).await.ok();
+
+        sqlx::query(
+            "INSERT INTO bill_item
+                (bill_id, order_item_id, menu_id, item_name, quantity, rate,
+                 gross_amount, discount_amount, tax_amount, final_amount, kitchen_section_id,
+                 is_complimentary)
+             SELECT $1, id, menu_id, item_name, quantity, rate,
+                    gross_amount,
+                    ROUND((discount_amount + taxable_amount * (1 - $3))::numeric, 2),
+                    ROUND((tax_amount * $3)::numeric, 2),
+                    ROUND((taxable_amount * $3 + tax_amount * $3)::numeric, 2),
+                    kitchen_section_id,
+                    COALESCE(is_complimentary, FALSE)
+             FROM   order_item
+             WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'",
+        )
+        .bind(bid).bind(session_id).bind(tax_factor)
+        .execute(&pool).await
+        .map_err(|e| format!("Failed to refresh bill items: {e}"))?;
+
+        sqlx::query(
+            "INSERT INTO bill_tax_detail (bill_id, tax_name, tax_percentage, taxable_amount, tax_amount)
+             SELECT $1,
+                    COALESCE(tax_name, 'No Tax'),
+                    MAX(tax_percentage),
+                    ROUND((SUM(taxable_amount) * $3)::numeric, 2),
+                    ROUND((SUM(tax_amount) * $3)::numeric, 2)
+             FROM   order_item
+             WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'
+             GROUP  BY tax_name",
+        )
+        .bind(bid).bind(session_id).bind(tax_factor)
+        .execute(&pool).await
+        .map_err(|e| format!("Failed to refresh bill tax detail: {e}"))?;
+
         return Ok(bid);
     }
 
@@ -2429,6 +2480,113 @@ pub async fn generate_bill(
     )
     .bind(session_id)
     .bind(format!("Bill {} generated", bill_id))
+    .execute(&pool)
+    .await
+    .ok();
+
+    Ok(bill_id)
+}
+
+// ── Modify Bill (correction of a bill-printed table) ──────────
+
+/// Re-aggregate the bill for a BILL_PRINTED session after corrections (items
+/// added/removed, discount/customer/waiter changes) and write an audit row to
+/// modified_bill_log. The actual item edits are persisted by the normal
+/// add/cancel/update commands beforehand — this command finalises the bill
+/// totals and records WHO changed WHAT and WHY.
+///
+/// A settled session can never be modified: the guard below rejects it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn save_modified_bill(
+    app:                  tauri::AppHandle,
+    state:                tauri::State<'_, AppState>,
+    session_id:           i32,
+    reason:               String,
+    changes_json:         Option<serde_json::Value>,
+    old_net_amount:       Option<f64>,
+    new_net_amount:       Option<f64>,
+    old_item_count:       Option<i32>,
+    new_item_count:       Option<i32>,
+    modified_by:          Option<i32>,
+    // Re-aggregation inputs (same as generate_bill so totals match the UI)
+    bill_discount_amount: Option<f64>,
+    bill_net_amount:      Option<f64>,
+) -> Result<i32, String> {
+    let reason = reason.trim().to_string();
+    if reason.is_empty() {
+        return Err("A reason is required to modify a bill.".to_string());
+    }
+
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Guard: only a bill-printed (not settled / cancelled) session can be modified.
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT session_status FROM order_session WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|e| format!("Session lookup failed: {e}"))?;
+
+    match status.as_deref() {
+        Some("BILL_PRINTED") => {}
+        Some("SETTLED")  => return Err("This bill is already settled and can no longer be modified.".to_string()),
+        Some(other)      => return Err(format!("Only bill-printed tables can be modified (status: {other}).")),
+        None             => return Err("Session not found.".to_string()),
+    }
+
+    let table_id: Option<i32> = sqlx::query_scalar(
+        "SELECT table_id FROM order_session WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    // Re-run bill aggregation. generate_bill takes the BILL_PRINTED path that
+    // updates the existing bill_master / bill_item / bill_tax_detail rows in
+    // place and drops any un-KOT'd lines, so the stored bill reflects the edits.
+    let bill_id = generate_bill(
+        app.clone(),
+        state.clone(),
+        session_id,
+        bill_discount_amount,
+        bill_net_amount,
+    )
+    .await?;
+
+    // Write the audit row. Audit failures must not lose the (already-saved) edit,
+    // but here the log IS the point of the feature — surface a hard error.
+    sqlx::query(
+        "INSERT INTO modified_bill_log
+            (order_session_id, bill_id, table_id, old_net_amount, new_net_amount,
+             old_item_count, new_item_count, reason, changes_json, modified_by, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)",
+    )
+    .bind(session_id)
+    .bind(bill_id)
+    .bind(table_id)
+    .bind(old_net_amount.unwrap_or(0.0))
+    .bind(new_net_amount.unwrap_or(0.0))
+    .bind(old_item_count.unwrap_or(0))
+    .bind(new_item_count.unwrap_or(0))
+    .bind(&reason)
+    .bind(changes_json)
+    .bind(modified_by)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to write modify-bill log: {e}"))?;
+
+    // Audit trail in the shared status history too.
+    sqlx::query(
+        "INSERT INTO order_status_history (order_session_id, status_name, remarks)
+         VALUES ($1, 'BILL_MODIFIED', $2)",
+    )
+    .bind(session_id)
+    .bind(format!("Bill modified: {reason}"))
     .execute(&pool)
     .await
     .ok();

@@ -44,6 +44,15 @@ const initialState = {
   draftWaiterName:     null,
   isRestoredFromHold:  false, // true when this draft was restored from a hold (Hold btn → Release)
 
+  // Modify Bill — true when the session was opened in modify mode (correcting a
+  // bill-printed table). Gates the modify-only behaviours in order entry.
+  modifyMode:          false,
+
+  // Modify Bill toggle — the floor-level switch. Persisted in context (not local
+  // component state) so it survives the floor → order-entry → floor view swap and
+  // stays ON while the user corrects several bills in a row.
+  modifyModeOn:        false,
+
   // KOT messages for existing-session PENDING items, held in UI until KOT punch.
   // Keyed by order_item_id → message string (null = cleared).
   pendingItemKotMsgs:  {},
@@ -73,6 +82,7 @@ function billingReducer(state, action) {
         draftWaiterId:       action.payload.draftWaiterId     ?? null,
         draftWaiterName:     null,
         isRestoredFromHold:  action.payload.isRestoredFromHold ?? false,
+        modifyMode:          action.payload.modifyMode        ?? false,
       };
 
     case "SET_VIEW":
@@ -248,8 +258,13 @@ function billingReducer(state, action) {
         ...(action.payload.waiterName     !== undefined ? { draftWaiterName:     action.payload.waiterName }     : {}),
       };
 
+    case "SET_MODIFY_MODE_ON":
+      return { ...state, modifyModeOn: action.payload };
+
     case "CLEAR_SESSION":
-      return { ...initialState };
+      // Preserve the floor-level Modify Bill toggle across back-navigation so the
+      // user can correct several bills without re-enabling it each time.
+      return { ...initialState, modifyModeOn: state.modifyModeOn };
 
     default:
       return state;
@@ -331,6 +346,10 @@ export function BillingProvider({ children }) {
     dispatch({ type: "SET_DRAFT_CONFIG", payload: cfg }),
   []);
 
+  const setModifyModeOn = useCallback((on) =>
+    dispatch({ type: "SET_MODIFY_MODE_ON", payload: !!on }),
+  []);
+
   return (
     <BillingContext.Provider value={{
       ...state,
@@ -351,6 +370,7 @@ export function BillingProvider({ children }) {
       setPendingItemKotMsg,
       clearPendingItemKotMsgs,
       setDraftConfig,
+      setModifyModeOn,
     }}>
       {children}
     </BillingContext.Provider>

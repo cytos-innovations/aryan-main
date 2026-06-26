@@ -80,7 +80,7 @@ function ActionBtn({ icon, label, shortcut, onClick, disabled, className = "", v
 
 function BillingModePanel({
   canKot, kotPending, checkKotPending,
-  canBill, billPending,
+  canBill, billPending, modifyMode,
   canSettle,
   netAmount,
   pendingKot,
@@ -90,36 +90,43 @@ function BillingModePanel({
 }) {
   return (
     <div className="flex items-stretch gap-1.5 px-2 py-1.5">
-      <ActionBtn
-        icon={PrinterIcon}
-        label="KOT"
-        shortcut="+"
-        onClick={onKot}
-        disabled={!canKot || kotPending}
-        className="border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/40"
-      />
-      <ActionBtn
-        icon={PrinterIcon}
-        label="KOT+Print"
-        shortcut="Home"
-        onClick={onCheckKot}
-        disabled={!canKot || checkKotPending}
-        className="border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/40"
-        data-pos-action="kotprint"
-        onKeyDown={makePosTabHandler("kotprint")}
-      />
+      {/* KOT actions are hidden in modify mode — corrections never go to the kitchen */}
+      {!modifyMode && (
+        <>
+          <ActionBtn
+            icon={PrinterIcon}
+            label="KOT"
+            shortcut="+"
+            onClick={onKot}
+            disabled={!canKot || kotPending}
+            className="border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/40"
+          />
+          <ActionBtn
+            icon={PrinterIcon}
+            label="KOT+Print"
+            shortcut="Home"
+            onClick={onCheckKot}
+            disabled={!canKot || checkKotPending}
+            className="border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/40"
+            data-pos-action="kotprint"
+            onKeyDown={makePosTabHandler("kotprint")}
+          />
+        </>
+      )}
       <div className="relative flex-1 flex">
         <ActionBtn
           icon={PrinterIcon}
-          label="Bill+Print"
+          label={modifyMode ? "Print + Save" : "Bill+Print"}
           shortcut="*"
           onClick={onBill}
           disabled={!canBill || billPending}
-          className="w-full border border-sky-200 dark:border-sky-900/60 bg-sky-50/60 dark:bg-sky-950/20 text-sky-700 dark:text-sky-300 hover:bg-sky-100/70 dark:hover:bg-sky-950/40"
+          className={`w-full border ${modifyMode
+            ? "border-amber-300 dark:border-amber-700 bg-amber-100/70 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 hover:bg-amber-200/70 dark:hover:bg-amber-900/50"
+            : "border-sky-200 dark:border-sky-900/60 bg-sky-50/60 dark:bg-sky-950/20 text-sky-700 dark:text-sky-300 hover:bg-sky-100/70 dark:hover:bg-sky-950/40"}`}
           data-pos-action="billprint"
           onKeyDown={makePosTabHandler("billprint")}
         />
-        {pendingKot > 0 && (
+        {pendingKot > 0 && !modifyMode && (
           <span className="pointer-events-none absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-white">
             {pendingKot}
           </span>
@@ -133,16 +140,21 @@ function BillingModePanel({
         disabled={isClosed}
         className="border border-border bg-muted/30 text-foreground/80 hover:bg-muted/60"
       />
-      <ActionBtn
-        icon={Hold01Icon}
-        label={isRestoredFromHold ? "Release" : "Hold"}
-        shortcut="F2"
-        onClick={onHold}
-        disabled={!canHold}
-        className="border border-purple-200 dark:border-purple-900/60 bg-purple-50/60 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300 hover:bg-purple-100/70 dark:hover:bg-purple-950/40"
-      />
+      {/* Hold is meaningless for a bill-printed correction — hide it in modify mode */}
+      {!modifyMode && (
+        <ActionBtn
+          icon={Hold01Icon}
+          label={isRestoredFromHold ? "Release" : "Hold"}
+          shortcut="F2"
+          onClick={onHold}
+          disabled={!canHold}
+          className="border border-purple-200 dark:border-purple-900/60 bg-purple-50/60 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300 hover:bg-purple-100/70 dark:hover:bg-purple-950/40"
+        />
+      )}
 
-      {/* Settle — carries the running total */}
+      {/* Settle — carries the running total. Hidden in modify mode: the cashier
+          must Print + Save first, then settle normally from the floor. */}
+      {modifyMode ? null : (
       <Button
         type="button"
         size="sm"
@@ -159,6 +171,7 @@ function BillingModePanel({
         </span>
         <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded leading-none bg-emerald-600/15 dark:bg-emerald-400/15">F11</span>
       </Button>
+      )}
 
       {/* Last settled bill recap — sits after Settle */}
       <LastSettledBillCard bill={lastBill} />
@@ -656,6 +669,7 @@ export default function BottomActionBar({
   onKotDraft, onCancel, onBack, onHold,
   isRestoredFromHold,
   sessionDisc, onDiscountChange,
+  modifyMode = false, onModifySave, isModifySaving = false,
 }) {
   const { clearSession, pendingItemKotMsgs, clearPendingItemKotMsgs } = useBillingContext();
   // Recap of the most recently settled bill, shown under the action row.
@@ -673,7 +687,9 @@ export default function BottomActionBar({
   const activeItems  = (items ?? []).filter((i) => i.item_status === "ACTIVE");
   const pendingKot  = activeItems.filter((i) => i.kot_status === "PENDING").length;
   const hasItems    = activeItems.length > 0;
-  const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED";
+  // In modify mode a BILL_PRINTED session is intentionally editable, so it's not
+  // treated as "closed" (which would disable discount / bill controls).
+  const isClosed    = !isDraft && session?.session_status === "BILL_PRINTED" && !modifyMode;
   const isKotSent   = !isDraft && session?.session_status === "KOT_SENT";
 
   // Discount panel and bill totals operate on KOT-sent items only
@@ -682,8 +698,9 @@ export default function BottomActionBar({
   const billTotals   = calcBillTotals(sentItems);
 
   const canKot         = isDraft ? activeItems.length > 0 : (pendingKot > 0 && !isClosed);
-  // Bill+Print is enabled as long as there is at least one KOT-sent item — pending items are excluded from the bill automatically
-  const canBill        = !isDraft && hasSentItems && (isKotSent || session?.session_status === "OPEN") && !isClosed;
+  // Bill+Print is enabled as long as there is at least one KOT-sent item — pending items are excluded from the bill automatically.
+  // In modify mode, the session is BILL_PRINTED but we still allow re-billing (Print + Save).
+  const canBill        = !isDraft && hasSentItems && (isKotSent || session?.session_status === "OPEN" || modifyMode) && !isClosed;
   // A 100% discount makes netAmount 0 — still allow settling a ₹0 bill.
   const canSettle      = !isDraft && isClosed && !!billId && (netAmount ?? 0) >= 0 && !isSettling;
   const kotPending     = isDraft ? isKotting : generateKot.isPending;
@@ -737,6 +754,9 @@ export default function BottomActionBar({
   }, [isNearReservation, isDraft, onKotDraft, generateCheckKot, clearSession, pendingItemKotMsgs]);
 
   const handleBill = useCallback(() => {
+    // Modify mode: "Bill+Print" becomes "Print + Save" → prompt for a reason and
+    // persist the corrections via save_modified_bill (handled by the parent).
+    if (modifyMode) { onModifySave?.(); return; }
     if (pendingKot > 0) {
       toast.warning(`${pendingKot} item${pendingKot > 1 ? "s" : ""} not sent to kitchen will be dropped from the bill.`);
     }
@@ -747,7 +767,7 @@ export default function BottomActionBar({
       billNetAmount: sessionDisc.netAmt ?? undefined,
     } : {};
     generateBill.mutate(payload, { onSuccess: clearSession });
-  }, [pendingKot, generateBill, clearSession, sessionDisc]);
+  }, [pendingKot, generateBill, clearSession, sessionDisc, modifyMode, onModifySave]);
 
   // Settle now opens the SettleDialog (customer + payment method + split)
   const handleSettle = useCallback(() => {
@@ -758,7 +778,7 @@ export default function BottomActionBar({
 
   // ── Ref: always holds the LATEST values without stale closure ─
   const live = useRef({});
-  live.current = { canKot, kotPending, checkKotPending, canBill, billPending: generateBill.isPending, canSettle, canHold, onHold, onBack, panelMode, settleDialogOpen, handleKot, handleCheckKot, handleBill, handleSettle, switchMode, isClosed };
+  live.current = { canKot, kotPending, checkKotPending, canBill, billPending: generateBill.isPending || isModifySaving, canSettle, canHold, onHold, onBack, panelMode, settleDialogOpen, handleKot, handleCheckKot, handleBill, handleSettle, switchMode, isClosed };
 
   // ── Keyboard shortcuts (registered once, reads from ref) ──
   useEffect(() => {
@@ -834,7 +854,8 @@ export default function BottomActionBar({
             kotPending={kotPending}
             checkKotPending={checkKotPending}
             canBill={canBill}
-            billPending={generateBill.isPending}
+            billPending={generateBill.isPending || isModifySaving}
+            modifyMode={modifyMode}
             canSettle={canSettle}
             netAmount={netAmount}
             pendingKot={pendingKot}

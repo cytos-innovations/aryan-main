@@ -186,6 +186,7 @@ use bill::{
     // Bill & payment
     get_bill_summary,
     generate_bill,
+    save_modified_bill,
     settle_bill,
     get_payment_methods,
     // Reservations
@@ -1513,6 +1514,33 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_by       INTEGER
         )"#,
+        // Audit log for "Modify Bill" — records every correction made to a
+        // bill-printed table before settlement. changes_json holds the full
+        // before/after diff (items added/removed/qty, discount, customer, waiter)
+        // so the owner can later review what was changed and why.
+        // modified_by / created_by are plain INTEGERs (no FK) — the acting user can
+        // come from a different application's user store (e.g. restaurant-management
+        // superadmin), so a users(id) FK would wrongly reject those ids.
+        r#"CREATE TABLE IF NOT EXISTS modified_bill_log (
+            id               SERIAL PRIMARY KEY,
+            code             BIGSERIAL UNIQUE,
+            order_session_id INTEGER REFERENCES order_session(id),
+            bill_id          INTEGER REFERENCES bill_master(id),
+            table_id         INTEGER REFERENCES restaurant_table(id),
+            old_net_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+            new_net_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+            old_item_count   INTEGER NOT NULL DEFAULT 0,
+            new_item_count   INTEGER NOT NULL DEFAULT 0,
+            reason           TEXT NOT NULL,
+            changes_json     JSONB,
+            modified_by      INTEGER,
+            modified_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_active        INTEGER   NOT NULL DEFAULT 1,
+            created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by       INTEGER,
+            updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by       INTEGER
+        )"#,
         r#"CREATE TABLE IF NOT EXISTS reservation_master (
             id                  SERIAL PRIMARY KEY,
             code                BIGSERIAL UNIQUE,
@@ -1649,6 +1677,23 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|e| format!("Migration error (bill_master.tip_amount): {e}"))?;
+
+    // modified_bill_log was first shipped with a users(id) FK on modified_by /
+    // created_by, which rejects acting users sourced from another application
+    // (e.g. the restaurant-management superadmin). Drop those constraints so the
+    // id is stored as a free-form reference, consistent with every other audit table.
+    for con in [
+        "modified_bill_log_modified_by_fkey",
+        "modified_bill_log_created_by_fkey",
+        "modified_bill_log_updated_by_fkey",
+    ] {
+        sqlx::query(&format!(
+            "ALTER TABLE modified_bill_log DROP CONSTRAINT IF EXISTS {con}"
+        ))
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Migration error (drop {con}): {e}"))?;
+    }
 
     // Flag to separate lodge customers from restaurant customers (shared table).
     // No default — the application sets it explicitly on insert.
@@ -1810,6 +1855,9 @@ async fn seed_module_permissions(pool: &PgPool) -> Result<(), String> {
         ("billing:generate-bill","print",  "Generate and print the bill"),
         ("billing:settle",       "update", "Record payment and settle a bill"),
         ("billing:cancel-order", "delete", "Cancel an entire order session"),
+        // Standalone module so it gets its own row in the User Access grid and can
+        // be granted independently (superadmin → any user).
+        ("modify-bill:view",     "view",   "Enter modify mode to correct bill-printed tables"),
     ];
 
     let lodge: &[(&str, &str, &str)] = &[
@@ -2327,6 +2375,7 @@ pub fn run() {
             // Billing — bill & payment
             get_bill_summary,
             generate_bill,
+            save_modified_bill,
             settle_bill,
             get_payment_methods,
             // Billing — reservations
