@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, PencilEdit01Icon, Delete01Icon, FilterHorizontalIcon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, PencilEdit01Icon, Delete01Icon, FilterHorizontalIcon, Cancel01Icon, ArrowDataTransferHorizontalIcon } from "@hugeicons/core-free-icons";
 
 import { Can } from "@/lib/auth";
 import { DataTable, DataTableColumnHeader, DEFAULT_QUERY_STATE } from "@/components/data-table";
@@ -573,6 +573,124 @@ function QuickAddDialog({ kind, open, onOpenChange, categories, onCreated }) {
   );
 }
 
+// Quick action: reassign a single menu item's kitchen section without opening
+// the full edit form. Search to pick the item (its current section auto-fills),
+// choose the new section, and save — only the section is updated in the DB.
+function ChangeSectionDialog({ open, onOpenChange, kitchenSections }) {
+  const queryClient = useQueryClient();
+  const [itemId, setItemId] = useState("");
+  const [sectionId, setSectionId] = useState("__none__");
+
+  // All active menu items (non-add-ons), for the item picker. Loaded once the
+  // dialog is opened so we search the full catalog, not just the current page.
+  const itemsQuery = useQuery({
+    queryKey: ["menu-cards-all-for-section"],
+    queryFn: () =>
+      invoke("get_menu_cards", {
+        qs: { ...DEFAULT_QUERY_STATE, perPage: 100000, sortBy: "name", sortDir: "asc" },
+        menuGroupId: null,
+        foodTypeId: null,
+      }),
+    enabled: open,
+  });
+
+  const allItems = itemsQuery.data?.data ?? [];
+  const selectedItem = useMemo(
+    () => allItems.find((i) => String(i.id) === itemId) ?? null,
+    [allItems, itemId],
+  );
+
+  // Reset whenever the dialog opens.
+  useEffect(() => {
+    if (open) { setItemId(""); setSectionId("__none__"); }
+  }, [open]);
+
+  // When an item is picked, fetch its currently-assigned section into the field.
+  function pickItem(v) {
+    setItemId(v);
+    const item = allItems.find((i) => String(i.id) === v);
+    setSectionId(item?.kitchen_section_id ? String(item.kitchen_section_id) : "__none__");
+  }
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      invoke("update_menu_card_section", {
+        id: Number(itemId),
+        kitchenSectionId: sectionId !== "__none__" ? Number(sectionId) : null,
+      }),
+    onSuccess: () => {
+      toast.success("Kitchen section updated");
+      queryClient.invalidateQueries({ queryKey: QK });
+      queryClient.invalidateQueries({ queryKey: ["menu-cards-all-for-section"] });
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  function submit(e) {
+    e.preventDefault();
+    if (!itemId) { toast.error("Please select an item"); return; }
+    saveMut.mutate();
+  }
+
+  const currentSectionName = selectedItem?.kitchen_section_id
+    ? (kitchenSections.find((k) => k.id === selectedItem.kitchen_section_id)?.name ?? "—")
+    : "— None —";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Change Kitchen Section</DialogTitle>
+          <DialogDescription>
+            Search for an item to see its assigned section, then reassign it.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <Field>
+            <FieldLabel>
+              Item <span className="text-destructive">*</span>
+            </FieldLabel>
+            <SearchableSelect
+              options={allItems.map((i) => ({ value: String(i.id), label: i.name }))}
+              value={itemId}
+              onSelect={pickItem}
+              placeholder={itemsQuery.isLoading ? "Loading items…" : "Type to search item…"}
+            />
+          </Field>
+
+          {selectedItem && (
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Current section: </span>
+              <span className="font-medium">{currentSectionName}</span>
+            </div>
+          )}
+
+          <Field>
+            <FieldLabel>New Kitchen Section</FieldLabel>
+            <SearchableSelect
+              options={[
+                { value: "__none__", label: "— None —" },
+                ...kitchenSections.map((k) => ({ value: String(k.id), label: k.name })),
+              ]}
+              value={sectionId}
+              onSelect={setSectionId}
+              placeholder="Type to search section…"
+            />
+          </Field>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={!itemId || saveMut.isPending}>
+              {saveMut.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function MenuCardPage() {
   const enterNav = useEnterNav();
   const queryClient = useQueryClient();
@@ -584,6 +702,9 @@ export default function MenuCardPage() {
   const [form, setForm] = useState(EMPTY);
   const [recipeRows, setRecipeRows] = useState([]);
   const [quickAdd, setQuickAdd] = useState({ open: false, kind: null });
+  const [changeSectionOpen, setChangeSectionOpen] = useState(false);
+  const [nameError, setNameError] = useState("");   // duplicate-name message under Item Name
+  const [nameChecking, setNameChecking] = useState(false);
   const consumeRef = useRef(null); // Rate 1 jumps straight here on Enter.
   const itemNameRef = useRef(null); // Focus target after each successful create.
 
@@ -631,6 +752,25 @@ export default function MenuCardPage() {
 
   const inv = () => queryClient.invalidateQueries({ queryKey: QK });
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Validate the Item Name against existing items (case- & whitespace-insensitive)
+  // when the user leaves the field. On edit, exclude the item's own row.
+  async function checkNameUnique(rawName) {
+    const name = rawName.trim();
+    if (!name) { setNameError(""); return; }
+    setNameChecking(true);
+    try {
+      const available = await invoke("is_menu_name_available", {
+        name,
+        excludeId: dialog.mode === "edit" ? dialog.data?.id ?? null : null,
+      });
+      setNameError(available ? "" : `"${name}" already exists`);
+    } catch {
+      setNameError(""); // don't block on a check failure — save still validates
+    } finally {
+      setNameChecking(false);
+    }
+  }
 
   const allGroups = groupsQuery.data ?? [];
   const allFoodTypes = foodTypesQuery.data ?? [];
@@ -685,6 +825,7 @@ export default function MenuCardPage() {
       // Keep the dialog open but reset to a fresh, blank form for the next item.
       setForm(EMPTY);
       setRecipeRows([]);
+      setNameError("");
       try {
         const next = await invoke("get_next_master_code", { table: "menu_card" });
         setForm((f) => ({ ...f, code: String(next) }));
@@ -725,6 +866,7 @@ export default function MenuCardPage() {
   async function openCreate() {
     setForm(EMPTY);
     setRecipeRows([]);
+    setNameError("");
     setDialog({ open: true, mode: "create", data: null });
     try {
       const next = await invoke("get_next_master_code", { table: "menu_card" });
@@ -732,6 +874,7 @@ export default function MenuCardPage() {
     } catch { /* leave code blank — backend will auto-assign */ }
   }
   async function openEdit(row) {
+    setNameError("");
     setForm({
       id: row.id,
       code: String(row.code),
@@ -794,6 +937,7 @@ export default function MenuCardPage() {
   function handleSubmit(e) {
     e.preventDefault();
     if (!form.name.trim()) { toast.error("Item name is required"); return; }
+    if (nameError) { toast.error(nameError); itemNameRef.current?.focus(); return; }
     if (!form.menu_group_id) { toast.error("Menu Group is required"); return; }
     if (!form.food_type_id) { toast.error("Food Type is required"); return; }
     if (!(parseFloat(form.rate_1) > 0)) { toast.error("Rate 1 is required and must be greater than 0"); return; }
@@ -1061,6 +1205,13 @@ export default function MenuCardPage() {
                       </Popover>
                     );
                   })()}
+                  <Can perm="menu-card:update">
+                    <Button variant="outline" size="sm" className="h-8 gap-1.5"
+                      onClick={() => setChangeSectionOpen(true)}>
+                      <HugeiconsIcon icon={ArrowDataTransferHorizontalIcon} strokeWidth={2} className="size-3.5" />
+                      Change Section
+                    </Button>
+                  </Can>
                   <Can perm="menu-card:add">
                     <Button size="sm" onClick={openCreate}>
                       <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="mr-1 size-4" />
@@ -1128,11 +1279,23 @@ export default function MenuCardPage() {
                     autoFocus
                     value={form.name}
                     maxLength={250}
-                    onChange={(e) => setF("name", e.target.value)}
-                    onBlur={(e) => setF("name", toTitleCase(e.target.value))}
+                    aria-invalid={!!nameError}
+                    className={nameError ? "border-destructive focus-visible:ring-destructive" : ""}
+                    onChange={(e) => { setF("name", e.target.value); if (nameError) setNameError(""); }}
+                    onBlur={(e) => {
+                      const titled = toTitleCase(e.target.value);
+                      setF("name", titled);
+                      checkNameUnique(titled);
+                    }}
                     placeholder="Item name"
                     required
                   />
+                  {nameChecking && (
+                    <p className="text-[11px] text-muted-foreground">Checking…</p>
+                  )}
+                  {nameError && (
+                    <p className="text-[11px] text-destructive">{nameError}</p>
+                  )}
                 </Field>
               </div>
 
@@ -1209,10 +1372,7 @@ export default function MenuCardPage() {
                     <span className="text-muted-foreground font-normal">(optional)</span>
                   </FieldLabel>
                   <SearchableSelect
-                    options={[
-                      { value: "__none__", label: "— None —" },
-                      ...allKitchenSections.map((k) => ({ value: String(k.id), label: k.name })),
-                    ]}
+                    options={allKitchenSections.map((k) => ({ value: String(k.id), label: k.name }))}
                     value={form.kitchen_section_id}
                     onSelect={(v) => setF("kitchen_section_id", v)}
                     placeholder="Type to search section…"
@@ -1271,9 +1431,11 @@ export default function MenuCardPage() {
                       value={form[key]}
                       onChange={(e) => {
                         const v = e.target.value;
-                        // Typing Rate 1 mirrors the value into Rate 2–5 so all
-                        // rates default to the same price (each still editable).
-                        if (key === "rate_1") {
+                        // On create, typing Rate 1 mirrors the value into Rate 2–5
+                        // so all rates default to the same price (each still
+                        // editable). On edit we leave the other rates untouched so
+                        // the user can change just Rate 1.
+                        if (key === "rate_1" && dialog.mode === "create") {
                           setForm((f) => ({ ...f, rate_1: v, rate_2: v, rate_3: v, rate_4: v, rate_5: v }));
                         } else {
                           setF(key, v);
@@ -1434,6 +1596,12 @@ export default function MenuCardPage() {
           if (quickAdd.kind === "group") { setF("menu_group_id", String(rec.id)); setRecipeRows([]); }
           else { setF("food_type_id", String(rec.id)); }
         }}
+      />
+
+      <ChangeSectionDialog
+        open={changeSectionOpen}
+        onOpenChange={setChangeSectionOpen}
+        kitchenSections={allKitchenSections}
       />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>

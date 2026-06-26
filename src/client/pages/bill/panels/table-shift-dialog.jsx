@@ -179,10 +179,7 @@ function TablePicker({ value, onChange, options, placeholder, disabled, emptyTex
                   ].join(" ")}
                 >
                   {o.dot && <span className={`size-2 shrink-0 rounded-full ${o.dot}`} />}
-                  <span className="font-medium truncate">{o.primary}</span>
-                  {o.code != null && (
-                    <span className="text-[10px] font-mono text-muted-foreground">#{o.code}</span>
-                  )}
+                  <span className="font-medium font-mono truncate">{o.primary}</span>
                   {o.secondary && (
                     <span className="ml-auto text-xs text-muted-foreground truncate">{o.secondary}</span>
                   )}

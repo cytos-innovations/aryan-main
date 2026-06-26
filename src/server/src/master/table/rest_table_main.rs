@@ -40,15 +40,19 @@ pub async fn get_restaurant_tables(
     let offset = qs.page * qs.per_page;
 
     let order_col = match qs.sort_by.as_deref() {
-        Some("code") => "rt.code",
-        Some("table_name") => "rt.table_name",
+        // "table_name" kept for backward compat — sorts by code now.
+        Some("code") | Some("table_name") => "rt.code",
         Some("applicable_rate") => "rt.applicable_rate",
         _ => "rt.id",
     };
     let dir = if qs.sort_dir == "asc" { "ASC" } else { "DESC" };
 
+    // Tables are identified by their numeric code — search matches the code
+    // (which is also the stored name) and the group name.
     let total_row = sqlx::query(
-        "SELECT COUNT(*) AS count FROM restaurant_table rt WHERE rt.table_name ILIKE $1",
+        "SELECT COUNT(*) AS count FROM restaurant_table rt \
+         LEFT JOIN table_group tg ON tg.id = rt.table_group_id \
+         WHERE rt.code::text ILIKE $1 OR tg.name ILIKE $1",
     )
     .bind(&search_pattern)
     .fetch_one(&pool)
@@ -61,7 +65,7 @@ pub async fn get_restaurant_tables(
                 tg.name AS group_name, rt.applicable_rate, rt.is_active \
          FROM restaurant_table rt \
          LEFT JOIN table_group tg ON tg.id = rt.table_group_id \
-         WHERE rt.table_name ILIKE $1 \
+         WHERE rt.code::text ILIKE $1 OR tg.name ILIKE $1 \
          ORDER BY {} {} LIMIT $2 OFFSET $3",
         order_col, dir
     );
@@ -95,44 +99,27 @@ pub async fn create_restaurant_table(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     code: Option<i64>,
-    table_name: String,
     table_group_id: Option<i32>,
     applicable_rate: i32,
 ) -> Result<(), String> {
-    let table_name = table_name.trim().to_string();
-    if table_name.is_empty() {
-        return Err("Table name is required".to_string());
-    }
     if !(1..=5).contains(&applicable_rate) {
         return Err("Rate must be between 1 and 5".to_string());
     }
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    // Reject duplicate table names. The comparison is case-insensitive AND
-    // whitespace-insensitive, so "Bar 2", "Bar2" and "bar  2" all collide:
-    // both sides are lower-cased and have all whitespace stripped.
-    let dup: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM restaurant_table \
-         WHERE regexp_replace(lower(table_name), '\\s+', '', 'g') \
-             = regexp_replace(lower($1), '\\s+', '', 'g')",
-    )
-    .bind(&table_name)
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("Duplicate check failed: {e}"))?;
-    if dup > 0 {
-        return Err("A table with this name already exists".to_string());
-    }
-
-    if let Some(code_val) = code {
+    // The table is identified solely by its numeric code. When the caller
+    // supplies a code we use it; otherwise let the BIGSERIAL assign one. Either
+    // way the stored `table_name` mirrors the code so every downstream display
+    // (cards, bills, KOTs) shows the code. `code` is UNIQUE, so duplicates are
+    // rejected by the constraint.
+    if let Some(code_val) = code.filter(|&c| c > 0) {
         sqlx::query(
             "INSERT INTO restaurant_table \
              (code, table_name, table_group_id, applicable_rate) \
-             VALUES ($1, $2, $3, $4)",
+             VALUES ($1, $1::text, $2, $3)",
         )
         .bind(code_val)
-        .bind(&table_name)
         .bind(table_group_id)
         .bind(applicable_rate)
         .execute(&pool)
@@ -140,23 +127,30 @@ pub async fn create_restaurant_table(
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
-                "Code or table name already exists".to_string()
+                "A table with this code already exists".to_string()
             } else {
                 format!("Failed to create table: {e}")
             }
         })?;
     } else {
-        sqlx::query(
+        // Auto-assigned code: insert with a placeholder name, then sync it to
+        // the freshly generated code.
+        let new_id: i32 = sqlx::query_scalar(
             "INSERT INTO restaurant_table \
              (table_name, table_group_id, applicable_rate) \
-             VALUES ($1, $2, $3)",
+             VALUES ('', $1, $2) RETURNING id",
         )
-        .bind(&table_name)
         .bind(table_group_id)
         .bind(applicable_rate)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .map_err(|e| format!("Failed to create table: {e}"))?;
+
+        sqlx::query("UPDATE restaurant_table SET table_name = code::text WHERE id = $1")
+            .bind(new_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to set table code: {e}"))?;
     }
 
     Ok(())
@@ -168,50 +162,39 @@ pub async fn update_restaurant_table(
     state: tauri::State<'_, AppState>,
     id: i32,
     code: Option<i64>,
-    table_name: String,
     table_group_id: Option<i32>,
     applicable_rate: i32,
 ) -> Result<(), String> {
-    let table_name = table_name.trim().to_string();
-    if table_name.is_empty() {
-        return Err("Table name is required".to_string());
-    }
     if !(1..=5).contains(&applicable_rate) {
         return Err("Rate must be between 1 and 5".to_string());
     }
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
-    // Reject duplicate table names (case- & whitespace-insensitive), ignoring this row.
-    let dup: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM restaurant_table \
-         WHERE regexp_replace(lower(table_name), '\\s+', '', 'g') \
-             = regexp_replace(lower($1), '\\s+', '', 'g') \
-           AND id <> $2",
-    )
-    .bind(&table_name)
-    .bind(id)
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("Duplicate check failed: {e}"))?;
-    if dup > 0 {
-        return Err("A table with this name already exists".to_string());
-    }
-
+    // The table name always mirrors the code, so updating the code (when given)
+    // also rewrites the name to match. `code` is UNIQUE — duplicates are caught
+    // by the constraint.
     sqlx::query(
         "UPDATE restaurant_table SET \
          code = COALESCE($1, code), \
-         table_name = $2, table_group_id = $3, applicable_rate = $4, \
-         updated_at = NOW() WHERE id = $5",
+         table_name = COALESCE($1::text, code::text), \
+         table_group_id = $2, applicable_rate = $3, \
+         updated_at = NOW() WHERE id = $4",
     )
     .bind(code)
-    .bind(&table_name)
     .bind(table_group_id)
     .bind(applicable_rate)
     .bind(id)
     .execute(&pool)
     .await
-    .map_err(|e| format!("Failed to update table: {e}"))?;
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
+            "A table with this code already exists".to_string()
+        } else {
+            format!("Failed to update table: {e}")
+        }
+    })?;
 
     Ok(())
 }

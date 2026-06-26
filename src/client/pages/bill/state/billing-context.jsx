@@ -24,6 +24,7 @@ const initialState = {
   activeSessionId:      null,
   selectedTableId:      null,
   selectedTableName:    null,
+  selectedTableGroupName: null,
   view:                 BILLING_VIEW.TABLE_SELECT,
 
   selectedMenuCategoryId: null,
@@ -59,6 +60,7 @@ function billingReducer(state, action) {
         activeSessionId:      action.payload.sessionId,
         selectedTableId:      action.payload.tableId,
         selectedTableName:    action.payload.tableName,
+        selectedTableGroupName: action.payload.tableGroupName ?? null,
         view:                 action.payload.view ?? BILLING_VIEW.ORDER_ENTRY,
         // Restore held draft items if provided, otherwise start fresh
         draftItems:          action.payload.draftItems        ?? [],

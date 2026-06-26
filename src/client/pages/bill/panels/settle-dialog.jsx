@@ -36,14 +36,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-} from "@/components/ui/alert-dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
@@ -217,9 +209,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [duePaidNow,      setDuePaidNow]      = useState("");  // partial due: paid now
   const [priorDue,        setPriorDue]        = useState(null); // customer's existing dues
 
-  // "Assign a waiter first" gate — opened when a tip is entered with no waiter.
-  const [waiterPromptOpen, setWaiterPromptOpen] = useState(false);
-  // Once the user clicks "Add" in that prompt, reveal the inline waiter picker.
+  // Inline waiter picker — opened when the user chooses to attribute a tip to a
+  // waiter. Optional: a tip can be recorded without one.
   const [waiterPickerOpen, setWaiterPickerOpen] = useState(false);
 
   const waiterId   = session?.waiter_id ?? null;
@@ -296,7 +287,6 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
     setCustomerAddress(session?.customer_address ?? "");
     setAmount("");
     setTip("");
-    setWaiterPromptOpen(false);
     setWaiterPickerOpen(false);
     setDuePaidNow("");
     setNcRemark("");
@@ -502,22 +492,11 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   }
 
   // ── Tip ────────────────────────────────────────────────────
-  // A tip can only be given once a waiter is assigned to the table. If the user
-  // starts typing a tip without one, blank it and raise the "assign first" gate.
+  // A tip can be entered with or without a waiter assigned. When no waiter is
+  // set, the tip is still recorded on the bill — assigning a waiter is optional
+  // and only attributes the tip to that person.
   function handleTipChange(v) {
-    const hasValue = v.trim() !== "" && Number(v) > 0;
-    if (hasValue && !hasWaiter) {
-      setTip("");
-      setWaiterPromptOpen(true);
-      return;
-    }
     setTip(v);
-  }
-
-  // From the gate: "Add" → reveal the inline waiter picker.
-  function onPromptAdd() {
-    setWaiterPromptOpen(false);
-    setWaiterPickerOpen(true);
   }
 
   // Inline picker selection → assign on the live session; the parent refetches
@@ -534,12 +513,6 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   // ── Settle ────────────────────────────────────────────────
   function handleSettle() {
     if (isSettling) return;
-
-    // A tip without an assigned waiter is not allowed — raise the gate instead.
-    if (tipNum > 0 && !hasWaiter) {
-      setWaiterPromptOpen(true);
-      return;
-    }
 
     // Customer validation — required for delivery / takeaway and for Due
     if (mustCapture) {
@@ -972,9 +945,9 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   className="pl-6 font-mono"
                 />
               </div>
-              {!hasWaiter && (
+              {!hasWaiter && tipNum > 0 && (
                 <p className="text-[11px] text-muted-foreground">
-                  Assign a waiter to this table before adding a tip.
+                  Optionally assign a waiter to attribute this tip.
                 </p>
               )}
             </Field>
@@ -1188,31 +1161,6 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
           </Button>
         </DialogFooter>
       </DialogContent>
-
-      {/* ── "Assign a waiter first" gate ── */}
-      <AlertDialog open={waiterPromptOpen} onOpenChange={setWaiterPromptOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <HugeiconsIcon icon={UserGroupIcon} size={18} strokeWidth={2} className="text-amber-500" />
-              Assign a waiter first
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              A tip can only be recorded against a waiter. Assign one to this table
-              to continue — the waiter will be saved on the order and shown everywhere.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <Button variant="outline" onClick={() => setWaiterPromptOpen(false)}>
-              Cancel
-            </Button>
-            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white border-0" onClick={onPromptAdd}>
-              <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2.5} className="mr-1" />
-              Add
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Dialog>
   );
 }

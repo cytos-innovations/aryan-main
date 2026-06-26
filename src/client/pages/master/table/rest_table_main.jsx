@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { toTitleCase } from "@/lib/utils";
 import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
@@ -35,7 +34,6 @@ const RATE_OPTIONS = [
 
 const EMPTY = {
   code: "",
-  table_name: "",
   table_group_id: "",
   applicable_rate: "1",
 };
@@ -100,7 +98,7 @@ export default function RestaurantTable() {
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
-  const tableNameRef = useRef(null); // Focus target after each successful create.
+  const codeRef = useRef(null); // Focus target after each successful create.
 
   const query = useQuery({
     queryKey: [...QK, qs],
@@ -119,14 +117,13 @@ export default function RestaurantTable() {
     mutationFn: async (d) => {
       await invoke("create_restaurant_table", {
         code: d.code ? parseInt(d.code) : null,
-        tableName: d.table_name,
         tableGroupId: parseInt(d.table_group_id),
         applicableRate: parseInt(d.applicable_rate),
       });
-      return d.table_name.trim();
+      return d.code ? String(d.code).trim() : "";
     },
-    onSuccess: async (savedName) => {
-      toast.success(`${savedName} added`);
+    onSuccess: async (savedCode) => {
+      toast.success(savedCode ? `Table ${savedCode} added` : "Table added");
       inv();
       // Keep the dialog open but reset to a fresh, blank form for the next table.
       setForm(EMPTY);
@@ -134,8 +131,8 @@ export default function RestaurantTable() {
         const next = await invoke("get_next_master_code", { table: "restaurant_table" });
         setForm((f) => ({ ...f, code: String(next) }));
       } catch { /* leave code blank — backend will auto-assign */ }
-      // Return focus to Table Name for the next entry.
-      tableNameRef.current?.focus();
+      // Return focus to Code for the next entry.
+      codeRef.current?.focus();
     },
     onError: (e) => toast.error(String(e)),
   });
@@ -144,7 +141,6 @@ export default function RestaurantTable() {
     mutationFn: (d) => invoke("update_restaurant_table", {
       id: d.id,
       code: d.code ? parseInt(d.code) : null,
-      tableName: d.table_name,
       tableGroupId: d.table_group_id ? parseInt(d.table_group_id) : null,
       applicableRate: parseInt(d.applicable_rate),
     }),
@@ -177,7 +173,6 @@ export default function RestaurantTable() {
   function openEdit(row) {
     setForm({
       code: row.code ? String(row.code) : "",
-      table_name: row.table_name,
       table_group_id: row.table_group_id ? String(row.table_group_id) : "",
       applicable_rate: String(row.applicable_rate ?? 1),
     });
@@ -198,8 +193,10 @@ export default function RestaurantTable() {
 
   function handleSubmit(e) {
     e.preventDefault();
-    if (!form.table_name.trim()) { toast.error("Table name is required"); return; }
     if (!form.table_group_id) { toast.error("Table Group is required"); return; }
+    if (dialog.mode === "create" && form.code && parseInt(form.code) < 1) {
+      toast.error("Code must be a positive number"); return;
+    }
     if (dialog.mode === "create") createMut.mutate(form);
     else updateMut.mutate({ id: dialog.data.id, ...form });
   }
@@ -210,26 +207,14 @@ export default function RestaurantTable() {
   const columns = useMemo(() => [
     {
       accessorKey: "code",
-      header: ({ column }) => (
-        <div className="text-center">
-          <DataTableColumnHeader column={column} title="Code" />
-        </div>
-      ),
-      size: 70,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Table Code" />,
+      size: 120,
       cell: ({ row }) => (
-        <div className="text-center">
-          <span className="font-mono text-xs font-semibold text-muted-foreground">
-            {row.original.code ?? "—"}
-          </span>
-        </div>
+        <span className="font-mono text-sm font-semibold">
+          {row.original.code ?? "—"}
+        </span>
       ),
-      meta: { label: "Code" },
-    },
-    {
-      accessorKey: "table_name",
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Table Name" />,
-      cell: ({ row }) => <span className="font-medium">{row.original.table_name}</span>,
-      meta: { label: "Table Name" },
+      meta: { label: "Table Code" },
     },
     {
       accessorKey: "group_name",
@@ -308,7 +293,7 @@ export default function RestaurantTable() {
             <DataTable
               columns={columns} data={query.data?.data ?? []} total={query.data?.total ?? 0}
               state={qs} onStateChange={setQs} loading={query.isLoading}
-              searchPlaceholder="Search by table name…" emptyText="No tables found."
+              searchPlaceholder="Search by table code…" emptyText="No tables found."
               toolbar={
                 <Can perm="restaurant-table:add">
                   <Button size="sm" onClick={openCreate}>
@@ -327,29 +312,26 @@ export default function RestaurantTable() {
           <DialogHeader>
             <DialogTitle>{dialog.mode === "create" ? "New Table" : "Edit Table"}</DialogTitle>
             <DialogDescription>
-              {dialog.mode === "create" ? "Create a new restaurant table." : "Update this table."}
+              {dialog.mode === "create"
+                ? "Create a new restaurant table. The table is identified by its code."
+                : "Update this table."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel>Table Name <span className="text-destructive">*</span></FieldLabel>
-                  <Input ref={tableNameRef} autoFocus value={form.table_name} maxLength={50}
-                    onChange={(e) => setForm((f) => ({ ...f, table_name: e.target.value }))}
-                    onBlur={(e) => setForm((f) => ({ ...f, table_name: toTitleCase(e.target.value) }))}
-                    placeholder="Table name" required />
-                </Field>
-                <Field>
-                  <FieldLabel>Code <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                  <Input
-                    type="number" min="1" value={form.code}
-                    onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                    placeholder={dialog.mode === "create" ? "Auto" : ""}
-                    readOnly={dialog.mode === "edit"}
-                    className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""} />
-                </Field>
-              </div>
+              <Field>
+                <FieldLabel>Table Code <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
+                <Input
+                  ref={codeRef} autoFocus
+                  type="number" min="1" value={form.code}
+                  onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                  placeholder={dialog.mode === "create" ? "Auto" : ""}
+                  readOnly={dialog.mode === "edit"}
+                  className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""} />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Leave blank to auto-assign the next code.
+                </p>
+              </Field>
 
               <Field>
                 <FieldLabel>Table Group <span className="text-destructive">*</span></FieldLabel>
@@ -397,7 +379,7 @@ export default function RestaurantTable() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Table</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete <strong>{deleteTarget?.table_name}</strong>? This cannot be undone.
+              Delete table <strong>{deleteTarget?.code}</strong>? This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

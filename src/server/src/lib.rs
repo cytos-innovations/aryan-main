@@ -39,6 +39,7 @@ use master::menu::rest_menu_group::{
 };
 use master::menu::rest_menu_main::{
     create_menu_card, delete_menu_card, get_menu_cards, toggle_menu_card_active, update_menu_card,
+    update_menu_card_section, is_menu_name_available,
     get_all_units_for_recipe, get_menu_recipes, save_menu_recipes, search_ingredient_items,
     get_addon_items, get_menu_card_addons,
 };
@@ -494,6 +495,15 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     ] {
         sqlx::query(col_sql).execute(pool).await.ok();
     }
+
+    // ── Tables are identified by code, not name ───────────────────
+    // The app no longer captures a separate table name — the table's numeric
+    // code is the display label everywhere (cards, bills, KOTs, reservations).
+    // Backfill any legacy rows so their stored name matches their code.
+    sqlx::query("UPDATE restaurant_table SET table_name = code::text WHERE table_name IS DISTINCT FROM code::text")
+        .execute(pool)
+        .await
+        .ok();
 
     // ── Migrate order_session: add delivery address (captured at settle) ──
     sqlx::query("ALTER TABLE order_session ADD COLUMN IF NOT EXISTS delivery_address TEXT")
@@ -2092,6 +2102,8 @@ pub fn run() {
             get_menu_cards,
             create_menu_card,
             update_menu_card,
+            update_menu_card_section,
+            is_menu_name_available,
             toggle_menu_card_active,
             delete_menu_card,
             // Menu card — recipe

@@ -241,7 +241,7 @@ pub async fn create_menu_card(
     addon_ids: Option<Vec<i32>>,
 ) -> Result<i32, String> {
     let is_addon = is_addon.unwrap_or(false);
-    let name = name.trim().to_string();
+    let name = normalize_menu_name(&name);
     if name.is_empty() {
         return Err("Name is required".to_string());
     }
@@ -268,6 +268,10 @@ pub async fn create_menu_card(
     };
 
     let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Reject duplicate names, normalizing case and internal/edge whitespace so
+    // "Butter Chicken", "butter chicken" and " butter  chicken " all collide.
+    ensure_unique_menu_name(&pool, &name, None).await?;
 
     let new_id: i32 = if let Some(c) = code.filter(|&c| c > 0) {
         sqlx::query_scalar(
@@ -338,6 +342,65 @@ pub async fn create_menu_card(
     Ok(new_id)
 }
 
+/// Trim and collapse internal runs of whitespace to a single space. Used so the
+/// stored name matches the normalized form we de-duplicate on.
+fn normalize_menu_name(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Reject a menu-item name that already exists (case- and whitespace-insensitive).
+///
+/// Both the incoming name and the stored names are normalized — trimmed,
+/// internal runs of whitespace collapsed to a single space, and lower-cased —
+/// so "Butter Chicken", "butter chicken" and " butter  chicken " are treated as
+/// the same item. `exclude_id` skips a row (used on update so an item doesn't
+/// clash with itself).
+async fn ensure_unique_menu_name(
+    pool: &sqlx::PgPool,
+    name: &str,
+    exclude_id: Option<i32>,
+) -> Result<(), String> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS ( \
+           SELECT 1 FROM menu_card \
+           WHERE lower(regexp_replace(btrim(name), '\\s+', ' ', 'g')) \
+               = lower(regexp_replace(btrim($1), '\\s+', ' ', 'g')) \
+             AND ($2::int IS NULL OR id <> $2) \
+         )",
+    )
+    .bind(name)
+    .bind(exclude_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to check for duplicate name: {e}"))?;
+
+    if exists {
+        return Err(format!("An item named \"{}\" already exists", name.trim()));
+    }
+    Ok(())
+}
+
+/// Live check used by the form's Item Name field: returns `true` when the name
+/// is free (case- and whitespace-insensitive). Pass `exclude_id` when editing so
+/// the item doesn't clash with itself.
+#[tauri::command]
+pub async fn is_menu_name_available(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    name: String,
+    exclude_id: Option<i32>,
+) -> Result<bool, String> {
+    let name = normalize_menu_name(&name);
+    if name.is_empty() {
+        return Ok(true);
+    }
+    let pool = acquire_pool(&state.pool, &app).await?;
+    match ensure_unique_menu_name(&pool, &name, exclude_id).await {
+        Ok(()) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
 /// Replace all add-on links for a parent menu item (delete + reinsert).
 async fn replace_menu_item_addons(
     pool: &sqlx::PgPool,
@@ -390,7 +453,7 @@ pub async fn update_menu_card(
     addon_ids: Option<Vec<i32>>,
 ) -> Result<(), String> {
     let is_addon = is_addon.unwrap_or(false);
-    let name = name.trim().to_string();
+    let name = normalize_menu_name(&name);
     if name.is_empty() {
         return Err("Name is required".to_string());
     }
@@ -408,6 +471,9 @@ pub async fn update_menu_card(
     });
 
     let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Reject duplicate names (normalized), ignoring this item's own row.
+    ensure_unique_menu_name(&pool, &name, Some(id)).await?;
 
     sqlx::query(
         "UPDATE menu_card SET \
@@ -448,6 +514,36 @@ pub async fn update_menu_card(
     // An item that is itself an add-on cannot offer add-ons → clear any links.
     let links: Vec<i32> = if is_addon { vec![] } else { addon_ids.unwrap_or_default() };
     replace_menu_item_addons(&pool, id, &links).await?;
+
+    Ok(())
+}
+
+/// Update only the kitchen section of a single menu item.
+///
+/// Backs the "Change Section" quick action on the Menu Card list, which lets
+/// the user reassign an item's kitchen section without opening the full edit
+/// form. Pass `None` to clear the section.
+#[tauri::command]
+pub async fn update_menu_card_section(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: i32,
+    kitchen_section_id: Option<i32>,
+) -> Result<(), String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    let result = sqlx::query(
+        "UPDATE menu_card SET kitchen_section_id = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(kitchen_section_id)
+    .bind(id)
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("Failed to update kitchen section: {e}"))?;
+
+    if result.rows_affected() == 0 {
+        return Err("Menu item not found".to_string());
+    }
 
     Ok(())
 }

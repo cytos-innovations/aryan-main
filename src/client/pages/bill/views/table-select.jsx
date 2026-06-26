@@ -194,9 +194,14 @@ function TableCard({ table, onClick, now, isOnHold, isFocused, cardRef }) {
       {/* Top accent strip */}
       <div className={`absolute top-0 left-0 right-0 h-1 ${STATUS_ACCENT[status]}`} />
 
-      {/* Header: table name + pills */}
+      {/* Header: table code (+ group) + pills */}
       <div className="flex items-start justify-between gap-1.5 mt-0.5">
-        <span className="font-semibold text-sm leading-snug truncate">{table.table_name}</span>
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="font-semibold text-sm leading-snug truncate">{table.table_name}</span>
+          {table.table_group_name && (
+            <span className="text-[10px] text-muted-foreground truncate">{table.table_group_name}</span>
+          )}
+        </div>
         <div className="flex items-center gap-1 shrink-0">
           {isNear && phase !== "ARRIVED" && minsLeft !== null && (
             <span className="rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
@@ -490,6 +495,7 @@ export default function TableSelectView({ onOpenReprint }) {
   const { setSession } = useBillingContext();
 
   const [search,          setSearch]          = useState("");
+  const [groupFilter,     setGroupFilter]     = useState("__all__");
   const [reservationOpen, setReservationOpen] = useState(false);
   const [reminderOpen,    setReminderOpen]    = useState(false);
   const [tableShiftOpen,  setTableShiftOpen]  = useState(false);
@@ -542,16 +548,37 @@ export default function TableSelectView({ onOpenReprint }) {
   );
   const now = useNow(hasActiveReservation ? 30_000 : 60_000);
 
+  // Distinct table groups (in floor order) for the group filter dropdown.
+  const groupNames = useMemo(() => {
+    const seen = new Set();
+    const names = [];
+    for (const t of tables) {
+      const g = t.table_group_name ?? "Ungrouped";
+      if (!seen.has(g)) { seen.add(g); names.push(g); }
+    }
+    return names;
+  }, [tables]);
+
+  // Drop a stale group filter if its group disappears from the floor.
+  useEffect(() => {
+    if (groupFilter !== "__all__" && !groupNames.includes(groupFilter)) {
+      setGroupFilter("__all__");
+    }
+  }, [groupNames, groupFilter]);
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return tables;
-    const q = search.toLowerCase();
-    return tables.filter(
-      (t) =>
+    const q = search.trim().toLowerCase();
+    return tables.filter((t) => {
+      const group = t.table_group_name ?? "Ungrouped";
+      if (groupFilter !== "__all__" && group !== groupFilter) return false;
+      if (!q) return true;
+      return (
         t.table_name.toLowerCase().includes(q) ||
-        (t.table_group_name ?? "Ungrouped").toLowerCase().includes(q) ||
-        String(t.code ?? "").toLowerCase().includes(q),
-    );
-  }, [tables, search]);
+        group.toLowerCase().includes(q) ||
+        String(t.code ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [tables, search, groupFilter]);
 
 
   const groups = useMemo(() => {
@@ -637,11 +664,12 @@ export default function TableSelectView({ onOpenReprint }) {
               draftWaiterId:      held.draftWaiterId      ?? null,
               draftItems:         held.draftItems         ?? [],
               isRestoredFromHold: true,
+              tableGroupName:     table.table_group_name,
             },
           );
         } else {
           // Hold expired or cleared — treat as available
-          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1);
+          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1, undefined, { tableGroupName: table.table_group_name });
         }
         return;
       }
@@ -649,21 +677,21 @@ export default function TableSelectView({ onOpenReprint }) {
       // Navigate to order entry (all non-blocked statuses land here)
       if (status === "AVAILABLE" || status === "NEAR_RESERVATION") {
         if (table.session_id) {
-          setSession(table.session_id, table.id, table.table_name);
+          setSession(table.session_id, table.id, table.table_name, undefined, undefined, undefined, { tableGroupName: table.table_group_name });
         } else {
           // For ARRIVED guests: pre-fill covers + customer name from reservation
           const opts = phase === "ARRIVED" ? {
             draftCovers:       table.reservation_guest_count ?? 2,
             draftCustomerName: table.reservation_customer   ?? null,
           } : {};
-          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1, undefined, opts);
+          setSession(null, table.id, table.table_name, undefined, table.applicable_rate ?? 1, undefined, { ...opts, tableGroupName: table.table_group_name });
         }
         return;
       }
 
       // OCCUPIED or BILL_PRINTED — resume existing session
       if (table.session_id) {
-        setSession(table.session_id, table.id, table.table_name);
+        setSession(table.session_id, table.id, table.table_name, undefined, undefined, undefined, { tableGroupName: table.table_group_name });
       }
     },
     [setSession],
@@ -853,9 +881,27 @@ export default function TableSelectView({ onOpenReprint }) {
           </div>
         ))}
 
+        {/* Table-group filter — pinned to the right of the legend */}
+        {groupNames.length > 1 && (
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] font-medium text-muted-foreground">Group</span>
+            <Select value={groupFilter} onValueChange={setGroupFilter}>
+              <SelectTrigger className="h-7 w-36 text-xs">
+                <SelectValue placeholder="All groups" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All groups</SelectItem>
+                {groupNames.map((g) => (
+                  <SelectItem key={g} value={g}>{g}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {/* Last KOT recap — pinned to the right edge of the legend row */}
         {lastKotQuery.data && (
-          <div className="ml-auto flex items-center gap-3 shrink-0 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-0.5 text-amber-700 dark:text-amber-400">
+          <div className={`${groupNames.length > 1 ? "" : "ml-auto "}flex items-center gap-3 shrink-0 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-0.5 text-amber-700 dark:text-amber-400`}>
             <span className="text-[9px] font-semibold uppercase tracking-wider opacity-70">Last KOT</span>
             <span className="text-[10px] font-bold tabular-nums">{lastKotQuery.data.kot_no ?? "—"}</span>
             {lastKotQuery.data.table_name && (
@@ -890,15 +936,17 @@ export default function TableSelectView({ onOpenReprint }) {
             <HugeiconsIcon icon={TableIcon} size={44} strokeWidth={1.5} className="opacity-30" />
             <div className="text-center">
               <p className="text-sm font-medium">
-                {search ? "No tables match your search." : "No tables configured."}
+                {search || groupFilter !== "__all__"
+                  ? "No tables match your filters."
+                  : "No tables configured."}
               </p>
-              {!search && (
+              {!search && groupFilter === "__all__" && (
                 <p className="text-xs mt-1 text-muted-foreground/70">
                   Add tables in Master Data → Table Management.
                 </p>
               )}
             </div>
-            {!search && (
+            {!search && groupFilter === "__all__" && (
               <Button
                 variant="outline"
                 size="sm"

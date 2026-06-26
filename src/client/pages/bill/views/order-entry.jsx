@@ -120,7 +120,7 @@ const ORDER_TYPE_CFG = {
 
 // ─── Session header bar ───────────────────────────────────────
 
-function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingReservation, onArrivedPrefill, onComplimentary, canComplimentary }) {
+function SessionHeader({ session, isDraft, selectedTableName, selectedTableGroupName, onBack, pendingReservation, onArrivedPrefill, onComplimentary, canComplimentary }) {
   const now        = useNow();
   const elapsed    = useMemo(() => calcElapsed(session?.opened_at, now), [session?.opened_at, now]);
   const openedTime = useMemo(() => fmtTime(session?.opened_at),          [session?.opened_at]);
@@ -134,7 +134,8 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingRes
   const orderCfg  = session?.order_type ? ORDER_TYPE_CFG[session.order_type] : null;
   const isClosed  = session?.session_status === "BILL_PRINTED";
 
-  const tableName = session?.table_name ?? selectedTableName ?? "No Table";
+  const tableName  = session?.table_name ?? selectedTableName ?? "No Table";
+  const tableGroup = session?.table_group_name ?? selectedTableGroupName ?? null;
 
   function handleResStatus(status) {
     if (!pendingReservation) return;
@@ -161,8 +162,13 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingRes
 
         <Separator orientation="vertical" className="h-4" />
 
-        {/* Table name */}
+        {/* Table code + group */}
         <span className="font-semibold text-sm">{tableName}</span>
+        {tableGroup && (
+          <span className="text-[11px] font-medium text-muted-foreground rounded-full bg-muted px-1.5 py-0.5 leading-none">
+            {tableGroup}
+          </span>
+        )}
         {session?.order_no && (
           <span className="text-xs text-muted-foreground font-mono">{session.order_no}</span>
         )}
@@ -262,7 +268,7 @@ function SessionHeader({ session, isDraft, selectedTableName, onBack, pendingRes
             <AlertDialogDescription>
               Cancel the reservation for{" "}
               <span className="font-medium text-foreground">{pendingReservation?.customerName ?? "this guest"}</span>
-              {tableName ? ` at ${tableName}` : ""}? The table will be released back to available.
+              {tableName ? ` at table ${tableName}` : ""}? The table will be released back to available.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -306,6 +312,7 @@ export default function OrderEntryView() {
     activeSessionId,
     selectedTableId,
     selectedTableName,
+    selectedTableGroupName,
     draftItems,
     draftOrderType,
     draftCovers,
@@ -821,6 +828,7 @@ export default function OrderEntryView() {
         session={session}
         isDraft={isDraft}
         selectedTableName={selectedTableName}
+        selectedTableGroupName={selectedTableGroupName}
         onBack={handleBack}
         pendingReservation={pendingReservation}
         onArrivedPrefill={handleArrivedPrefill}
