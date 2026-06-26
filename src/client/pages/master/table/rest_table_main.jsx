@@ -38,6 +38,32 @@ const EMPTY = {
   applicable_rate: "1",
 };
 
+// Parse the Table Code field into a numeric range. Accepts a single code
+// ("16") or a range written in many shapes: "16-26", "16 - 26", "16to26",
+// "16 to 26", "16 To 26", "16 26". Returns { start, end } (inclusive) or null
+// when the text isn't a valid number / range. The end must be >= the start —
+// a descending range like "31-1" is rejected rather than silently swapped.
+function parseCodeRange(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  // Split on a dash, the word "to" (any case), or whitespace between two numbers.
+  const m = s.match(/^(\d+)\s*(?:-|to|\s)\s*(\d+)$/i) || s.match(/^(\d+)$/);
+  if (!m) return null;
+  const start = parseInt(m[1], 10);
+  const end = m[2] !== undefined ? parseInt(m[2], 10) : start;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < 1) return null;
+  if (end < start) return null; // second number must not be smaller than the first
+  return { start, end };
+}
+
+// True when the text is a well-formed two-number range but written descending
+// (e.g. "31-1") — used to show a precise error instead of a generic one.
+function isDescendingRange(raw) {
+  const m = String(raw ?? "").trim().match(/^(\d+)\s*(?:-|to|\s)\s*(\d+)$/i);
+  if (!m) return false;
+  return parseInt(m[2], 10) < parseInt(m[1], 10);
+}
+
 function SearchableSelect({ options, value, onSelect, placeholder = "Select…", className = "" }) {
   const [query, setQuery]   = useState("");
   const [open, setOpen]     = useState(false);
@@ -115,15 +141,48 @@ export default function RestaurantTable() {
 
   const createMut = useMutation({
     mutationFn: async (d) => {
-      await invoke("create_restaurant_table", {
-        code: d.code ? parseInt(d.code) : null,
-        tableGroupId: parseInt(d.table_group_id),
-        applicableRate: parseInt(d.applicable_rate),
-      });
-      return d.code ? String(d.code).trim() : "";
+      const tableGroupId = parseInt(d.table_group_id);
+      const applicableRate = parseInt(d.applicable_rate);
+
+      // No code → single auto-assigned table.
+      if (!String(d.code).trim()) {
+        await invoke("create_restaurant_table", { code: null, tableGroupId, applicableRate });
+        return { created: 1, skipped: [], range: null };
+      }
+
+      // A code (single value or range like "16-26", "16 to 26", "16 26").
+      const range = parseCodeRange(d.code);
+      if (!range) throw new Error("Enter a valid code or range (e.g. 16 or 16-26)");
+
+      const skipped = [];
+      let created = 0;
+      // Create each code in turn; a code that already exists is skipped (not
+      // fatal) so a range like 16-26 still fills in the gaps when 16 is taken.
+      for (let code = range.start; code <= range.end; code++) {
+        try {
+          await invoke("create_restaurant_table", { code, tableGroupId, applicableRate });
+          created++;
+        } catch (err) {
+          if (String(err).toLowerCase().includes("already exists")) skipped.push(code);
+          else throw err;
+        }
+      }
+      return { created, skipped, range };
     },
-    onSuccess: async (savedCode) => {
-      toast.success(savedCode ? `Table ${savedCode} added` : "Table added");
+    onSuccess: async ({ created, skipped, range }) => {
+      // Summarise what happened across the (possibly multi-table) create.
+      if (created === 0) {
+        toast.warning(
+          skipped.length
+            ? `No tables added — code${skipped.length > 1 ? "s" : ""} ${skipped.join(", ")} already exist.`
+            : "No tables added.",
+        );
+      } else {
+        const label = range ? `Table ${range.start}${range.end !== range.start ? `–${range.end}` : ""}` : "Table";
+        let msg = created > 1 ? `${created} tables added` : `${label} added`;
+        if (skipped.length) msg += ` (skipped existing: ${skipped.join(", ")})`;
+        toast.success(msg);
+      }
       inv();
       // Keep the dialog open but reset to a fresh, blank form for the next table.
       setForm(EMPTY);
@@ -194,8 +253,19 @@ export default function RestaurantTable() {
   function handleSubmit(e) {
     e.preventDefault();
     if (!form.table_group_id) { toast.error("Table Group is required"); return; }
-    if (dialog.mode === "create" && form.code && parseInt(form.code) < 1) {
-      toast.error("Code must be a positive number"); return;
+    if (dialog.mode === "create" && String(form.code).trim()) {
+      const range = parseCodeRange(form.code);
+      if (!range) {
+        toast.error(
+          isDescendingRange(form.code)
+            ? "The second code must be greater than the first (e.g. 16-26)."
+            : "Enter a valid code or range (e.g. 16 or 16-26).",
+        );
+        return;
+      }
+      if (range.end - range.start + 1 > 200) {
+        toast.error("That range is too large — add at most 200 tables at a time."); return;
+      }
     }
     if (dialog.mode === "create") createMut.mutate(form);
     else updateMut.mutate({ id: dialog.data.id, ...form });
@@ -203,6 +273,14 @@ export default function RestaurantTable() {
 
   const allGroups = groupsQuery.data ?? [];
   const isPending = createMut.isPending || updateMut.isPending;
+
+  // Live count of how many tables the current code entry will create. Drives the
+  // badge next to the Table Code field. Null when blank/invalid (single auto code).
+  const plannedCount = useMemo(() => {
+    if (dialog.mode !== "create" || !String(form.code).trim()) return null;
+    const range = parseCodeRange(form.code);
+    return range ? range.end - range.start + 1 : null;
+  }, [form.code, dialog.mode]);
 
   const columns = useMemo(() => [
     {
@@ -320,17 +398,43 @@ export default function RestaurantTable() {
           <form onSubmit={handleSubmit} onKeyDown={enterNav}>
             <FieldGroup>
               <Field>
-                <FieldLabel>Table Code <span className="text-muted-foreground font-normal">(optional)</span></FieldLabel>
+                <FieldLabel className="flex items-center gap-2">
+                  <span>Table Code <span className="text-muted-foreground font-normal">(optional)</span></span>
+                  {plannedCount > 1 && (
+                    <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground leading-none">
+                      {plannedCount} tables
+                    </span>
+                  )}
+                </FieldLabel>
                 <Input
                   ref={codeRef} autoFocus
-                  type="number" min="1" value={form.code}
+                  type={dialog.mode === "edit" ? "number" : "text"}
+                  inputMode="numeric"
+                  value={form.code}
                   onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                  placeholder={dialog.mode === "create" ? "Auto" : ""}
+                  placeholder={dialog.mode === "create" ? "e.g. 16  or  16-26" : ""}
                   readOnly={dialog.mode === "edit"}
                   className={dialog.mode === "edit" ? "bg-muted cursor-not-allowed" : ""} />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Leave blank to auto-assign the next code.
-                </p>
+                {dialog.mode === "create" && (
+                  String(form.code).trim() && plannedCount === null ? (
+                    <p className="text-xs text-destructive mt-1">
+                      {isDescendingRange(form.code)
+                        ? "The second code must be greater than the first (e.g. 16-26)."
+                        : "Enter a valid code or range (e.g. 16 or 16-26)."}
+                    </p>
+                  ) : plannedCount > 1 ? (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Will add <span className="font-semibold text-foreground">{plannedCount}</span> tables in this group
+                      {(() => { const r = parseCodeRange(form.code); return r ? ` (codes ${r.start}–${r.end})` : ""; })()}.
+                      Existing codes are skipped.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Enter one code, or a range (16-26, 16 to 26, 16 26) to add many at once.
+                      Leave blank to auto-assign the next code.
+                    </p>
+                  )
+                )}
               </Field>
 
               <Field>
