@@ -39,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { useSidebarNav } from "@/components/app-sidebar";
 import { useBillingContext } from "../state/billing-context";
 import { useFloorView, useLastKot } from "../hooks/use-billing-queries";
 import { ORDER_TYPE } from "../constants/billing";
@@ -495,6 +496,7 @@ function ReminderSettingsDialog({ open, onOpenChange }) {
 export default function TableSelectView({ onOpenReprint }) {
   const navigate = useNavigate();
   const { setSession, modifyModeOn, setModifyModeOn } = useBillingContext();
+  const sidebarNav = useSidebarNav();
   const { can } = useAuth();
   const canModifyBill = can("modify-bill:view");
 
@@ -790,11 +792,47 @@ export default function TableSelectView({ onOpenReprint }) {
     el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focusedId]);
 
-  // Global arrow-key + Enter handler for grid navigation.
+  // When the sidebar hands keyboard focus back to this screen (Right arrow /
+  // Escape from a leaf), re-focus the table that was active before — or the
+  // first one if none.
+  useEffect(() => {
+    if (!sidebarNav?.registerReturnFocus) return;
+    return sidebarNav.registerReturnFocus(() => {
+      setFocusedId((prev) =>
+        prev != null && orderedIds.includes(prev) ? prev : orderedIds[0] ?? null,
+      );
+    });
+  }, [sidebarNav, orderedIds]);
+
+  // Is the focused card the leftmost one in its row? Used to decide when Left
+  // should exit the grid into the sidebar instead of moving within the row.
+  const isFocusedAtLeftEdge = useCallback(() => {
+    const curEl = cardRefs.current.get(focusedId);
+    if (!curEl) return true;
+    const cur = curEl.getBoundingClientRect();
+    const rowTol = cur.height / 2;
+    for (const id of orderedIds) {
+      if (id === focusedId) continue;
+      const el = cardRefs.current.get(id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      // Same row, and clearly to the left → not at the edge.
+      if (Math.abs((r.top + r.height / 2) - (cur.top + cur.height / 2)) <= rowTol
+        && r.left < cur.left - 1) {
+        return false;
+      }
+    }
+    return true;
+  }, [focusedId, orderedIds]);
+
+  // Grid arrow-key + Enter handler. Runs in the capture phase so it resolves
+  // Left before the sidebar's global entry handler (bubble phase) sees it.
   useEffect(() => {
     function onKey(e) {
       // Ignore when a modifier is held (don't hijack browser/OS shortcuts).
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // While the sidebar owns keyboard navigation, stay out of its way.
+      if (sidebarNav?.sidebarFocused) return;
 
       const arrowMap = {
         ArrowUp: "up",
@@ -810,7 +848,18 @@ export default function TableSelectView({ onOpenReprint }) {
         // While typing in search, let Left/Right move the text cursor; only Up/Down
         // (or arrows once a card is already focused) take over grid navigation.
         if (inSearch && (dir === "left" || dir === "right") && focusedId == null) return;
+
+        // Left at the leftmost column hands keyboard focus to the sidebar.
+        if (dir === "left" && focusedId != null && isFocusedAtLeftEdge()) {
+          e.preventDefault();
+          e.stopPropagation();
+          setFocusedId(null);
+          sidebarNav?.focusSidebar?.();
+          return;
+        }
+
         e.preventDefault();
+        e.stopPropagation(); // own Left/Right so the sidebar entry handler stays out
         if (inSearch) searchRef.current?.blur();
         moveFocus(dir);
         return;
@@ -833,9 +882,9 @@ export default function TableSelectView({ onOpenReprint }) {
         searchRef.current?.focus();
       }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [moveFocus, focusedId, tables, heldTableIds, handleTableClick]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [moveFocus, focusedId, tables, heldTableIds, handleTableClick, sidebarNav, isFocusedAtLeftEdge]);
 
   // Pickup: also enters draft mode, no table
   function handlePickup() {
