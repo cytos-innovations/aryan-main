@@ -264,6 +264,79 @@ fn round2(n: f64) -> f64 {
     (n * 100.0).round() / 100.0
 }
 
+/// Populate `bill_tax_detail` for a bill by expanding each KOT-sent active order
+/// item into its INDIVIDUAL tax components (e.g. CGST 2.5% + SGST 2.5%) via
+/// `menu_category_tax_detail`, rather than storing the compound "CGST + SGST" as
+/// one row. Each component's amount is rounded INDEPENDENTLY at its own rate
+/// (`taxable × pct/100 × tax_factor`), so equal GST halves stay equal — matching
+/// the on-screen tax breakdown exactly. Zero-tax items contribute no row.
+/// `tax_factor` scales the taxable base down by any bill-level discount.
+async fn insert_bill_tax_detail(
+    pool:       &sqlx::PgPool,
+    bill_id:    i32,
+    session_id: i32,
+    tax_factor: f64,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO bill_tax_detail (bill_id, tax_name, tax_percentage, taxable_amount, tax_amount)
+         SELECT $1,
+                tm.name,
+                mctd.tax_percentage::float8,
+                ROUND((SUM(oi.taxable_amount) * $3)::numeric, 2),
+                ROUND((SUM(oi.taxable_amount) * mctd.tax_percentage / 100.0 * $3)::numeric, 2)
+         FROM   order_item oi
+         JOIN   menu_card mc  ON mc.id  = oi.menu_id
+         JOIN   menu_group mg ON mg.id  = mc.menu_group_id
+         JOIN   menu_category cat ON cat.id = mg.category_id
+         JOIN   menu_category_tax_detail mctd ON mctd.category_id = cat.id
+         JOIN   tax_master tm ON tm.id = mctd.tax_id
+         WHERE  oi.order_session_id = $2 AND oi.item_status = 'ACTIVE'
+            AND  oi.kot_status != 'PENDING' AND mctd.tax_percentage > 0
+         GROUP  BY tm.name, mctd.tax_percentage
+         ORDER  BY tm.name",
+    )
+    .bind(bill_id)
+    .bind(session_id)
+    .bind(tax_factor)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to insert bill tax detail: {e}"))?;
+    Ok(())
+}
+
+/// Authoritative tax total for a bill: the SUM of each individual tax component
+/// (CGST/SGST per category-rate), with every component rounded INDEPENDENTLY at
+/// its own rate. This is exactly what `insert_bill_tax_detail` stores and what
+/// the on-screen breakdown shows, so the bill's Tax total always equals the sum
+/// of its component lines. `tax_factor` scales for any bill-level discount.
+async fn compute_component_tax_total(
+    pool:       &sqlx::PgPool,
+    session_id: i32,
+    tax_factor: f64,
+) -> Result<f64, String> {
+    let total: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(comp.tax_amount), 0)::float8
+         FROM (
+             SELECT ROUND((SUM(oi.taxable_amount) * mctd.tax_percentage / 100.0 * $2)::numeric, 2) AS tax_amount
+             FROM   order_item oi
+             JOIN   menu_card mc  ON mc.id  = oi.menu_id
+             JOIN   menu_group mg ON mg.id  = mc.menu_group_id
+             JOIN   menu_category cat ON cat.id = mg.category_id
+             JOIN   menu_category_tax_detail mctd ON mctd.category_id = cat.id
+             JOIN   tax_master tm ON tm.id = mctd.tax_id
+             WHERE  oi.order_session_id = $1 AND oi.item_status = 'ACTIVE'
+                AND  oi.kot_status != 'PENDING' AND mctd.tax_percentage > 0
+             GROUP  BY tm.name, mctd.tax_percentage
+         ) comp",
+    )
+    .bind(session_id)
+    .bind(tax_factor)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to compute component tax total: {e}"))?;
+    Ok(round2(total))
+}
+
 // ─────────────────────────────────────────────────────────────
 // Tauri commands
 // ─────────────────────────────────────────────────────────────
@@ -2151,27 +2224,26 @@ pub async fn get_bill_summary(
     let gross_amount:    f64 = totals_row.try_get::<f64, _>("gross_amount").unwrap_or(0.0);
     let discount_amount: f64 = totals_row.try_get::<f64, _>("discount_amount").unwrap_or(0.0);
     let taxable_amount:  f64 = totals_row.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
-    let tax_amount:      f64 = totals_row.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
-    let final_amount:    f64 = totals_row.try_get::<f64, _>("final_amount").unwrap_or(0.0);
-
-    let round_off  = round2((final_amount).round() - final_amount);
-    let net_amount = round2(final_amount + round_off);
 
     // Tax breakdown — expand each order item into its individual tax components
-    // so that e.g. "CGST ON FOODS" from two different categories is merged into one row.
+    // (CGST/SGST), each rounded INDEPENDENTLY at its own rate so equal GST halves
+    // stay equal. Zero-tax items contribute no row (no phantom "No Tax" line).
+    // tax_factor is 1.0 here: this summary reflects items as stored (no extra
+    // bill-level discount is applied until generate_bill).
     let tax_rows = sqlx::query(
         "SELECT
-             COALESCE(tm.name, 'No Tax')                              AS tax_name,
-             COALESCE(mctd.tax_percentage, 0)::float8                AS tax_percentage,
-             SUM(oi.taxable_amount)::float8                          AS taxable_amount,
-             SUM(oi.taxable_amount * mctd.tax_percentage / 100.0)::float8 AS tax_amount
+             tm.name                                  AS tax_name,
+             mctd.tax_percentage::float8              AS tax_percentage,
+             ROUND(SUM(oi.taxable_amount)::numeric, 2)::float8 AS taxable_amount,
+             ROUND((SUM(oi.taxable_amount) * mctd.tax_percentage / 100.0)::numeric, 2)::float8 AS tax_amount
          FROM order_item oi
          JOIN menu_card mc ON mc.id = oi.menu_id
          JOIN menu_group mg ON mg.id = mc.menu_group_id
          JOIN menu_category cat ON cat.id = mg.category_id
          JOIN menu_category_tax_detail mctd ON mctd.category_id = cat.id
-         LEFT JOIN tax_master tm ON tm.id = mctd.tax_id
+         JOIN tax_master tm ON tm.id = mctd.tax_id
          WHERE oi.order_session_id = $1 AND oi.item_status = 'ACTIVE'
+           AND mctd.tax_percentage > 0
          GROUP BY tm.name, mctd.tax_percentage
          ORDER BY tm.name",
     )
@@ -2180,12 +2252,19 @@ pub async fn get_bill_summary(
     .await
     .unwrap_or_default();
 
-    let tax_breakdown = tax_rows.iter().map(|r| TaxBreakdownRow {
-        tax_name:       r.try_get("tax_name").unwrap_or_else(|_| "No Tax".to_string()),
+    let tax_breakdown: Vec<TaxBreakdownRow> = tax_rows.iter().map(|r| TaxBreakdownRow {
+        tax_name:       r.try_get("tax_name").unwrap_or_default(),
         tax_percentage: r.try_get::<f64, _>("tax_percentage").unwrap_or(0.0),
         taxable_amount: r.try_get::<f64, _>("taxable_amount").unwrap_or(0.0),
         tax_amount:     r.try_get::<f64, _>("tax_amount").unwrap_or(0.0),
     }).collect();
+
+    // Authoritative tax total = sum of the component rows (so the total always
+    // equals the breakdown). Final/net derive from this component-summed tax.
+    let tax_amount:   f64 = round2(tax_breakdown.iter().map(|t| t.tax_amount).sum());
+    let final_amount: f64 = round2(taxable_amount + tax_amount);
+    let round_off  = round2((final_amount).round() - final_amount);
+    let net_amount = round2(final_amount + round_off);
 
     // Paid amount from payments
     let paid_amount: f64 = sqlx::query_scalar(
@@ -2265,7 +2344,6 @@ pub async fn generate_bill(
     let gross_amount:       f64 = totals.try_get::<f64, _>("gross_amount").unwrap_or(0.0);
     let item_discount:      f64 = totals.try_get::<f64, _>("discount_amount").unwrap_or(0.0);
     let base_taxable:       f64 = totals.try_get::<f64, _>("taxable_amount").unwrap_or(0.0);
-    let base_tax:           f64 = totals.try_get::<f64, _>("tax_amount").unwrap_or(0.0);
     // Bill-level discount (category + bill discount from the UI panel) is applied
     // BEFORE tax (Indian GST law): it reduces the taxable base, then tax is
     // recomputed on the net value. extra_disc never exceeds the taxable base.
@@ -2275,7 +2353,11 @@ pub async fn generate_bill(
     // bill_tax_detail so all stored rows stay internally consistent.
     let tax_factor:         f64 = if base_taxable > 0.0 { 1.0 - extra_disc / base_taxable } else { 1.0 };
     let taxable_amount:     f64 = round2(base_taxable - extra_disc);
-    let tax_amount:         f64 = round2(base_tax * tax_factor);
+    // Authoritative tax total = SUM of the per-component (CGST/SGST) amounts, each
+    // rounded INDEPENDENTLY at its own rate. This matches both the on-screen tax
+    // breakdown and the rows written to bill_tax_detail, so the bill's Tax total
+    // always equals the sum of its component lines (no stray paisa).
+    let tax_amount: f64 = compute_component_tax_total(&pool, session_id, tax_factor).await?;
     let final_amount:       f64 = round2(taxable_amount + tax_amount);
     let discount_amount:    f64 = round2(item_discount + extra_disc);
     let round_off               = round2(final_amount.round() - final_amount);
@@ -2309,11 +2391,15 @@ pub async fn generate_bill(
 
     if let Some(bid) = existing_bill {
         // Reprint — update amounts and increment print count
+        // Preserve the original print time: re-aggregating an existing bill
+        // (reprint or Modify Bill correction) must not change the bill's
+        // printed_at — the bill number AND its time stay fixed once printed.
+        // Only the first print stamps printed_at; later passes keep it.
         sqlx::query(
             "UPDATE bill_master
              SET    gross_amount = $1, discount_amount = $2, taxable_amount = $3,
                     tax_amount = $4, round_off = $5, net_amount = $6,
-                    bill_status = 'PRINTED', printed_at = NOW(),
+                    bill_status = 'PRINTED', printed_at = COALESCE(printed_at, NOW()),
                     bill_print_count = bill_print_count + 1, updated_at = NOW()
              WHERE  id = $7",
         )
@@ -2361,20 +2447,7 @@ pub async fn generate_bill(
         .execute(&pool).await
         .map_err(|e| format!("Failed to refresh bill items: {e}"))?;
 
-        sqlx::query(
-            "INSERT INTO bill_tax_detail (bill_id, tax_name, tax_percentage, taxable_amount, tax_amount)
-             SELECT $1,
-                    COALESCE(tax_name, 'No Tax'),
-                    MAX(tax_percentage),
-                    ROUND((SUM(taxable_amount) * $3)::numeric, 2),
-                    ROUND((SUM(tax_amount) * $3)::numeric, 2)
-             FROM   order_item
-             WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'
-             GROUP  BY tax_name",
-        )
-        .bind(bid).bind(session_id).bind(tax_factor)
-        .execute(&pool).await
-        .map_err(|e| format!("Failed to refresh bill tax detail: {e}"))?;
+        insert_bill_tax_detail(&pool, bid, session_id, tax_factor).await?;
 
         return Ok(bid);
     }
@@ -2429,31 +2502,17 @@ pub async fn generate_bill(
     .await
     .map_err(|e| format!("Failed to copy bill items: {e}"))?;
 
-    // Insert tax breakdown → bill_tax_detail (KOT-sent items only), scaled by the
-    // bill discount so the GST shown on the bill is charged on the net value.
-    sqlx::query(
-        "INSERT INTO bill_tax_detail (bill_id, tax_name, tax_percentage, taxable_amount, tax_amount)
-         SELECT $1,
-                COALESCE(tax_name, 'No Tax'),
-                MAX(tax_percentage),
-                ROUND((SUM(taxable_amount) * $3)::numeric, 2),
-                ROUND((SUM(tax_amount) * $3)::numeric, 2)
-         FROM   order_item
-         WHERE  order_session_id = $2 AND item_status = 'ACTIVE' AND kot_status != 'PENDING'
-         GROUP  BY tax_name",
-    )
-    .bind(bill_id)
-    .bind(session_id)
-    .bind(tax_factor)
-    .execute(&pool)
-    .await
-    .map_err(|e| format!("Failed to insert tax detail: {e}"))?;
+    // Insert tax breakdown → bill_tax_detail (KOT-sent items only), expanded into
+    // individual GST components (CGST/SGST) and scaled by the bill discount so the
+    // GST shown on the bill is charged on the net value.
+    insert_bill_tax_detail(&pool, bill_id, session_id, tax_factor).await?;
 
     // Advance session status
     sqlx::query(
         "UPDATE order_session
          SET    session_status = 'BILL_PRINTED',
-                bill_printed_at = NOW(), bill_print_count = bill_print_count + 1,
+                bill_printed_at = COALESCE(bill_printed_at, NOW()),
+                bill_print_count = bill_print_count + 1,
                 updated_at = NOW()
          WHERE  id = $1",
     )
@@ -4047,6 +4106,10 @@ pub struct BillReprintRow {
     pub bill_status:      String,
     pub settled_at:       Option<String>,
     pub created_at:       Option<String>,
+    /// Search relevance rank (0 = exact bill no, 1 = exact full mobile,
+    /// 2 = exact name, 3 = prefix, 4 = partial). Lets the UI decide whether the
+    /// top row is a true exact hit it may auto-open. 4 when not searching.
+    pub match_rank:       i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -4102,29 +4165,61 @@ pub struct BillReprintDetail {
     pub payments:        Vec<BillReprintPayment>,
 }
 
-/// Search settled bills (PAID or DUE status).
+/// Search bills for reprint. Includes settled (PAID/DUE) **and** unsettled
+/// bill-printed bills (status PRINTED); excludes only CANCELLED. Results are
+/// priority-ranked (exact bill no → exact full mobile → exact name → prefix →
+/// partial) and within a rank ordered newest-first by bill number.
 /// `search`    — optional: bill_no, order_no, bill id, customer name/mobile
 /// `date_from` — optional: YYYY-MM-DD lower bound on settled_at / created_at
 /// `date_to`   — optional: YYYY-MM-DD upper bound
+/// `status_filter` — optional: "SETTLED" (PAID/DUE) | "UNSETTLED" (PRINTED) | else all
 #[tauri::command]
 pub async fn search_settled_bills(
-    app:       tauri::AppHandle,
-    state:     tauri::State<'_, AppState>,
-    search:    Option<String>,
-    date_from: Option<String>,
-    date_to:   Option<String>,
+    app:           tauri::AppHandle,
+    state:         tauri::State<'_, AppState>,
+    search:        Option<String>,
+    date_from:     Option<String>,
+    date_to:       Option<String>,
+    status_filter: Option<String>,
 ) -> Result<Vec<BillReprintRow>, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
     // Escape LIKE wildcards so a literal % or _ in the term doesn't act as a
     // pattern. The term is then used for case-insensitive contains/prefix
     // matching across bill no, order no, id, customer name and mobile.
-    let search_val: Option<String> = search
+    let raw = search
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    // Escaped variant for LIKE/ILIKE so a literal % or _ in the term is matched
+    // as a character, not a wildcard.
+    let search_val: Option<String> = raw
+        .as_deref()
         .map(|s| s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
 
+    // A purely-digit term is treated as a candidate bill no / mobile no so we can
+    // rank an exact bill-id or exact full-mobile hit above looser matches.
+    let digits: Option<String> = raw
+        .as_deref()
+        .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
+        .map(|s| s.to_string());
+
+    // Status filter: "SETTLED" → PAID/DUE only, "UNSETTLED" → PRINTED only,
+    // anything else (incl. None / "ALL") → all reprintable statuses.
+    let status_val: Option<String> = status_filter
+        .as_deref()
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| s == "SETTLED" || s == "UNSETTLED");
+
+    // Priority/relevance ranking ($4 = digit-only term, $1 = escaped term):
+    //   0  exact bill id (typed an exact bill number)
+    //   1  exact full mobile number (all digits match, not a prefix)
+    //   2  exact customer name (case/space-insensitive)
+    //   3  bill-no / order-no / mobile prefix match
+    //   4  name / other partial match
+    // Within the same rank, newest bill first (bill id DESC).
     let rows = sqlx::query(
         "SELECT bm.id,
                 bm.bill_no,
@@ -4141,17 +4236,35 @@ pub async fn search_settled_bills(
                 bm.paid_amount::float8,
                 bm.bill_status,
                 to_char(bm.settled_at,  'YYYY-MM-DD HH24:MI:SS') AS settled_at,
-                to_char(bm.created_at,  'YYYY-MM-DD HH24:MI:SS') AS created_at
+                to_char(bm.created_at,  'YYYY-MM-DD HH24:MI:SS') AS created_at,
+                CASE
+                  WHEN $4::text IS NOT NULL AND CAST(bm.id AS TEXT) = $4                            THEN 0
+                  WHEN $4::text IS NOT NULL AND COALESCE(os.customer_mobile, ci.mobile_no1) = $4    THEN 1
+                  WHEN $1::text IS NOT NULL
+                       AND lower(regexp_replace(COALESCE(os.customer_name, ci.customer_name), '\\s+', '', 'g'))
+                         = lower(regexp_replace($1, '\\s+', '', 'g'))                               THEN 2
+                  WHEN $1::text IS NOT NULL AND (
+                         bm.bill_no  ILIKE $1 || '%'
+                      OR os.order_no ILIKE $1 || '%'
+                      OR COALESCE(os.customer_mobile, ci.mobile_no1) ILIKE $1 || '%')               THEN 3
+                  ELSE 4
+                END AS match_rank
          FROM   bill_master bm
          JOIN   order_session os  ON os.id = bm.order_session_id
          LEFT JOIN restaurant_table      rt ON rt.id = os.table_id
          LEFT JOIN customer_information  ci ON ci.id = bm.customer_id
-         WHERE  (bm.bill_status IN ('PAID', 'DUE') OR os.session_status = 'SETTLED')
+         WHERE  bm.bill_status IN ('PRINTED', 'PAID', 'DUE')
+           AND  ($5::text IS NULL
+                 OR ($5 = 'SETTLED'   AND bm.bill_status IN ('PAID', 'DUE'))
+                 OR ($5 = 'UNSETTLED' AND bm.bill_status = 'PRINTED'))
            AND  ($1::text IS NULL OR (
                     bm.bill_no                                      ILIKE '%' || $1 || '%'
                  OR os.order_no                                     ILIKE '%' || $1 || '%'
                  OR CAST(bm.id AS TEXT)                             ILIKE $1 || '%'
                  OR COALESCE(os.customer_name, ci.customer_name)    ILIKE '%' || $1 || '%'
+                 -- space-insensitive name match: 'johndoe' finds 'John Doe'
+                 OR regexp_replace(lower(COALESCE(os.customer_name, ci.customer_name)), '\\s+', '', 'g')
+                      LIKE '%' || regexp_replace(lower($1), '\\s+', '', 'g') || '%'
                  OR COALESCE(os.customer_mobile, ci.mobile_no1)     ILIKE $1 || '%'
                 ))
            AND  ($2::text IS NULL
@@ -4160,12 +4273,14 @@ pub async fn search_settled_bills(
            AND  ($3::text IS NULL
                  OR COALESCE(bm.settled_at, bm.created_at)
                     < TO_TIMESTAMP($3, 'YYYY-MM-DD') + INTERVAL '1 day')
-         ORDER  BY COALESCE(bm.settled_at, bm.created_at) DESC
+         ORDER  BY match_rank ASC, bm.id DESC
          LIMIT  200",
     )
     .bind(search_val)
     .bind(date_from.as_deref())
     .bind(date_to.as_deref())
+    .bind(digits.as_deref())
+    .bind(status_val.as_deref())
     .fetch_all(&pool)
     .await
     .map_err(|e| format!("Failed to search settled bills: {e}"))?;
@@ -4187,6 +4302,7 @@ pub async fn search_settled_bills(
         bill_status:      r.try_get("bill_status").unwrap_or_else(|_| "PAID".to_string()),
         settled_at:       r.try_get("settled_at").ok().flatten(),
         created_at:       r.try_get("created_at").ok().flatten(),
+        match_rank:       r.try_get("match_rank").unwrap_or(4),
     }).collect())
 }
 

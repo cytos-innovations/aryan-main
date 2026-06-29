@@ -235,6 +235,10 @@ function FoodTypeLegend() {
 function MenuItemCard({ item, applicableRate, onClick, isAdding, orderQty = 0, cardIdx, onCardKeyDown }) {
   const price = selectItemRate(item, applicableRate);
   const inOrder = orderQty > 0;
+  const hasAddons = item.addons?.length > 0;
+  // Top-right corner badges (+ADD first, then LIQ). The code is pushed below
+  // them so it never collides with a badge.
+  const badgeCount = (hasAddons ? 1 : 0) + (item.is_liquor ? 1 : 0);
 
   return (
     <button
@@ -274,7 +278,10 @@ function MenuItemCard({ item, applicableRate, onClick, isAdding, orderQty = 0, c
           {item.item_name}
         </span>
         {item.code != null && item.code !== "" && (
-          <span className="shrink-0 font-mono text-[10px] font-semibold text-muted-foreground tabular-nums leading-snug">
+          <span
+            className="shrink-0 font-mono text-[10px] font-semibold text-muted-foreground tabular-nums leading-snug"
+            style={{ marginTop: badgeCount * 14 }}
+          >
             {item.code}
           </span>
         )}
@@ -297,20 +304,20 @@ function MenuItemCard({ item, applicableRate, onClick, isAdding, orderQty = 0, c
         )}
       </div>
 
-      {/* Liquor badge */}
-      {item.is_liquor && (
-        <span className="absolute top-1.5 right-1.5 text-[8px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 px-1 rounded-sm leading-none py-0.5">
-          LIQ
+      {/* Add-ons available badge (top-most corner badge) */}
+      {hasAddons && (
+        <span className="absolute top-1.5 right-1.5 text-[8px] font-semibold bg-primary/15 text-primary px-1 rounded-sm leading-none py-0.5">
+          +ADD
         </span>
       )}
 
-      {/* Add-ons available badge */}
-      {item.addons?.length > 0 && (
+      {/* Liquor badge (sits below +ADD when both are present) */}
+      {item.is_liquor && (
         <span className={[
-          "absolute right-1.5 text-[8px] font-semibold bg-primary/15 text-primary px-1 rounded-sm leading-none py-0.5",
-          item.is_liquor ? "top-6" : "top-1.5",
+          "absolute right-1.5 text-[8px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 px-1 rounded-sm leading-none py-0.5",
+          hasAddons ? "top-6" : "top-1.5",
         ].join(" ")}>
-          +ADD
+          LIQ
         </span>
       )}
     </button>

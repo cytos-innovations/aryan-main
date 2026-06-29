@@ -666,7 +666,7 @@ export default function BottomActionBar({
   isKotting, isNearReservation,
   netAmount, billId, isSettling,
   onRequestSettle, settleDialogOpen,
-  onKotDraft, onCancel, onBack, onHold,
+  onKotDraft, onBack, onHold,
   isRestoredFromHold,
   sessionDisc, onDiscountChange,
   modifyMode = false, onModifySave, isModifySaving = false,
@@ -884,16 +884,6 @@ export default function BottomActionBar({
         )}
       </div>
 
-      {/* Discard Draft / Cancel Order — prominently visible */}
-      <div className="px-3 pb-2 flex justify-center">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs font-medium text-muted-foreground hover:text-destructive border border-dashed border-muted-foreground/30 hover:border-destructive/50 rounded px-3 py-1 transition-colors"
-        >
-          {isDraft ? "Discard Draft" : "Cancel Order"}
-        </button>
-      </div>
     </div>
   );
 }

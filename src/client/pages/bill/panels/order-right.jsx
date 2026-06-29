@@ -101,9 +101,9 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-card border rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+      <div className="bg-card border rounded-xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="flex items-center gap-2.5 px-4 py-3 bg-destructive/10 border-b border-destructive/20">
+        <div className="flex items-center gap-2.5 px-4 py-3 bg-destructive/10 border-b border-destructive/20 shrink-0">
           <HugeiconsIcon icon={AlertCircleIcon} size={16} strokeWidth={2} className="text-destructive shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-destructive">Void KOT Item</p>
@@ -111,8 +111,8 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
           </div>
         </div>
 
-        {/* Body */}
-        <div className="px-4 py-3 space-y-3">
+        {/* Body — scrolls when there are many KOT batches; header/footer stay pinned */}
+        <div className="px-4 py-3 space-y-3 overflow-y-auto flex-1 min-h-0">
           <p className="text-xs text-muted-foreground">
             Select qty to remove per KOT, then provide a reason.
           </p>
@@ -179,7 +179,10 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
               );
             })}
           </div>
+        </div>
 
+        {/* Reason picker — pinned above the footer so it never scrolls away */}
+        <div className="px-4 pt-3 space-y-2 border-t shrink-0">
           {/* Quick pick */}
           <div className="flex flex-wrap gap-1.5">
             {QUICK_REASONS.map((r) => (
@@ -212,7 +215,7 @@ function VoidReasonDialog({ itemName, kotBatches, onConfirm, onClose }) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t bg-muted/20">
+        <div className="flex items-center justify-end gap-2 px-4 py-3 bg-muted/20 shrink-0">
           <Button type="button" variant="outline" size="sm" onClick={onClose} className="h-8 px-4 text-xs">
             Cancel
           </Button>
@@ -300,6 +303,16 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   const hasPendingQty = pendingItems.length > 0;
   const hasSentQty    = sentItems.length > 0;
 
+  // KOT-sent quantity that can't be reduced by editing (already printed). The
+  // editable qty box edits the merged total, but never lets it drop below this.
+  const sentQty = isDraft ? 0 : sentItems.reduce((s, i) => s + Number(i.quantity), 0);
+
+  // The qty box shows and edits the merged total (what the user sees on the
+  // row), not just the pending portion — so the number never jumps on focus.
+  // It stays live as +/− fire optimistic cache updates, so the open input
+  // mirrors them instantly.
+  const editableQty = totalQty;
+
   // For display: highest-priority KOT status in the group
   const kotStatusPriority = ["SERVED", "READY", "PREPARING", "SENT", "PENDING"];
   const groupStatus = isDraft ? "PENDING" : (
@@ -325,15 +338,21 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   // Complimentary lines are fixed at qty 1, so never enter the editable qty box.
   useEffect(() => {
     if (isActive && !isF6Active && !isComp) {
-      const pendingQty = isDraft
-        ? representative.quantity
-        : (pendingItems[pendingItems.length - 1]?.quantity ?? 1);
-      setQtyInput(String(pendingQty));
+      setQtyInput(String(totalQty));
       setQtyEditing(true);
       setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 60);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
+
+  // Keep the open qty box in sync with the live editable quantity so a +/−
+  // click (which fires an optimistic cache update) shows instantly. Typing only
+  // mutates qtyInput — never editableQty — so this never clobbers active typing;
+  // it fires only when an actual qty mutation lands.
+  useEffect(() => {
+    if (qtyEditing) setQtyInput(String(editableQty));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editableQty]);
 
   useEffect(() => {
     if (isF6Active) {
@@ -450,10 +469,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
   function startQtyEdit() {
     if (!canEdit || isBillPrinted) return;
-    const pendingQty = isDraft
-      ? representative.quantity
-      : (pendingItems[pendingItems.length - 1]?.quantity ?? 1);
-    setQtyInput(String(pendingQty));
+    setQtyInput(String(totalQty));
     setQtyEditing(true);
     setTimeout(() => { qtyInputRef.current?.focus(); qtyInputRef.current?.select(); }, 30);
   }
@@ -465,12 +481,24 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
     : (Number(pendingItems[pendingItems.length - 1]?.rate) || 0);
 
   function commitQtyEdit(advance = false) {
+    // The box edits the merged TOTAL. Draft lines are a single editable line, so
+    // the typed value is the qty directly. For sessions, the sent portion is
+    // locked (already KOT'd) — only the pending line absorbs the change, so the
+    // new pending qty is (typedTotal − sentQty), floored at the sent qty.
     const parsed = Math.min(parseInt(qtyInput, 10), MAX_QTY);
     if (!isNaN(parsed) && parsed > 0) {
-      if (isDraft) { updateDraftQty(draftKey, parsed); }
-      else if (pendingItems.length > 0) {
-        const target = pendingItems[pendingItems.length - 1];
-        updateQty.mutate({ id: target.id, qty: parsed });
+      if (isDraft) {
+        updateDraftQty(draftKey, parsed);
+      } else if (pendingItems.length > 0) {
+        const target     = pendingItems[pendingItems.length - 1];
+        const newPending = parsed - sentQty;
+        if (newPending <= 0) {
+          // Can't reduce below what's already sent — clamp to sent qty by
+          // cancelling the whole pending line (total settles at sentQty).
+          if (sentQty > 0) { cancelItem.mutate(target.id); toast.info(`Kept ${sentQty} — already sent to kitchen.`); }
+        } else {
+          updateQty.mutate({ id: target.id, qty: newPending });
+        }
       }
     }
     setQtyEditing(false);
@@ -557,6 +585,9 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
           {showTrashLeft ? (
             <button
               type="button"
+              // Keep the qty input focused so its onBlur doesn't fire a stale
+              // commit that races the remove. The sync effect mirrors the result.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleRemove}
               disabled={delDisabled}
               className="h-6 w-6 rounded border bg-background flex items-center justify-center text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-25 transition-colors"
@@ -567,6 +598,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
           ) : (
             <button
               type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleDecrement}
               disabled={decDisabled}
               className="h-6 w-6 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-25 transition-colors"
@@ -599,6 +631,7 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
 
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={handleIncrement}
             disabled={incDisabled}
             className="h-6 w-6 rounded border bg-background flex items-center justify-center hover:bg-muted disabled:opacity-25 transition-colors"
@@ -1269,6 +1302,13 @@ function SessionTopBar({ session, sessionId, isDraft, draftOrderType, draftCover
           disabled={isPartyLocked}
           onSelect={handleSelectWaiter}
         />
+        {/* Bill no — shown once a bill is printed (and when reopening that printed
+            bill) so the cashier always sees which bill this table is on. */}
+        {!isDraft && session?.bill_no && (
+          <span className="inline-flex items-center rounded-md border border-emerald-300 dark:border-emerald-800 bg-emerald-100/70 dark:bg-emerald-900/30 px-2 py-0.5 text-[11px] font-bold font-mono tabular-nums text-emerald-800 dark:text-emerald-200 leading-none shrink-0">
+            #{session.bill_no}
+          </span>
+        )}
         {tableName && (
           <span className="text-sm font-bold tracking-tight shrink-0">{tableName}</span>
         )}

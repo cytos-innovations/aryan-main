@@ -30,7 +30,6 @@ import {
   useMenuForBilling,
   useFloorView,
   useAddOrderItem,
-  useCancelOrderSession,
   useOrderItems,
   useBillSummary,
   useSettleBill,
@@ -344,7 +343,6 @@ export default function OrderEntryView() {
   const qc  = useQueryClient();
   const now = useNow();
 
-  const [cancelOpen, setCancelOpen] = useState(false);
   const [settleOpen, setSettleOpen] = useState(false);
   const [compOpen,   setCompOpen]   = useState(false);
   const [addingId,   setAddingId]   = useState(null);
@@ -398,7 +396,6 @@ export default function OrderEntryView() {
   const menuQuery    = useMenuForBilling();
   const floorQuery     = useFloorView();
   const employeesQuery = useEmployeesForBilling();
-  const cancelMut    = useCancelOrderSession();
   const addItemMut   = useAddOrderItem(activeSessionId);
 
   // Lifted from OrderRightPanel
@@ -600,28 +597,6 @@ export default function OrderEntryView() {
     } else {
       handleBack();
     }
-  }
-
-  function handleConfirmCancel() {
-    if (isDraft) {
-      // Discard Draft: explicitly clear any saved hold state for this table
-      if (selectedTableId) clearHold(selectedTableId);
-      setCancelOpen(false);
-      clearSession();
-      setView(BILLING_VIEW.TABLE_SELECT);
-      return;
-    }
-    if (!activeSessionId) return;
-    cancelMut.mutate(
-      { sessionId: activeSessionId, remarks: "Cancelled from order screen" },
-      {
-        onSuccess: () => {
-          setCancelOpen(false);
-          clearSession();
-          setView(BILLING_VIEW.TABLE_SELECT);
-        },
-      },
-    );
   }
 
   // Entry point from the menu grid. If the item offers add-ons, prompt for them;
@@ -1031,7 +1006,6 @@ export default function OrderEntryView() {
             onRequestSettle={() => setSettleOpen(true)}
             settleDialogOpen={settleOpen}
             onKotDraft={handleKotDraft}
-            onCancel={() => setCancelOpen(true)}
             onBack={handleBack}
             onHold={handleHold}
             isRestoredFromHold={isRestoredFromHold}
@@ -1108,32 +1082,6 @@ export default function OrderEntryView() {
           onClose={() => setAddonTarget(null)}
         />
       )}
-
-      {/* ── Cancel confirm ── */}
-      <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{isDraft ? "Discard Draft?" : "Cancel Order?"}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {isDraft
-                ? "This will discard all draft items. Nothing has been saved to the database."
-                : (session?.item_count ?? 0) > 0
-                  ? `This will void all ${session.item_count} item${session.item_count !== 1 ? "s" : ""} and release the table. This cannot be undone.`
-                  : "This will close the session and release the table."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{isDraft ? "Keep Draft" : "Keep Order"}</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleConfirmCancel}
-              disabled={cancelMut.isPending}
-            >
-              {isDraft ? "Discard" : cancelMut.isPending ? "Cancelling…" : "Cancel Order"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {/* ── Modify Bill: mandatory reason before saving ── */}
       <AlertDialog open={modifyReasonOpen} onOpenChange={(o) => { if (!o && !saveModifiedMut.isPending) setModifyReasonOpen(false); }}>

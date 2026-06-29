@@ -50,6 +50,13 @@ const FILTER_PRESETS = [
   { key: "CUSTOM",  label: "Custom" },
 ];
 
+// Settled / unsettled status filter
+const STATUS_FILTERS = [
+  { key: "ALL",       label: "All" },
+  { key: "SETTLED",   label: "Settled" },
+  { key: "UNSETTLED", label: "Unsettled" },
+];
+
 function presetRange(key) {
   if (key === "TODAY") return { dateFrom: todayStr(),     dateTo: todayStr() };
   if (key === "7D")    return { dateFrom: daysAgoStr(6),  dateTo: todayStr() };
@@ -323,6 +330,7 @@ export default function BillReprintSheet({ open, onOpenChange }) {
   const [preset,      setPreset]      = useState("TODAY");
   const [customFrom,  setCustomFrom]  = useState(daysAgoStr(6));
   const [customTo,    setCustomTo]    = useState(todayStr());
+  const [statusFilter, setStatusFilter] = useState("ALL"); // ALL | SETTLED | UNSETTLED
   const [viewBillId,  setViewBillId]  = useState(null);
   const [activeIndex, setActiveIndex] = useState(-1);
 
@@ -342,11 +350,14 @@ export default function BillReprintSheet({ open, onOpenChange }) {
     ? { dateFrom: customFrom, dateTo: customTo }
     : (presetRange(preset) ?? { dateFrom: todayStr(), dateTo: todayStr() });
 
+  const statusParam = statusFilter === "ALL" ? null : statusFilter;
+
   // When a search term is committed, query ALL settled bills regardless of date.
-  // Date filter only applies when browsing (no active search).
+  // Date filter only applies when browsing (no active search). The settled /
+  // unsettled status filter applies in both modes.
   const queryParams = committed
-    ? { search: committed, dateFrom: null, dateTo: null }
-    : { search: null, ...range };
+    ? { search: committed, dateFrom: null, dateTo: null, statusFilter: statusParam }
+    : { search: null, ...range, statusFilter: statusParam };
   const { data: bills, isLoading, isFetching, isError, error, refetch } = useSettledBills(queryParams);
 
   // Auto-focus search on open; reset to list view; force fresh fetch
@@ -355,6 +366,7 @@ export default function BillReprintSheet({ open, onOpenChange }) {
       setViewBillId(null);
       setCommitted("");
       setSearchInput("");
+      setStatusFilter("ALL");
       setActiveIndex(-1);
       setTimeout(() => searchRef.current?.focus(), 80);
       // Refetch on every open so newly settled bills always appear
@@ -365,11 +377,20 @@ export default function BillReprintSheet({ open, onOpenChange }) {
 
   const billList = bills ?? [];
 
+  // Is row 0 an EXACT hit (exact bill no / full mobile / exact name → rank ≤ 2)?
+  // Only an exact top match is auto-highlighted and openable with Enter. A loose
+  // partial match (e.g. typing "1" which merely appears in many bills) is NOT
+  // auto-selected — the user must pick a row. This prevents Enter on "1" from
+  // wrongly opening some unrelated bill.
+  const topIsExact = committed && billList.length > 0 && (billList[0].match_rank ?? 4) <= 2;
+
   // Keep the highlighted row valid as the result set changes (new search,
-  // refetch, filter switch). Reset to "nothing highlighted" on every change.
+  // refetch, filter switch). Auto-highlight row 0 only when it's an exact hit;
+  // otherwise nothing is highlighted and the list is just shown for picking.
   useEffect(() => {
-    setActiveIndex(-1);
-  }, [committed, preset, customFrom, customTo]);
+    setActiveIndex(topIsExact ? 0 : -1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [committed, billList.length, topIsExact, preset, customFrom, customTo, statusFilter]);
 
   // Scroll the highlighted row into view whenever it moves.
   useEffect(() => {
@@ -387,9 +408,15 @@ export default function BillReprintSheet({ open, onOpenChange }) {
       setActiveIndex((i) => (i <= 0 ? billList.length - 1 : i - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const target = activeIndex >= 0 ? billList[activeIndex] : billList[0];
-      if (target) setViewBillId(target.id);
-      else setCommitted(searchInput.trim());
+      // Open the highlighted row if the user navigated to one, OR the exact top
+      // match. Never auto-open on a loose partial match — just commit the search.
+      if (activeIndex >= 0 && billList[activeIndex]) {
+        setViewBillId(billList[activeIndex].id);
+      } else if (topIsExact) {
+        setViewBillId(billList[0].id);
+      } else {
+        setCommitted(searchInput.trim());
+      }
     } else if (e.key === "Escape") {
       if (searchInput) {
         e.preventDefault();
@@ -515,6 +542,25 @@ export default function BillReprintSheet({ open, onOpenChange }) {
               )}
             </div>
 
+            {/* Settled / Unsettled status filter */}
+            <div className="shrink-0 border-b flex items-center gap-1 px-4 py-2">
+              {STATUS_FILTERS.map(({ key, label }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setStatusFilter(key)}
+                  className={[
+                    "text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors",
+                    statusFilter === key
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted",
+                  ].join(" ")}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             {/* Results */}
             <div
               ref={resultsRef}
@@ -539,8 +585,8 @@ export default function BillReprintSheet({ open, onOpenChange }) {
                   <HugeiconsIcon icon={ReceiptIndianRupeeIcon} size={36} strokeWidth={1.5} className="opacity-20" />
                   <p className="text-xs text-center">
                     {committed
-                      ? "No settled bills match your search."
-                      : "No settled bills found for this period."}
+                      ? "No bills match your search."
+                      : "No bills found for this period."}
                   </p>
                 </div>
               ) : (

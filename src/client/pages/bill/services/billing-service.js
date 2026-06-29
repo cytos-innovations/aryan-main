@@ -282,12 +282,13 @@ export const billingService = {
 
   // ── Bill Reprint ──────────────────────────────────────────────
 
-  /** Search settled bills. search/dateFrom/dateTo are all optional. */
-  searchSettledBills: ({ search, dateFrom, dateTo } = {}) =>
+  /** Search settled bills. search/dateFrom/dateTo/statusFilter are all optional. */
+  searchSettledBills: ({ search, dateFrom, dateTo, statusFilter } = {}) =>
     invoke("search_settled_bills", {
-      search:   search   ?? null,
-      dateFrom: dateFrom ?? null,
-      dateTo:   dateTo   ?? null,
+      search:       search       ?? null,
+      dateFrom:     dateFrom     ?? null,
+      dateTo:       dateTo       ?? null,
+      statusFilter: statusFilter ?? null,
     }),
 
   /** Full bill detail (header + items + tax + payments) for reprint. */

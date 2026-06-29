@@ -831,6 +831,9 @@ export default function TableSelectView({ onOpenReprint }) {
     function onKey(e) {
       // Ignore when a modifier is held (don't hijack browser/OS shortcuts).
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Stand down while any modal/sheet (Bill Reprint, dialogs, etc.) is open —
+      // those own their own keyboard navigation and must not move the grid.
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return;
       // While the sidebar owns keyboard navigation, stay out of its way.
       if (sidebarNav?.sidebarFocused) return;
 

@@ -208,6 +208,30 @@ pub async fn toggle_restaurant_table_active(
 ) -> Result<(), String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
+    // Guard: a table that is currently running a bill (open order session) must
+    // not be deactivated — doing so would hide it from the floor while money is
+    // still owed. Block the toggle-off and tell the user to settle first. The
+    // statuses mirror the duplicate-session guard in open_order_session.
+    if !is_active {
+        let active_session: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM order_session \
+             WHERE  table_id = $1 \
+               AND  session_status IN ('OPEN', 'KOT_SENT', 'BILL_PRINTED') \
+               AND  is_active = 1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| format!("Active-session check failed: {e}"))?;
+
+        if active_session > 0 {
+            return Err(
+                "This table has an active bill. Please settle it first before deactivating."
+                    .to_string(),
+            );
+        }
+    }
+
     sqlx::query("UPDATE restaurant_table SET is_active = $1, updated_at = NOW() WHERE id = $2")
         .bind(is_active)
         .bind(id)

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useEnterNav } from "@/hooks/use-enter-nav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -27,10 +27,12 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 // ── Searchable menu-card dropdown ────────────────────────────
-function MenuCardCombobox({ options, value, onSelect, disabled }) {
+function MenuCardCombobox({ options, value, onSelect, disabled, onPicked }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [active, setActive] = useState(0);
   const inputRef = useRef(null);
+  const listRef = useRef(null);
 
   const selected = options.find((o) => String(o.id) === value);
 
@@ -42,10 +44,38 @@ function MenuCardCombobox({ options, value, onSelect, disabled }) {
       )
     : options;
 
+  // Reset the highlight to the top whenever the result set changes.
+  useEffect(() => { setActive(0); }, [search]);
+
+  // Keep the highlighted row scrolled into view as the user arrows through.
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    listRef.current.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
   function handleSelect(opt) {
     onSelect(String(opt.id));
     setSearch("");
     setOpen(false);
+    // After picking, hand focus to the first day field (Sunday) so the user
+    // can immediately type the incentive without reaching for the mouse.
+    if (onPicked) setTimeout(onPicked, 60);
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((a) => Math.min(a + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((a) => Math.max(a - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (filtered[active]) handleSelect(filtered[active]);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+    }
   }
 
   return (
@@ -80,19 +110,23 @@ function MenuCardCombobox({ options, value, onSelect, disabled }) {
             placeholder="Search by name or code…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={handleKeyDown}
             className="h-8 text-sm"
           />
         </div>
-        <div className="max-h-52 overflow-y-auto">
+        <div ref={listRef} className="max-h-52 overflow-y-auto">
           {filtered.length === 0 ? (
             <p className="py-4 text-center text-xs text-muted-foreground">No items found.</p>
           ) : (
-            filtered.map((opt) => (
+            filtered.map((opt, i) => (
               <button
                 key={opt.id}
                 type="button"
                 onClick={() => handleSelect(opt)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-muted/60 transition-colors"
+                onMouseEnter={() => setActive(i)}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                  i === active ? "bg-muted/60" : "hover:bg-muted/60"
+                }`}
               >
                 <HugeiconsIcon
                   icon={Tick02Icon}
@@ -124,13 +158,13 @@ const DAYS = [
 
 const EMPTY = {
   menu_card_id: "",
-  sunday_inc: "0",
-  monday_inc: "0",
-  tuesday_inc: "0",
-  wednesday_inc: "0",
-  thursday_inc: "0",
-  friday_inc: "0",
-  saturday_inc: "0",
+  sunday_inc: "",
+  monday_inc: "",
+  tuesday_inc: "",
+  wednesday_inc: "",
+  thursday_inc: "",
+  friday_inc: "",
+  saturday_inc: "",
 };
 
 function fmtInc(val) {
@@ -145,6 +179,14 @@ export default function CalIncentive() {
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
+  const dayRefs = useRef([]); // one input ref per day, for arrow-key nav
+
+  // Focus the form's submit (Create / Save) button. We query the DOM rather
+  // than hold a ref because the Button component doesn't forward refs.
+  function focusSubmit(fromEl) {
+    const form = fromEl?.closest("form") ?? document.querySelector("form");
+    form?.querySelector('button[type="submit"]:not([disabled])')?.focus();
+  }
 
   const query = useQuery({
     queryKey: [...QK, qs],
@@ -363,6 +405,7 @@ export default function CalIncentive() {
                     options={menuCards}
                     value={form.menu_card_id}
                     onSelect={(v) => setForm((f) => ({ ...f, menu_card_id: v }))}
+                    onPicked={() => { dayRefs.current[0]?.focus(); dayRefs.current[0]?.select?.(); }}
                   />
                 ) : (
                   <Input
@@ -379,17 +422,60 @@ export default function CalIncentive() {
 
               {/* Day incentive grid */}
               <div className="grid grid-cols-4 gap-3">
-                {DAYS.map((d) => (
+                {DAYS.map((d, i) => (
                   <Field key={d.key}>
                     <FieldLabel>{d.label.slice(0, 3)}</FieldLabel>
                     <Input
+                      ref={(el) => (dayRefs.current[i] = el)}
                       type="number"
                       min="0"
                       step="0.01"
                       value={form[d.key]}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, [d.key]: e.target.value }))
-                      }
+                      onKeyDown={(e) => {
+                        // Arrow keys move between day fields (grid is 4 wide):
+                        // Left/Right = prev/next day, Up/Down = same column row.
+                        // We own these and stop them bubbling so the form's
+                        // enterNav doesn't also act on them.
+                        const focusDay = (idx) => {
+                          if (idx >= 0 && idx < DAYS.length) {
+                            e.preventDefault();
+                            dayRefs.current[idx]?.focus();
+                            dayRefs.current[idx]?.select?.();
+                          }
+                        };
+                        if (e.key === "ArrowRight") { e.stopPropagation(); focusDay(i + 1); }
+                        else if (e.key === "ArrowLeft") { e.stopPropagation(); focusDay(i - 1); }
+                        else if (e.key === "ArrowDown") { e.stopPropagation(); focusDay(i + 4); }
+                        else if (e.key === "ArrowUp") { e.stopPropagation(); focusDay(i - 4); }
+                        else if (e.key === "Enter") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          // On create, Sunday mirrors to every day, so Enter on
+                          // Sunday jumps straight to Create (skipping Mon–Sat).
+                          // Otherwise advance to the next day, or Create if last.
+                          if (i === 0 && dialog.mode === "create") focusSubmit(e.target);
+                          else if (i < DAYS.length - 1) { dayRefs.current[i + 1]?.focus(); dayRefs.current[i + 1]?.select?.(); }
+                          else focusSubmit(e.target);
+                        }
+                      }}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        // On create, typing into the first day (Sunday) mirrors
+                        // the value into every other day so all days default to
+                        // the same incentive (each still editable). On edit we
+                        // leave the other days untouched so only that one day's
+                        // amount changes.
+                        if (i === 0 && dialog.mode === "create") {
+                          setForm((f) => ({
+                            ...f,
+                            sunday_inc: v, monday_inc: v, tuesday_inc: v,
+                            wednesday_inc: v, thursday_inc: v, friday_inc: v,
+                            saturday_inc: v,
+                          }));
+                        } else {
+                          setForm((f) => ({ ...f, [d.key]: v }));
+                        }
+                      }}
                       placeholder="0"
                     />
                   </Field>

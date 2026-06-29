@@ -593,11 +593,13 @@ export function useGenerateBill(sessionId) {
   return useMutation({
     mutationFn: ({ billDiscountAmount, billNetAmount } = {}) =>
       billingService.generateBill(sessionId, billDiscountAmount, billNetAmount),
-    onSuccess: () => {
+    onSuccess: (billId) => {
       qc.invalidateQueries({ queryKey: BQK.SESSION(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.SESSION_DETAIL(sessionId) });
       qc.invalidateQueries({ queryKey: BQK.BILL_SUMMARY(sessionId) });
-      toast.success("Bill generated");
+      // generate_bill returns the new bill_id; bill_no is "BILL-{id}".
+      const billNo = billId != null ? `BILL-${billId}` : null;
+      toast.success(billNo ? `Bill generated · ${billNo}` : "Bill generated");
     },
     onError: (e) => toast.error(String(e)),
   });

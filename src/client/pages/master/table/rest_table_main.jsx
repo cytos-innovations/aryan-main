@@ -24,14 +24,6 @@ import {
 
 const QK = ["restaurant-tables"];
 
-const RATE_OPTIONS = [
-  { value: "1", label: "Rate 1" },
-  { value: "2", label: "Rate 2" },
-  { value: "3", label: "Rate 3" },
-  { value: "4", label: "Rate 4" },
-  { value: "5", label: "Rate 5" },
-];
-
 const EMPTY = {
   code: "",
   table_group_id: "",
@@ -68,6 +60,7 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
   const [query, setQuery]   = useState("");
   const [open, setOpen]     = useState(false);
   const [active, setActive] = useState(0);
+  const [dropUp, setDropUp] = useState(false);
   const containerRef        = useRef(null);
   const listRef             = useRef(null);
   const inputRef            = useRef(null);
@@ -83,6 +76,15 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
     if (!open || !listRef.current) return;
     listRef.current.children[active]?.scrollIntoView({ block: "nearest" });
   }, [active, open]);
+  // When opening, flip the menu above the input if there isn't room below it
+  // (e.g. the field sits near the bottom of the dialog) so options aren't clipped.
+  useEffect(() => {
+    if (!open || !inputRef.current) return;
+    const rect = inputRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    setDropUp(spaceBelow < 240 && spaceAbove > spaceBelow);
+  }, [open]);
   useEffect(() => {
     function onDown(e) { if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false); }
     document.addEventListener("mousedown", onDown);
@@ -90,12 +92,38 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
   }, []);
   function focusNext() {
     const input = inputRef.current; if (!input) return;
+    const form = input.closest("form");
+    // Prefer the form's primary action (the submit button) so that after
+    // picking a value, focus lands on "Create"/"Save" — not on "Cancel",
+    // which would otherwise submit-by-Enter into a cancel. Fall back to the
+    // generic next-focusable scan only when there is no submit button.
+    const submitBtn = form?.querySelector('button[type="submit"]:not([disabled])');
+    if (submitBtn) { submitBtn.focus(); return; }
     const all = Array.from(document.querySelectorAll('input:not([disabled]):not([readonly]),textarea:not([disabled]):not([readonly]),button:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter((el) => !el.closest("[data-radix-popper-content-wrapper]"));
     const idx = all.indexOf(input); if (idx !== -1 && all[idx + 1]) all[idx + 1].focus();
   }
   function pick(opt) { onSelect(opt.value); setOpen(false); setQuery(""); setTimeout(focusNext, 0); }
   function onKeyDown(e) {
-    if (!open) { if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); setQuery(""); setOpen(true); setActive(0); } return; }
+    // Enter/arrows are handled entirely here; stop them from bubbling to the
+    // form's useEnterNav handler, which would otherwise treat this custom input
+    // as an unknown field, fail to advance, and submit the form with a
+    // still-empty group (the spurious "Table Group is required" toast).
+    if (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Escape") {
+      e.stopPropagation();
+    }
+    if (!open) {
+      // Closed dropdown. ArrowDown always opens the list. Enter opens it only
+      // when nothing is chosen yet; once a value is selected, Enter advances to
+      // the next control (the submit button) instead of reopening the list, so
+      // a second Enter confirms the form rather than getting stuck here.
+      if (e.key === "ArrowDown") { e.preventDefault(); setQuery(""); setOpen(true); setActive(0); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        if (selected) focusNext();
+        else { setQuery(""); setOpen(true); setActive(0); }
+      }
+      return;
+    }
     if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
     else if (e.key === "Enter") { e.preventDefault(); if (filtered[active]) pick(filtered[active]); }
@@ -105,7 +133,7 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
     <div ref={containerRef} className={`relative ${className}`}>
       <input ref={inputRef} type="text" value={displayText} onChange={(e) => { setQuery(e.target.value); setOpen(true); }} onFocus={() => { setQuery(""); setOpen(true); setActive(0); }} onKeyDown={onKeyDown} placeholder={placeholder} autoComplete="off" className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring placeholder:text-muted-foreground" />
       {open && filtered.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
+        <div className={`absolute z-50 w-full overflow-hidden rounded-md border bg-popover shadow-md ${dropUp ? "bottom-full mb-1" : "mt-1"}`}>
           <div ref={listRef} className="max-h-52 overflow-y-auto">
             {filtered.map((opt, i) => (
               <div key={opt.value} onMouseDown={(e) => { e.preventDefault(); pick(opt); }} onMouseEnter={() => setActive(i)} className={["cursor-pointer px-3 py-2 text-sm", i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent"].join(" ")}>{opt.label}</div>
@@ -123,6 +151,7 @@ export default function RestaurantTable() {
   const [qs, setQs] = useState({ ...DEFAULT_QUERY_STATE, sortBy: "id", sortDir: "desc" });
   const [dialog, setDialog] = useState({ open: false, mode: "create", data: null });
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [activeWarning, setActiveWarning] = useState(null); // table the user tried to deactivate while it has an open bill
   const [form, setForm] = useState(EMPTY);
   const codeRef = useRef(null); // Focus target after each successful create.
 
@@ -211,7 +240,17 @@ export default function RestaurantTable() {
     mutationFn: ({ id, is_active }) =>
       invoke("toggle_restaurant_table_active", { id, isActive: !is_active }),
     onSuccess: () => inv(),
-    onError: (e) => toast.error(String(e)),
+    onError: (e, row) => {
+      const msg = String(e);
+      // A table with an open bill cannot be deactivated — show a blocking popup
+      // telling the user to settle it first, rather than a passing toast.
+      if (msg.toLowerCase().includes("active bill")) {
+        setActiveWarning(row);
+      } else {
+        toast.error(msg);
+      }
+      inv(); // revert the optimistic switch flip
+    },
   });
 
   const deleteMut = useMutation({
@@ -452,20 +491,19 @@ export default function RestaurantTable() {
                 )}
               </Field>
 
-              <Field>
-                <FieldLabel>Rate Apply</FieldLabel>
-                <SearchableSelect
-                  options={RATE_OPTIONS.map((r) => ({ value: r.value, label: r.label }))}
-                  value={form.applicable_rate}
-                  onSelect={(v) => setForm((f) => ({ ...f, applicable_rate: v }))}
-                  placeholder="Select rate…"
-                />
-                {form.table_group_id && (
+              {/* Rate is inherited from the selected table group — not editable here. */}
+              {form.table_group_id && (
+                <Field>
+                  <FieldLabel>Rate</FieldLabel>
+                  <Input
+                    value={`Rate ${form.applicable_rate}`}
+                    readOnly
+                    className="bg-muted cursor-not-allowed" />
                   <p className="text-xs text-muted-foreground mt-1">
-                    Auto-filled from group. You may override.
+                    Taken from the selected table group.
                   </p>
-                )}
-              </Field>
+                </Field>
+              )}
             </FieldGroup>
 
             <DialogFooter className="mt-6">
@@ -490,6 +528,21 @@ export default function RestaurantTable() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => deleteMut.mutate(deleteTarget.id)}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!activeWarning} onOpenChange={(o) => !o && setActiveWarning(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Table is in use</AlertDialogTitle>
+            <AlertDialogDescription>
+              Table <strong>{activeWarning?.code}</strong> has an active bill running.
+              Please settle it first before deactivating the table.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setActiveWarning(null)}>OK</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

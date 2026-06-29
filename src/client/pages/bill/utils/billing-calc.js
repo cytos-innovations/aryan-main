@@ -9,6 +9,28 @@ function round2(n) {
 }
 
 /**
+ * Compute an item's tax as the sum of its INDEPENDENTLY-ROUNDED components.
+ *
+ * A compound tax_name like "CGST ON FOODS + SGST ON FOODS" splits the configured
+ * rate evenly across its components (GST splits CGST/SGST equally). Each
+ * component's rupee amount is rounded on its own — so equal rates always produce
+ * equal halves — and the line's tax is their sum. This is the single source of
+ * truth for tax: both the bill Tax total (calcDiscountedTotals) and the tax
+ * breakdown (calcTaxBreakdown) use it, so the breakdown always adds up to the
+ * total even when the combined tax has an odd final paisa.
+ */
+export function sumComponentTax(taxable, taxName, totalPct) {
+  const base = Number(taxable) || 0;
+  const pct  = Number(totalPct) || 0;
+  if (pct <= 0 || base <= 0) return 0;
+  const n = (taxName ?? "").trim().split(" + ").map((s) => s.trim()).filter(Boolean).length || 1;
+  const perCompPct = pct / n;
+  let total = 0;
+  for (let i = 0; i < n; i++) total = round2(total + round2(base * perCompPct / 100));
+  return total;
+}
+
+/**
  * Compute all amounts for a single order line item.
  * Returns grossAmount, discountAmount, taxableAmount, taxAmount, finalAmount.
  */
@@ -193,8 +215,13 @@ export function calcDiscountedTotals(items = [], sessionDisc = null) {
     allocated = round2(allocated + share);
 
     const newTaxable = round2(taxable - share);
-    // Recompute tax at the item's own effective rate (tax scales with taxable).
-    const newTax     = taxable > 0 ? round2(tax * (newTaxable / taxable)) : 0;
+    // Recompute tax on the post-discount base as the sum of independently-rounded
+    // components (equal CGST/SGST halves), so the bill Tax total matches the tax
+    // breakdown exactly. Falls back to scaling the stored tax when the item has
+    // no tax_percentage (e.g. legacy rows that only stored a tax_amount).
+    const newTax = Number(item.tax_percentage) > 0
+      ? sumComponentTax(newTaxable, item.tax_name, item.tax_percentage)
+      : (taxable > 0 ? round2(tax * (newTaxable / taxable)) : 0);
 
     perItem[item.id] = {
       discShare:    share,
@@ -246,32 +273,41 @@ export function calcTaxBreakdown(items = [], perItem = null) {
       : null;
 
     if (details) {
+      // Per-component tax rows (draft/menu items carry tax_details directly).
+      // Each component is rounded independently at its own rate; zero-rate or
+      // unnamed components are skipped so no phantom "No Tax" row appears.
       for (const d of details) {
-        const pct  = Number(d.tax_percentage) || 0;
-        const key  = d.tax_name ?? "No Tax";
+        const pct = Number(d.tax_percentage) || 0;
+        const key = (d.tax_name ?? "").trim();
+        if (!key || pct <= 0) continue;
         const tamt = round2(taxable * pct / 100);
-        if (!map[key]) map[key] = { tax_name: key, tax_percentage: pct, tax_amount: 0 };
+        if (!map[key]) map[key] = { tax_name: key, tax_percentage: round2(pct), tax_amount: 0 };
         map[key].tax_amount = round2(map[key].tax_amount + tamt);
       }
     } else {
-      // Compound tax_name like "CGST ON FOODS + SGST ON FOODS" — split and attribute
-      // total tax_amount equally among components so they merge with detail-based entries.
-      const rawName   = item.tax_name ?? "No Tax";
+      // Compound tax_name like "CGST ON FOODS + SGST ON FOODS" — split into its
+      // components. A null/blank tax_name means the line carries no tax (e.g. a
+      // complimentary or zero-tax item): skip it so no phantom "No Tax" row appears.
+      const rawName    = (item.tax_name ?? "").trim();
       const components = rawName.split(" + ").map((s) => s.trim()).filter(Boolean);
-      // Scale the stored tax by the post-discount reduction when an override
-      // is supplied (override.taxAfter already holds the recomputed figure).
-      const rawTamt    = Number(item.tax_amount) || 0;
-      const totalTamt  = override ? Number(override.taxAfter) || 0 : rawTamt;
-      const perComp    = round2(totalTamt / components.length);
-      // Percentage is derived from the ORIGINAL rate (rawTaxable/rawTamt) so the
-      // displayed % stays stable regardless of any discount applied to the base.
-      const rawPerComp = round2(rawTamt / components.length);
+      const totalPct   = Number(item.tax_percentage) || 0;
+      if (components.length === 0 || totalPct <= 0) continue;
+
+      // Each component's rate is an EVEN share of the configured total rate
+      // (GST splits CGST/SGST equally), derived from the real percentage — not
+      // back-computed from a rounded rupee amount — so 2.5% stays 2.5%.
+      const perCompPct = totalPct / components.length;
+
+      // `taxable` already reflects the post-discount base when an override is
+      // supplied (see above). Each component's amount is computed and rounded
+      // INDEPENDENTLY from the taxable base at its own rate — so equal rates
+      // (CGST 2.5% / SGST 2.5%) always produce equal halves, even when the
+      // combined total has an odd final paisa. The bill's Tax total is the sum
+      // of these halves (see sumComponentTax), so the breakdown always adds up.
+      const pct = round2(perCompPct);
       for (let i = 0; i < components.length; i++) {
         const key  = components[i];
-        const tamt = i === components.length - 1
-          ? round2(totalTamt - perComp * (components.length - 1)) // last gets remainder
-          : perComp;
-        const pct  = rawTaxable > 0 ? round2(rawPerComp / rawTaxable * 100) : 0;
+        const tamt = round2(taxable * perCompPct / 100);
         if (!map[key]) map[key] = { tax_name: key, tax_percentage: pct, tax_amount: 0 };
         map[key].tax_amount = round2(map[key].tax_amount + tamt);
       }
