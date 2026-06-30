@@ -2,6 +2,7 @@ mod utility;
 mod master;
 mod transaction;
 mod bill;
+mod reports;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Executor};
@@ -63,6 +64,57 @@ use master::messages::rest_kot_msg::{
     create_kot_message, delete_kot_message, get_kot_messages,
     toggle_kot_message_active, update_kot_message,
 };
+
+// ===== Reports =====
+use reports::sales_reports::rest_daily_sales_report::get_daily_sales_report;
+use reports::sales_reports::rest_department_wise_sales::get_department_wise_sales;
+use reports::sales_reports::rest_hourly_report::get_hourly_report;
+use reports::sales_reports::rest_daywise::get_daywise;
+use reports::sales_reports::rest_monthwise_bill::get_monthwise_bill;
+use reports::sales_reports::rest_rate_wise_sale::get_rate_wise_sale;
+use reports::sales_reports::rest_categorywise_sale::get_categorywise_sale;
+use reports::sales_reports::rest_food_type_wise_report::get_food_type_wise_report;
+use reports::sales_reports::rest_itemwise_sale::get_itemwise_sale;
+use reports::sales_reports::rest_itemwise_summary::get_itemwise_summary;
+use reports::sales_reports::rest_item_sales_velocity_report::get_item_sales_velocity_report;
+use reports::sales_reports::summary::rest_tax_summary::get_tax_summary;
+use reports::sales_reports::summary::rest_sales_summary::get_sales_summary;
+use reports::billing_reports::rest_bill_settlements::get_bill_settlements;
+use reports::billing_reports::rest_billwise_cancel::get_billwise_cancel;
+use reports::billing_reports::rest_cancellation::get_cancellation;
+use reports::billing_reports::rest_modified_bill_report::get_modified_bill_report;
+use reports::billing_reports::rest_modify_log_report::get_modify_log_report;
+use reports::billing_reports::rest_reprint_bill::get_reprint_bill;
+use reports::billing_reports::rest_wash_data::get_wash_data;
+use reports::billing_reports::rest_userwise_settlement::get_userwise_settlement;
+use reports::billing_reports::rest_kot_detail_report::get_kot_detail_report;
+use reports::billing_reports::rest_cashier_report::get_cashier_report;
+use reports::business_reports::table_wise_business::rest_table_section_wise::get_table_section_wise;
+use reports::business_reports::rest_waiterwise_sale::get_waiterwise_sale;
+use reports::business_reports::rest_waiterwise_report::get_waiterwise_report;
+use reports::business_reports::rest_waiterwise_incentive::get_waiterwise_incentive;
+use reports::business_reports::rest_waiter_amountwise::get_waiter_amountwise;
+use reports::business_reports::rest_captainwise_item_details::get_captainwise_item_details;
+use reports::business_reports::rest_employee_wise_report::get_employee_wise_report;
+use reports::business_reports::rest_employee_sale::get_employee_sale;
+use reports::business_reports::rest_employee_incentive::get_employee_incentive;
+use reports::business_reports::rest_user_wise_report::get_user_wise_report;
+use reports::business_reports::rest_cash_hand_over::get_cash_hand_over;
+use reports::menu_master_reports::rest_party_list::get_party_list;
+use reports::menu_master_reports::rest_customer_list::get_customer_list;
+use reports::menu_master_reports::rest_menu_code_list::get_menu_code_list;
+use reports::menu_master_reports::rest_menu_deluxe_rate::get_menu_deluxe_rate;
+use reports::menu_master_reports::rest_codewise_menu::get_codewise_menu;
+use reports::menu_master_reports::rest_item_coding_list::get_item_coding_list;
+use reports::menu_master_reports::rest_grp_coding_list::get_grp_coding_list;
+use reports::menu_master_reports::rest_grp_item_price::get_grp_item_price;
+use reports::menu_master_reports::rest_menu_group::get_menu_group;
+use reports::menu_master_reports::rest_liquor_group::get_liquor_group;
+use reports::menu_master_reports::rest_kitchen_section_wise_item::get_kitchen_section_wise_item;
+use reports::menu_master_reports::rest_kot_message_code::get_kot_message_code;
+use reports::menu_master_reports::rest_incentive_list::get_incentive_list;
+use reports::mis_reports::rest_dashboard_summary::get_dashboard_summary;
+use reports::mis_reports::rest_custom_mis_reports::get_custom_mis_reports;
 
 use master::lodge_discount_info::{
     create_discount_detail, delete_discount_detail, get_all_discount_details,
@@ -441,7 +493,10 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
         sqlx::query("DROP TABLE IF EXISTS tax_slab CASCADE").execute(pool).await.ok();
     }
 
-    // Migrate employee_information.code: BIGSERIAL → VARCHAR(20), drop emp_no
+    // Migrate employee_information.code → bigint backed by a sequence so
+    // get_next_master_code (MAX(code)+1 as i64) works. A prior migration had
+    // converted this column to VARCHAR(20), which broke auto-numbering and left
+    // the Code field showing "Auto" in the Add Employee dialog.
     let emp_code_is_bigint: bool = sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
@@ -454,21 +509,59 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .await
     .unwrap_or(false);
 
-    if emp_code_is_bigint {
+    if !emp_code_is_bigint {
+        // Convert text/other → bigint. Non-numeric values map to NULL and are
+        // renumbered below; numeric strings are preserved.
         sqlx::query(
-            "ALTER TABLE employee_information ALTER COLUMN code DROP DEFAULT",
+            "ALTER TABLE employee_information \
+             ALTER COLUMN code TYPE BIGINT \
+             USING NULLIF(regexp_replace(code::TEXT, '\\D', '', 'g'), '')::BIGINT",
         )
         .execute(pool)
         .await
-        .map_err(|e| format!("Migration failed (emp code drop default): {e}"))?;
+        .map_err(|e| format!("Migration failed (emp code to bigint): {e}"))?;
+
+        // Backfill any NULL / zero codes with sequential values.
+        sqlx::query(
+            "WITH ranked AS (
+                 SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+                 FROM employee_information
+                 WHERE code IS NULL OR code = 0
+             ),
+             base AS (SELECT COALESCE(MAX(code), 0) AS m FROM employee_information)
+             UPDATE employee_information e
+             SET code = base.m + ranked.rn
+             FROM ranked, base
+             WHERE e.id = ranked.id",
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Migration failed (emp code backfill): {e}"))?;
+
+        // Attach an owned sequence so inserts without an explicit code still get one.
+        sqlx::query(
+            "CREATE SEQUENCE IF NOT EXISTS employee_information_code_seq \
+             OWNED BY employee_information.code",
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Migration failed (emp code seq create): {e}"))?;
+
+        sqlx::query(
+            "SELECT setval('employee_information_code_seq', \
+             (SELECT COALESCE(MAX(code), 0) + 1 FROM employee_information), false)",
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Migration failed (emp code seq setval): {e}"))?;
 
         sqlx::query(
             "ALTER TABLE employee_information \
-             ALTER COLUMN code TYPE VARCHAR(20) USING code::TEXT",
+             ALTER COLUMN code SET DEFAULT nextval('employee_information_code_seq')",
         )
         .execute(pool)
         .await
-        .map_err(|e| format!("Migration failed (emp code type): {e}"))?;
+        .map_err(|e| format!("Migration failed (emp code set default): {e}"))?;
     }
 
     let emp_no_exists: bool = sqlx::query_scalar(
@@ -1944,12 +2037,67 @@ async fn seed_module_permissions(pool: &PgPool) -> Result<(), String> {
         ("mat-item-name:delete", "delete", "Delete item name"),
     ];
 
+    // Reports module — one view permission per report. Module names are prefixed
+    // "report-" so the User Access screen auto-classifies them into the Reports tab.
+    let reports: &[(&str, &str, &str)] = &[
+        ("report-daily-sales-report:view", "view", "View the Daily Sales Report report"),
+        ("report-department-wise-sales:view", "view", "View the Department wise Sales report"),
+        ("report-hourly-report:view", "view", "View the Hourly Report report"),
+        ("report-daywise:view", "view", "View the Daywise report"),
+        ("report-monthwise-bill:view", "view", "View the Monthwise Bill report"),
+        ("report-rate-wise-sale:view", "view", "View the Rate Wise Sale report"),
+        ("report-categorywise-sale:view", "view", "View the Categorywise Sale report"),
+        ("report-food-type-wise-report:view", "view", "View the Food Type wise Report report"),
+        ("report-itemwise-sale:view", "view", "View the Itemwise Sale report"),
+        ("report-itemwise-summary:view", "view", "View the Itemwise Summary report"),
+        ("report-item-sales-velocity-report:view", "view", "View the Item Sales Velocity Report report"),
+        ("report-tax-summary:view", "view", "View the Tax Summary report"),
+        ("report-sales-summary:view", "view", "View the Sales Summary report"),
+        ("report-bill-settlements:view", "view", "View the Bill Settlements report"),
+        ("report-billwise-cancel:view", "view", "View the Billwise Cancel report"),
+        ("report-cancellation:view", "view", "View the Cancellation report"),
+        ("report-modified-bill-report:view", "view", "View the Modified Bill Report report"),
+        ("report-modify-log-report:view", "view", "View the Modify Log Report report"),
+        ("report-reprint-bill:view", "view", "View the RePrint Bill report"),
+        ("report-wash-data:view", "view", "View the Wash Data report"),
+        ("report-userwise-settlement:view", "view", "View the Userwise Settlement report"),
+        ("report-kot-detail-report:view", "view", "View the KOT Detail Report report"),
+        ("report-cashier-report:view", "view", "View the Cashier Report report"),
+        ("report-table-section-wise:view", "view", "View the Table Section wise report"),
+        ("report-waiterwise-sale:view", "view", "View the Waiterwise Sale report"),
+        ("report-waiterwise-report:view", "view", "View the Waiterwise Report report"),
+        ("report-waiterwise-incentive:view", "view", "View the Waiterwise Incentive report"),
+        ("report-waiter-amountwise:view", "view", "View the Waiter Amountwise report"),
+        ("report-captainwise-item-details:view", "view", "View the Captainwise Item Details report"),
+        ("report-employee-wise-report:view", "view", "View the Employee wise Report report"),
+        ("report-employee-sale:view", "view", "View the Employee Sale report"),
+        ("report-employee-incentive:view", "view", "View the Employee Incentive report"),
+        ("report-user-wise-report:view", "view", "View the User Wise Report report"),
+        ("report-cash-hand-over:view", "view", "View the Cash Hand-Over report"),
+        ("report-party-list:view", "view", "View the Party List report"),
+        ("report-customer-list:view", "view", "View the Customer List report"),
+        ("report-menu-code-list:view", "view", "View the Menu Code List report"),
+        ("report-menu-deluxe-rate:view", "view", "View the Menu Deluxe Rate report"),
+        ("report-codewise-menu:view", "view", "View the Codewise Menu report"),
+        ("report-item-coding-list:view", "view", "View the Item Coding List report"),
+        ("report-grp-coding-list:view", "view", "View the Grp. Coding List report"),
+        ("report-grp-item-price:view", "view", "View the Grp. Item Price report"),
+        ("report-menu-group:view", "view", "View the Menu Group report"),
+        ("report-liquor-group:view", "view", "View the Liquor Group report"),
+        ("report-kitchen-section-wise-item:view", "view", "View the Kitchen Section wise Item report"),
+        ("report-kot-message-code:view", "view", "View the Kot Message Code report"),
+        ("report-incentive-list:view", "view", "View the Incentive List report"),
+        ("report-dashboard-summary:view", "view", "View the Dashboard Summary report"),
+        ("report-custom-mis-reports:view", "view", "View the Custom MIS Reports report"),
+    ];
+
     for (name, action, description) in universal.iter()
         .chain(restaurant.iter())
         .chain(lodge.iter())
         .chain(account.iter())
         .chain(employee.iter())
         .chain(material.iter())
+        .chain(reports.iter())
     {
         sqlx::query(
             "INSERT INTO permissions (permission_name, action, description) \
@@ -2402,6 +2550,61 @@ pub fn run() {
             create_custom_addon,
             get_billing_addons,
             update_order_item_addons,
+            // ===== Reports =====
+            // Sales Reports
+            get_daily_sales_report,
+            get_department_wise_sales,
+            get_hourly_report,
+            get_daywise,
+            get_monthwise_bill,
+            get_rate_wise_sale,
+            get_categorywise_sale,
+            get_food_type_wise_report,
+            get_itemwise_sale,
+            get_itemwise_summary,
+            get_item_sales_velocity_report,
+            get_tax_summary,
+            get_sales_summary,
+            // Billing Reports
+            get_bill_settlements,
+            get_billwise_cancel,
+            get_cancellation,
+            get_modified_bill_report,
+            get_modify_log_report,
+            get_reprint_bill,
+            get_wash_data,
+            get_userwise_settlement,
+            get_kot_detail_report,
+            get_cashier_report,
+            // Business Reports
+            get_table_section_wise,
+            get_waiterwise_sale,
+            get_waiterwise_report,
+            get_waiterwise_incentive,
+            get_waiter_amountwise,
+            get_captainwise_item_details,
+            get_employee_wise_report,
+            get_employee_sale,
+            get_employee_incentive,
+            get_user_wise_report,
+            get_cash_hand_over,
+            // Menu & Master Reports
+            get_party_list,
+            get_customer_list,
+            get_menu_code_list,
+            get_menu_deluxe_rate,
+            get_codewise_menu,
+            get_item_coding_list,
+            get_grp_coding_list,
+            get_grp_item_price,
+            get_menu_group,
+            get_liquor_group,
+            get_kitchen_section_wise_item,
+            get_kot_message_code,
+            get_incentive_list,
+            // MIS Reports
+            get_dashboard_summary,
+            get_custom_mis_reports,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

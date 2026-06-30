@@ -241,11 +241,12 @@ function FolderRow({ row, navKey, isOpen, onActivate }) {
       <SidebarMenuButton
         data-nav-key={navKey}
         tooltip={item.label}
+        title={item.label}
         data-state={isOpen ? "open" : "closed"}
         onClick={onActivate}
       >
         {item.icon && <HugeiconsIcon icon={item.icon} strokeWidth={2} />}
-        <span>{item.label}</span>
+        <span className="truncate">{item.label}</span>
         <HugeiconsIcon
           icon={ArrowRight01Icon}
           strokeWidth={2}
@@ -265,9 +266,9 @@ function LeafRow({ row, navKey }) {
       <NavLink to={item.path} data-nav-key={navKey}>
         {({ isActive }) => (
           <Btn tooltip={item.label} isActive={isActive} asChild>
-            <span>
+            <span title={item.label}>
               {item.icon && <HugeiconsIcon icon={item.icon} strokeWidth={2} />}
-              <span>{item.label}</span>
+              <span className="truncate">{item.label}</span>
             </span>
           </Btn>
         )}

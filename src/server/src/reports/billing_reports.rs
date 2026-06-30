@@ -1,0 +1,10 @@
+pub mod rest_bill_settlements;
+pub mod rest_billwise_cancel;
+pub mod rest_cancellation;
+pub mod rest_modified_bill_report;
+pub mod rest_modify_log_report;
+pub mod rest_reprint_bill;
+pub mod rest_wash_data;
+pub mod rest_userwise_settlement;
+pub mod rest_kot_detail_report;
+pub mod rest_cashier_report;

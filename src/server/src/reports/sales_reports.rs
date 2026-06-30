@@ -1,0 +1,12 @@
+pub mod rest_daily_sales_report;
+pub mod rest_department_wise_sales;
+pub mod rest_hourly_report;
+pub mod rest_daywise;
+pub mod rest_monthwise_bill;
+pub mod rest_rate_wise_sale;
+pub mod rest_categorywise_sale;
+pub mod rest_food_type_wise_report;
+pub mod rest_itemwise_sale;
+pub mod rest_itemwise_summary;
+pub mod rest_item_sales_velocity_report;
+pub mod summary;

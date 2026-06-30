@@ -25,6 +25,48 @@ import {
   BookOpen01Icon,
   ReceiptIndianRupeeIcon,
   Building04Icon,
+  // ── Reports icons ──
+  Analytics01Icon,
+  AnalyticsUpIcon,
+  Calendar01Icon,
+  Calendar03Icon,
+  Cancel01Icon,
+  CancelCircleIcon,
+  CashierIcon,
+  ChartColumnIcon,
+  ChartHistogramIcon,
+  ChartLineData01Icon,
+  ChefHatIcon,
+  Clock01Icon,
+  CodeIcon,
+  Coins01Icon,
+  Coins02Icon,
+  ContactBookIcon,
+  DashboardCircleIcon,
+  DrinkIcon,
+  Edit02Icon,
+  FileEditIcon,
+  GiftCardIcon,
+  GiftIcon,
+  HotdogIcon,
+  KitchenUtensilsIcon,
+  Menu01Icon,
+  Money03Icon,
+  MoneyBag01Icon,
+  PresentationBarChart01Icon,
+  PrinterIcon,
+  QrCodeIcon,
+  Recycle01Icon,
+  Rocket01Icon,
+  SaleTag01Icon,
+  SaleTag02Icon,
+  ServingFoodIcon,
+  SourceCodeIcon,
+  Store01Icon,
+  UserListIcon,
+  UserMultipleIcon,
+  UserStar01Icon,
+  WaiterIcon,
 } from "@hugeicons/core-free-icons";
 
 import Dashboard from "@/pages/dashboard";
@@ -60,6 +102,56 @@ import MaterialItemGroup from "@/pages/master/kitchen_stock/material_item_group"
 import MaterialItemName from "@/pages/master/kitchen_stock/material_item_name";
 import CalIncentive from "@/pages/transaction/rest_cal_insentive";
 import BillingPage from "@/pages/bill";
+// ── Reports ──
+import RptDailySalesReport from "@/pages/reports/sales_reports/rest_daily_sales_report";
+import RptDepartmentWiseSales from "@/pages/reports/sales_reports/rest_department_wise_sales";
+import RptHourlyReport from "@/pages/reports/sales_reports/rest_hourly_report";
+import RptDaywise from "@/pages/reports/sales_reports/rest_daywise";
+import RptMonthwiseBill from "@/pages/reports/sales_reports/rest_monthwise_bill";
+import RptRateWiseSale from "@/pages/reports/sales_reports/rest_rate_wise_sale";
+import RptCategorywiseSale from "@/pages/reports/sales_reports/rest_categorywise_sale";
+import RptFoodTypeWiseReport from "@/pages/reports/sales_reports/rest_food_type_wise_report";
+import RptItemwiseSale from "@/pages/reports/sales_reports/rest_itemwise_sale";
+import RptItemwiseSummary from "@/pages/reports/sales_reports/rest_itemwise_summary";
+import RptItemSalesVelocityReport from "@/pages/reports/sales_reports/rest_item_sales_velocity_report";
+import RptTaxSummary from "@/pages/reports/sales_reports/summary/rest_tax_summary";
+import RptSalesSummary from "@/pages/reports/sales_reports/summary/rest_sales_summary";
+import RptBillSettlements from "@/pages/reports/billing_reports/rest_bill_settlements";
+import RptBillwiseCancel from "@/pages/reports/billing_reports/rest_billwise_cancel";
+import RptCancellation from "@/pages/reports/billing_reports/rest_cancellation";
+import RptModifiedBillReport from "@/pages/reports/billing_reports/rest_modified_bill_report";
+import RptModifyLogReport from "@/pages/reports/billing_reports/rest_modify_log_report";
+import RptReprintBill from "@/pages/reports/billing_reports/rest_reprint_bill";
+import RptWashData from "@/pages/reports/billing_reports/rest_wash_data";
+import RptUserwiseSettlement from "@/pages/reports/billing_reports/rest_userwise_settlement";
+import RptKotDetailReport from "@/pages/reports/billing_reports/rest_kot_detail_report";
+import RptCashierReport from "@/pages/reports/billing_reports/rest_cashier_report";
+import RptTableSectionWise from "@/pages/reports/business_reports/table_wise_business/rest_table_section_wise";
+import RptWaiterwiseSale from "@/pages/reports/business_reports/rest_waiterwise_sale";
+import RptWaiterwiseReport from "@/pages/reports/business_reports/rest_waiterwise_report";
+import RptWaiterwiseIncentive from "@/pages/reports/business_reports/rest_waiterwise_incentive";
+import RptWaiterAmountwise from "@/pages/reports/business_reports/rest_waiter_amountwise";
+import RptCaptainwiseItemDetails from "@/pages/reports/business_reports/rest_captainwise_item_details";
+import RptEmployeeWiseReport from "@/pages/reports/business_reports/rest_employee_wise_report";
+import RptEmployeeSale from "@/pages/reports/business_reports/rest_employee_sale";
+import RptEmployeeIncentive from "@/pages/reports/business_reports/rest_employee_incentive";
+import RptUserWiseReport from "@/pages/reports/business_reports/rest_user_wise_report";
+import RptCashHandOver from "@/pages/reports/business_reports/rest_cash_hand_over";
+import RptPartyList from "@/pages/reports/menu_master_reports/rest_party_list";
+import RptCustomerList from "@/pages/reports/menu_master_reports/rest_customer_list";
+import RptMenuCodeList from "@/pages/reports/menu_master_reports/rest_menu_code_list";
+import RptMenuDeluxeRate from "@/pages/reports/menu_master_reports/rest_menu_deluxe_rate";
+import RptCodewiseMenu from "@/pages/reports/menu_master_reports/rest_codewise_menu";
+import RptItemCodingList from "@/pages/reports/menu_master_reports/rest_item_coding_list";
+import RptGrpCodingList from "@/pages/reports/menu_master_reports/rest_grp_coding_list";
+import RptGrpItemPrice from "@/pages/reports/menu_master_reports/rest_grp_item_price";
+import RptMenuGroup from "@/pages/reports/menu_master_reports/rest_menu_group";
+import RptLiquorGroup from "@/pages/reports/menu_master_reports/rest_liquor_group";
+import RptKitchenSectionWiseItem from "@/pages/reports/menu_master_reports/rest_kitchen_section_wise_item";
+import RptKotMessageCode from "@/pages/reports/menu_master_reports/rest_kot_message_code";
+import RptIncentiveList from "@/pages/reports/menu_master_reports/rest_incentive_list";
+import RptDashboardSummary from "@/pages/reports/mis_reports/rest_dashboard_summary";
+import RptCustomMisReports from "@/pages/reports/mis_reports/rest_custom_mis_reports";
 
 // ── Registry ─────────────────────────────────────────────────
 // Each leaf: { path, label, application, section, perm, icon, element }
@@ -400,6 +492,501 @@ export const registry = [
         perm: "cal-incentive:view",
         icon: PercentIcon,
         element: <CalIncentive />,
+      },
+    ],
+  },
+  {
+    label: "Reports",
+    items: [
+      {
+        label: "Sales Reports",
+        icon: Analytics01Icon,
+        application: "restaurant",
+        items: [
+          {
+            path: "/reports/sales/daily-sales-report",
+            label: "Daily Sales Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-daily-sales-report:view",
+            icon: ChartLineData01Icon,
+            element: <RptDailySalesReport />,
+          },
+          {
+            path: "/reports/sales/department-wise-sales",
+            label: "Department wise Sales",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-department-wise-sales:view",
+            icon: ChartColumnIcon,
+            element: <RptDepartmentWiseSales />,
+          },
+          {
+            path: "/reports/sales/hourly-report",
+            label: "Hourly Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-hourly-report:view",
+            icon: Clock01Icon,
+            element: <RptHourlyReport />,
+          },
+          {
+            path: "/reports/sales/daywise",
+            label: "Daywise",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-daywise:view",
+            icon: Calendar01Icon,
+            element: <RptDaywise />,
+          },
+          {
+            path: "/reports/sales/monthwise-bill",
+            label: "Monthwise Bill",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-monthwise-bill:view",
+            icon: Calendar03Icon,
+            element: <RptMonthwiseBill />,
+          },
+          {
+            path: "/reports/sales/rate-wise-sale",
+            label: "Rate Wise Sale",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-rate-wise-sale:view",
+            icon: Coins01Icon,
+            element: <RptRateWiseSale />,
+          },
+          {
+            path: "/reports/sales/categorywise-sale",
+            label: "Categorywise Sale",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-categorywise-sale:view",
+            icon: Tag01Icon,
+            element: <RptCategorywiseSale />,
+          },
+          {
+            path: "/reports/sales/food-type-wise-report",
+            label: "Food Type wise Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-food-type-wise-report:view",
+            icon: HotdogIcon,
+            element: <RptFoodTypeWiseReport />,
+          },
+          {
+            path: "/reports/sales/itemwise-sale",
+            label: "Itemwise Sale",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-itemwise-sale:view",
+            icon: SaleTag02Icon,
+            element: <RptItemwiseSale />,
+          },
+          {
+            path: "/reports/sales/itemwise-summary",
+            label: "Itemwise Summary",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-itemwise-summary:view",
+            icon: ChartHistogramIcon,
+            element: <RptItemwiseSummary />,
+          },
+          {
+            path: "/reports/sales/item-sales-velocity-report",
+            label: "Item Sales Velocity Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-item-sales-velocity-report:view",
+            icon: Rocket01Icon,
+            element: <RptItemSalesVelocityReport />,
+          },
+          {
+            label: "Summary",
+            icon: PieChart01Icon,
+            application: "restaurant",
+            items: [
+              {
+                path: "/reports/sales/summary/tax-summary",
+                label: "Tax Summary",
+                application: "restaurant",
+                section: "reports",
+                perm: "report-tax-summary:view",
+                icon: TaxesIcon,
+                element: <RptTaxSummary />,
+              },
+              {
+                path: "/reports/sales/summary/sales-summary",
+                label: "Sales Summary",
+                application: "restaurant",
+                section: "reports",
+                perm: "report-sales-summary:view",
+                icon: PresentationBarChart01Icon,
+                element: <RptSalesSummary />,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        label: "Billing Reports",
+        icon: Invoice03Icon,
+        application: "restaurant",
+        items: [
+          {
+            path: "/reports/billing/bill-settlements",
+            label: "Bill Settlements",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-bill-settlements:view",
+            icon: ReceiptIndianRupeeIcon,
+            element: <RptBillSettlements />,
+          },
+          {
+            path: "/reports/billing/billwise-cancel",
+            label: "Billwise Cancel",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-billwise-cancel:view",
+            icon: Cancel01Icon,
+            element: <RptBillwiseCancel />,
+          },
+          {
+            path: "/reports/billing/cancellation",
+            label: "Cancellation",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-cancellation:view",
+            icon: CancelCircleIcon,
+            element: <RptCancellation />,
+          },
+          {
+            path: "/reports/billing/modified-bill-report",
+            label: "Modified Bill Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-modified-bill-report:view",
+            icon: FileEditIcon,
+            element: <RptModifiedBillReport />,
+          },
+          {
+            path: "/reports/billing/modify-log-report",
+            label: "Modify Log Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-modify-log-report:view",
+            icon: Edit02Icon,
+            element: <RptModifyLogReport />,
+          },
+          {
+            path: "/reports/billing/reprint-bill",
+            label: "RePrint Bill",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-reprint-bill:view",
+            icon: PrinterIcon,
+            element: <RptReprintBill />,
+          },
+          {
+            path: "/reports/billing/wash-data",
+            label: "Wash Data",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-wash-data:view",
+            icon: Recycle01Icon,
+            element: <RptWashData />,
+          },
+          {
+            path: "/reports/billing/userwise-settlement",
+            label: "Userwise Settlement",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-userwise-settlement:view",
+            icon: UserMultipleIcon,
+            element: <RptUserwiseSettlement />,
+          },
+          {
+            path: "/reports/billing/kot-detail-report",
+            label: "KOT Detail Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-kot-detail-report:view",
+            icon: ChefHatIcon,
+            element: <RptKotDetailReport />,
+          },
+          {
+            path: "/reports/billing/cashier-report",
+            label: "Cashier Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-cashier-report:view",
+            icon: CashierIcon,
+            element: <RptCashierReport />,
+          },
+        ],
+      },
+      {
+        label: "Business Reports",
+        icon: Store01Icon,
+        application: "restaurant",
+        items: [
+          {
+            label: "Table wise Business",
+            icon: TableIcon,
+            application: "restaurant",
+            items: [
+              {
+                path: "/reports/business/table-wise-business/table-section-wise",
+                label: "Table Section wise",
+                application: "restaurant",
+                section: "reports",
+                perm: "report-table-section-wise:view",
+                icon: Table01Icon,
+                element: <RptTableSectionWise />,
+              },
+            ],
+          },
+          {
+            path: "/reports/business/waiterwise-sale",
+            label: "Waiterwise Sale",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-waiterwise-sale:view",
+            icon: WaiterIcon,
+            element: <RptWaiterwiseSale />,
+          },
+          {
+            path: "/reports/business/waiterwise-report",
+            label: "Waiterwise Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-waiterwise-report:view",
+            icon: ServingFoodIcon,
+            element: <RptWaiterwiseReport />,
+          },
+          {
+            path: "/reports/business/waiterwise-incentive",
+            label: "Waiterwise Incentive",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-waiterwise-incentive:view",
+            icon: GiftIcon,
+            element: <RptWaiterwiseIncentive />,
+          },
+          {
+            path: "/reports/business/waiter-amountwise",
+            label: "Waiter Amountwise",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-waiter-amountwise:view",
+            icon: Coins02Icon,
+            element: <RptWaiterAmountwise />,
+          },
+          {
+            path: "/reports/business/captainwise-item-details",
+            label: "Captainwise Item Details",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-captainwise-item-details:view",
+            icon: UserStar01Icon,
+            element: <RptCaptainwiseItemDetails />,
+          },
+          {
+            path: "/reports/business/employee-wise-report",
+            label: "Employee wise Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-employee-wise-report:view",
+            icon: UserGroupIcon,
+            element: <RptEmployeeWiseReport />,
+          },
+          {
+            path: "/reports/business/employee-sale",
+            label: "Employee Sale",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-employee-sale:view",
+            icon: Money03Icon,
+            element: <RptEmployeeSale />,
+          },
+          {
+            path: "/reports/business/employee-incentive",
+            label: "Employee Incentive",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-employee-incentive:view",
+            icon: GiftCardIcon,
+            element: <RptEmployeeIncentive />,
+          },
+          {
+            path: "/reports/business/user-wise-report",
+            label: "User Wise Report",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-user-wise-report:view",
+            icon: UserAccountIcon,
+            element: <RptUserWiseReport />,
+          },
+          {
+            path: "/reports/business/cash-hand-over",
+            label: "Cash Hand-Over",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-cash-hand-over:view",
+            icon: MoneyBag01Icon,
+            element: <RptCashHandOver />,
+          },
+        ],
+      },
+      {
+        label: "Menu & Master Reports",
+        icon: Menu01Icon,
+        application: "restaurant",
+        items: [
+          {
+            path: "/reports/menu-master/party-list",
+            label: "Party List",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-party-list:view",
+            icon: ContactBookIcon,
+            element: <RptPartyList />,
+          },
+          {
+            path: "/reports/menu-master/customer-list",
+            label: "Customer List",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-customer-list:view",
+            icon: UserListIcon,
+            element: <RptCustomerList />,
+          },
+          {
+            path: "/reports/menu-master/menu-code-list",
+            label: "Menu Code List",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-menu-code-list:view",
+            icon: QrCodeIcon,
+            element: <RptMenuCodeList />,
+          },
+          {
+            path: "/reports/menu-master/menu-deluxe-rate",
+            label: "Menu Deluxe Rate",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-menu-deluxe-rate:view",
+            icon: SaleTag01Icon,
+            element: <RptMenuDeluxeRate />,
+          },
+          {
+            path: "/reports/menu-master/codewise-menu",
+            label: "Codewise Menu",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-codewise-menu:view",
+            icon: SourceCodeIcon,
+            element: <RptCodewiseMenu />,
+          },
+          {
+            path: "/reports/menu-master/item-coding-list",
+            label: "Item Coding List",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-item-coding-list:view",
+            icon: CodeIcon,
+            element: <RptItemCodingList />,
+          },
+          {
+            path: "/reports/menu-master/grp-coding-list",
+            label: "Grp. Coding List",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-grp-coding-list:view",
+            icon: Layers01Icon,
+            element: <RptGrpCodingList />,
+          },
+          {
+            path: "/reports/menu-master/grp-item-price",
+            label: "Grp. Item Price",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-grp-item-price:view",
+            icon: Coins01Icon,
+            element: <RptGrpItemPrice />,
+          },
+          {
+            path: "/reports/menu-master/menu-group",
+            label: "Menu Group",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-menu-group:view",
+            icon: PackageIcon,
+            element: <RptMenuGroup />,
+          },
+          {
+            path: "/reports/menu-master/liquor-group",
+            label: "Liquor Group",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-liquor-group:view",
+            icon: DrinkIcon,
+            element: <RptLiquorGroup />,
+          },
+          {
+            path: "/reports/menu-master/kitchen-section-wise-item",
+            label: "Kitchen Section wise Item",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-kitchen-section-wise-item:view",
+            icon: KitchenUtensilsIcon,
+            element: <RptKitchenSectionWiseItem />,
+          },
+          {
+            path: "/reports/menu-master/kot-message-code",
+            label: "Kot Message Code",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-kot-message-code:view",
+            icon: Message01Icon,
+            element: <RptKotMessageCode />,
+          },
+          {
+            path: "/reports/menu-master/incentive-list",
+            label: "Incentive List",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-incentive-list:view",
+            icon: GiftIcon,
+            element: <RptIncentiveList />,
+          },
+        ],
+      },
+      {
+        label: "MIS Reports",
+        icon: DashboardSquare01Icon,
+        application: "restaurant",
+        items: [
+          {
+            path: "/reports/mis/dashboard-summary",
+            label: "Dashboard Summary",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-dashboard-summary:view",
+            icon: DashboardCircleIcon,
+            element: <RptDashboardSummary />,
+          },
+          {
+            path: "/reports/mis/custom-mis-reports",
+            label: "Custom MIS Reports",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-custom-mis-reports:view",
+            icon: AnalyticsUpIcon,
+            element: <RptCustomMisReports />,
+          },
+        ],
       },
     ],
   },
