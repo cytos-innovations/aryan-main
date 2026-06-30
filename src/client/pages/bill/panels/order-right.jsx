@@ -295,6 +295,14 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
   // Show the pre-tax (taxable) amount per line — tax is added separately in the
   // bill totals below, not baked into each line's displayed amount.
   const totalAmount = group.reduce((s, i) => s + Number(i.taxable_amount), 0);
+  // Add-on charge folded into the line's taxable_amount (addon_rate is per-unit).
+  // The item row should display only its OWN rate; the add-on amount is broken
+  // out on its own row underneath, so subtract it from the line amount here.
+  const addonAmount = group.reduce(
+    (s, i) => s + (Number(i.addon_rate) || 0) * Number(i.quantity),
+    0,
+  );
+  const baseAmount = Math.round((totalAmount - addonAmount) * 100) / 100;
 
   // Pending (editable) items vs KOT-sent items
   const pendingItems = isDraft ? group : group.filter((i) => i.kot_status === "PENDING");
@@ -660,11 +668,11 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
             title="Click to edit rate (As Per Size)"
             className="text-xs font-semibold tabular-nums shrink-0 w-14 text-right rounded hover:bg-muted hover:underline decoration-dotted underline-offset-2 transition-colors"
           >
-            ₹{fmtAmount(totalAmount)}
+            ₹{fmtAmount(baseAmount)}
           </button>
         ) : (
           <span className="text-xs font-semibold tabular-nums shrink-0 w-14 text-right">
-            ₹{fmtAmount(totalAmount)}
+            ₹{fmtAmount(baseAmount)}
           </span>
         )}
 
@@ -764,20 +772,25 @@ function MergedOrderItemRow({ group, sessionId, isDraft, isBillPrinted, isF6Acti
         </div>
       )}
 
-      {/* Add-ons (chargeable modifiers attached to this line) */}
+      {/* Add-ons (chargeable modifiers attached to this line). The item row above
+          shows only its own rate; each add-on's amount (rate × line qty) is broken
+          out here so the line reads base + add-ons = the bill total. */}
       {Array.isArray(representative.addons) && representative.addons.length > 0 && (
         <div className="px-3 pb-1.5 -mt-0.5 space-y-0.5">
-          {representative.addons.map((a, idx) => (
-            <div key={a.id ?? idx} className="flex items-center gap-1 pl-3.5">
-              <span className="text-[10px] text-muted-foreground/50">+</span>
-              <span className="text-[10px] text-muted-foreground flex-1 min-w-0 truncate">{a.name}</span>
-              {Number(a.rate) > 0 && (
-                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
-                  ₹{fmtAmount(Number(a.rate))}
-                </span>
-              )}
-            </div>
-          ))}
+          {representative.addons.map((a, idx) => {
+            const addonLineAmt = Math.round(Number(a.rate) * totalQty * 100) / 100;
+            return (
+              <div key={a.id ?? idx} className="flex items-center gap-1 pl-3.5">
+                <span className="text-[10px] text-muted-foreground/50">+</span>
+                <span className="text-[10px] text-muted-foreground flex-1 min-w-0 truncate">{a.name}</span>
+                {Number(a.rate) > 0 && (
+                  <span className="text-[10px] text-muted-foreground tabular-nums shrink-0 w-14 text-right">
+                    ₹{fmtAmount(addonLineAmt)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -984,19 +997,28 @@ function BillTotals({ items, sessionDisc, menu }) {
     [items, liveDisc],
   );
 
-  // Per-category subtotals — ordered by first appearance
+  // Per-category subtotals — ordered by first appearance. Add-on charges are
+  // pulled out of the item's category into a dedicated "Add-ons" row, so a
+  // category reflects only its items' own rates (the add-on amount is folded
+  // into each line's taxable_amount via addon_rate).
   const categoryTotals = useMemo(() => {
     const map = new Map(); // catId → { name, total }
+    let addonTotal = 0;
     for (const item of items ?? []) {
       if (item.item_status !== "ACTIVE") continue;
       const catId   = item.category_id ?? "__none__";
       const catName = item.category_name ?? "Other";
       // Pre-tax amount — tax is shown separately in its own row below.
-      const amt     = Number(item.taxable_amount) || 0;
+      const amt       = Number(item.taxable_amount) || 0;
+      const addonAmt  = (Number(item.addon_rate) || 0) * Number(item.quantity);
+      const baseAmt   = amt - addonAmt;
+      addonTotal += addonAmt;
       if (!map.has(catId)) map.set(catId, { name: catName, total: 0 });
-      map.get(catId).total += amt;
+      map.get(catId).total += baseAmt;
     }
-    return Array.from(map.values()).map((c) => ({ ...c, total: Math.round(c.total * 100) / 100 }));
+    const rows = Array.from(map.values()).map((c) => ({ ...c, total: Math.round(c.total * 100) / 100 }));
+    if (addonTotal > 0) rows.push({ name: "Add-ons", total: Math.round(addonTotal * 100) / 100 });
+    return rows;
   }, [items]);
 
   // Tax breakdown reflects the post-discount (GST-on-net) figures.

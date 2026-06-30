@@ -24,6 +24,7 @@ import {
   Invoice03Icon,
   BookOpen01Icon,
   ReceiptIndianRupeeIcon,
+  DeliveryTruck01Icon,
   Building04Icon,
   // ── Reports icons ──
   Analytics01Icon,
@@ -90,6 +91,7 @@ import FoodType from "@/pages/master/menu/rest_menu_type";
 import MenuCard from "@/pages/master/menu/rest_menu_main";
 import TableGroup from "@/pages/master/table/rest_table_group";
 import RestaurantTable from "@/pages/master/table/rest_table_main";
+import RestMarketSegment from "@/pages/master/rest_market_segment";
 import BillMessage from "@/pages/master/messages/rest_bill_msg";
 import KotMessage from "@/pages/master/messages/rest_kot_msg";
 import AccAccountCategories from "@/pages/master/account_groups/acc_account_categories";
@@ -117,6 +119,7 @@ import RptItemSalesVelocityReport from "@/pages/reports/sales_reports/rest_item_
 import RptTaxSummary from "@/pages/reports/sales_reports/summary/rest_tax_summary";
 import RptSalesSummary from "@/pages/reports/sales_reports/summary/rest_sales_summary";
 import RptBillSettlements from "@/pages/reports/billing_reports/rest_bill_settlements";
+import RptDineoutDiscount from "@/pages/reports/billing_reports/rest_dineout_discount_report";
 import RptBillwiseCancel from "@/pages/reports/billing_reports/rest_billwise_cancel";
 import RptCancellation from "@/pages/reports/billing_reports/rest_cancellation";
 import RptModifiedBillReport from "@/pages/reports/billing_reports/rest_modified_bill_report";
@@ -308,6 +311,15 @@ export const registry = [
             element: <RestaurantTable />,
           },
         ],
+      },
+      {
+        path: "/master/dineout-apps",
+        label: "Dineout Apps",
+        application: "restaurant",
+        section: "master",
+        perm: "rest-market-segment:view",
+        icon: PieChart01Icon,
+        element: <RestMarketSegment />,
       },
       {
         label: "Messages",
@@ -642,6 +654,15 @@ export const registry = [
             perm: "report-bill-settlements:view",
             icon: ReceiptIndianRupeeIcon,
             element: <RptBillSettlements />,
+          },
+          {
+            path: "/reports/billing/dineout-discount",
+            label: "Dineout Discount",
+            application: "restaurant",
+            section: "reports",
+            perm: "report-dineout-discount:view",
+            icon: DeliveryTruck01Icon,
+            element: <RptDineoutDiscount />,
           },
           {
             path: "/reports/billing/billwise-cancel",

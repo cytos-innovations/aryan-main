@@ -689,7 +689,7 @@ export default function OrderEntryView() {
     }
   }
 
-  function handleSettle(entries, customer, writeOffAmount = 0, tipAmount = 0) {
+  function handleSettle(entries, customer, writeOffAmount = 0, tipAmount = 0, dineout = null) {
     if (!billId || !entries.length) return;
     const isPartPayment = entries.length > 1;
     const paymentType   = isPartPayment ? PAYMENT_TYPE.PART : entries[0].payment_mode;
@@ -705,6 +705,7 @@ export default function OrderEntryView() {
         customerName:    customer?.name    ?? null,
         customerMobile:  customer?.mobile  ?? null,
         customerAddress: customer?.address ?? null,
+        dineout:         dineout           ?? null,
       },
       {
         onSuccess: () => {

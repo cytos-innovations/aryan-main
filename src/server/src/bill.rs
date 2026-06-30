@@ -256,6 +256,22 @@ pub struct PartPaymentInput {
     pub reference_no: Option<String>,
 }
 
+// Dineout-app discount captured at settlement (Swiggy / Zomato / District / …).
+// The frontend computes discount_amount/final_amount; the backend snapshots the
+// whole thing into dineout_discount_sale for the dineout discount report.
+// camelCase rename — the frontend sends appName/marketSegmentId/etc.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DineoutDiscountInput {
+    pub market_segment_id: Option<i32>,
+    pub app_name:          String,
+    pub original_amount:   f64,
+    pub discount_mode:     String, // "PCT" | "AMT"
+    pub discount_value:    f64,
+    pub discount_amount:   f64,
+    pub final_amount:      f64,
+}
+
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
@@ -2781,6 +2797,7 @@ pub async fn settle_bill(
     customer_name:    Option<String>,
     customer_mobile:  Option<String>,
     customer_address: Option<String>,
+    dineout:          Option<DineoutDiscountInput>,
 ) -> Result<(), String> {
     let pool = acquire_pool(&state.pool, &app).await?;
 
@@ -2929,6 +2946,36 @@ pub async fn settle_bill(
     .await
     .map_err(|e| format!("Failed to record settlement: {e}"))?;
 
+    // Dineout-app discount snapshot — one row per bill settled through a dineout
+    // app. Denormalised so the dineout discount report needs no joins.
+    if let Some(d) = dineout.as_ref() {
+        if d.discount_amount > 0.0 || d.final_amount > 0.0 {
+            sqlx::query(
+                "INSERT INTO dineout_discount_sale
+                    (bill_id, order_session_id, table_id, market_segment_id, app_name,
+                     customer_name, customer_mobile, customer_address,
+                     original_amount, discount_mode, discount_value, discount_amount, final_amount)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            )
+            .bind(bill_id)
+            .bind(session_id)
+            .bind(table_id)
+            .bind(d.market_segment_id)
+            .bind(d.app_name.trim())
+            .bind(customer_name.as_deref().filter(|s| !s.trim().is_empty()))
+            .bind(customer_mobile.as_deref().filter(|s| !s.trim().is_empty()))
+            .bind(customer_address.as_deref().filter(|s| !s.trim().is_empty()))
+            .bind(round2(d.original_amount))
+            .bind(if d.discount_mode.eq_ignore_ascii_case("AMT") { "AMT" } else { "PCT" })
+            .bind(round2(d.discount_value))
+            .bind(round2(d.discount_amount))
+            .bind(round2(d.final_amount))
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to record dineout discount: {e}"))?;
+        }
+    }
+
     // If DUE, record it in customer_due_ledger with every field populated.
     if is_due {
         if let Some(cid) = effective_customer_id {
@@ -3042,6 +3089,131 @@ pub async fn settle_bill(
     .ok();
 
     Ok(())
+}
+
+// ── Dineout discount report ───────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct DineoutAppSummary {
+    pub market_segment_id: Option<i32>,
+    pub app_name:          String,
+    pub bill_count:        i64,
+    pub original_amount:   f64,
+    pub discount_amount:   f64,
+    pub final_amount:      f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DineoutDiscountRow {
+    pub id:               i32,
+    pub bill_id:          Option<i32>,
+    pub bill_no:          Option<String>,
+    pub app_name:         String,
+    pub table_name:       Option<String>,
+    pub customer_name:    Option<String>,
+    pub customer_mobile:  Option<String>,
+    pub original_amount:  f64,
+    pub discount_mode:    String,
+    pub discount_value:   f64,
+    pub discount_amount:  f64,
+    pub final_amount:     f64,
+    pub settled_at:       Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DineoutDiscountReport {
+    pub summary: Vec<DineoutAppSummary>,
+    pub rows:    Vec<DineoutDiscountRow>,
+}
+
+/// Dineout discount report — per-app totals plus the underlying bill rows.
+/// `from_date` / `to_date` are inclusive YYYY-MM-DD strings (optional).
+#[tauri::command]
+pub async fn get_dineout_discount_report(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    from_date: Option<String>,
+    to_date:   Option<String>,
+) -> Result<DineoutDiscountReport, String> {
+    let pool = acquire_pool(&state.pool, &app).await?;
+
+    // Date filter on the snapshot's created_at (settlement time).
+    let from = from_date.filter(|s| !s.trim().is_empty());
+    let to   = to_date.filter(|s| !s.trim().is_empty());
+
+    let summary_rows = sqlx::query(
+        "SELECT market_segment_id, app_name,
+                COUNT(*)::int8                       AS bill_count,
+                COALESCE(SUM(original_amount),0)::float8 AS original_amount,
+                COALESCE(SUM(discount_amount),0)::float8 AS discount_amount,
+                COALESCE(SUM(final_amount),0)::float8    AS final_amount
+         FROM   dineout_discount_sale
+         WHERE  ($1::date IS NULL OR created_at::date >= $1::date)
+           AND  ($2::date IS NULL OR created_at::date <= $2::date)
+         GROUP BY market_segment_id, app_name
+         ORDER BY discount_amount DESC",
+    )
+    .bind(from.as_deref())
+    .bind(to.as_deref())
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Dineout summary query failed: {e}"))?;
+
+    let summary = summary_rows
+        .iter()
+        .map(|r| DineoutAppSummary {
+            market_segment_id: r.try_get("market_segment_id").ok().flatten(),
+            app_name:          r.try_get("app_name").unwrap_or_default(),
+            bill_count:        r.try_get("bill_count").unwrap_or(0),
+            original_amount:   r.try_get("original_amount").unwrap_or(0.0),
+            discount_amount:   r.try_get("discount_amount").unwrap_or(0.0),
+            final_amount:      r.try_get("final_amount").unwrap_or(0.0),
+        })
+        .collect();
+
+    let detail_rows = sqlx::query(
+        "SELECT dds.id, dds.bill_id, bm.bill_no, dds.app_name,
+                rt.table_name,
+                dds.customer_name, dds.customer_mobile,
+                dds.original_amount::float8 AS original_amount,
+                dds.discount_mode,
+                dds.discount_value::float8  AS discount_value,
+                dds.discount_amount::float8 AS discount_amount,
+                dds.final_amount::float8    AS final_amount,
+                to_char(dds.created_at, 'YYYY-MM-DD HH24:MI') AS settled_at
+         FROM   dineout_discount_sale dds
+         LEFT JOIN bill_master bm        ON bm.id = dds.bill_id
+         LEFT JOIN restaurant_table rt   ON rt.id = dds.table_id
+         WHERE  ($1::date IS NULL OR dds.created_at::date >= $1::date)
+           AND  ($2::date IS NULL OR dds.created_at::date <= $2::date)
+         ORDER BY dds.created_at DESC, dds.id DESC",
+    )
+    .bind(from.as_deref())
+    .bind(to.as_deref())
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Dineout detail query failed: {e}"))?;
+
+    let rows = detail_rows
+        .iter()
+        .map(|r| DineoutDiscountRow {
+            id:              r.try_get("id").unwrap_or(0),
+            bill_id:         r.try_get("bill_id").ok().flatten(),
+            bill_no:         r.try_get("bill_no").ok().flatten(),
+            app_name:        r.try_get("app_name").unwrap_or_default(),
+            table_name:      r.try_get("table_name").ok().flatten(),
+            customer_name:   r.try_get("customer_name").ok().flatten(),
+            customer_mobile: r.try_get("customer_mobile").ok().flatten(),
+            original_amount: r.try_get("original_amount").unwrap_or(0.0),
+            discount_mode:   r.try_get("discount_mode").unwrap_or_else(|_| "PCT".to_string()),
+            discount_value:  r.try_get("discount_value").unwrap_or(0.0),
+            discount_amount: r.try_get("discount_amount").unwrap_or(0.0),
+            final_amount:    r.try_get("final_amount").unwrap_or(0.0),
+            settled_at:      r.try_get("settled_at").ok().flatten(),
+        })
+        .collect();
+
+    Ok(DineoutDiscountReport { summary, rows })
 }
 
 // ── Reservations ──────────────────────────────────────────────

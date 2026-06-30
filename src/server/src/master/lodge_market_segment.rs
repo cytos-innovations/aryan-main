@@ -12,6 +12,7 @@ pub struct MarketSegmentRow {
     pub id: i32,
     pub code: i64,
     pub name: String,
+    pub segment_type: String,
     pub is_active: bool,
 }
 
@@ -28,6 +29,16 @@ pub struct PagedMarketSegments {
     pub total: i64,
 }
 
+// Normalise an optional segment_type arg to a known value. Defaults to LODGE so
+// the lodge master (which passes nothing) keeps its existing behaviour; the
+// restaurant master passes "RESTAURANT".
+fn norm_segment_type(t: Option<String>) -> String {
+    match t.as_deref().map(|s| s.trim().to_uppercase()).as_deref() {
+        Some("RESTAURANT") => "RESTAURANT".to_string(),
+        _ => "LODGE".to_string(),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Commands
 // ─────────────────────────────────────────────────────────────
@@ -37,8 +48,10 @@ pub async fn get_market_segments(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     qs: QueryState,
+    segment_type: Option<String>,
 ) -> Result<PagedMarketSegments, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
+    let seg_type = norm_segment_type(segment_type);
 
     let search_pattern = format!("%{}%", qs.search.trim());
     let offset = qs.page * qs.per_page;
@@ -51,23 +64,25 @@ pub async fn get_market_segments(
     let dir = if qs.sort_dir == "asc" { "ASC" } else { "DESC" };
 
     let total_row = sqlx::query(
-        "SELECT COUNT(*) AS count FROM market_segment WHERE name ILIKE $1",
+        "SELECT COUNT(*) AS count FROM market_segment WHERE name ILIKE $1 AND segment_type = $2",
     )
     .bind(&search_pattern)
+    .bind(&seg_type)
     .fetch_one(&pool)
     .await
     .map_err(|e| format!("Count query failed: {e}"))?;
     let total: i64 = total_row.try_get("count").unwrap_or(0);
 
     let sql = format!(
-        "SELECT id, code, name, is_active \
-         FROM market_segment WHERE name ILIKE $1 \
-         ORDER BY {} {} LIMIT $2 OFFSET $3",
+        "SELECT id, code, name, segment_type, is_active \
+         FROM market_segment WHERE name ILIKE $1 AND segment_type = $2 \
+         ORDER BY {} {} LIMIT $3 OFFSET $4",
         order_col, dir
     );
 
     let rows = sqlx::query(&sql)
         .bind(&search_pattern)
+        .bind(&seg_type)
         .bind(qs.per_page)
         .bind(offset)
         .fetch_all(&pool)
@@ -80,6 +95,7 @@ pub async fn get_market_segments(
             id: r.try_get("id").unwrap_or(0),
             code: r.try_get("code").unwrap_or(0),
             name: r.try_get("name").unwrap_or_default(),
+            segment_type: r.try_get("segment_type").unwrap_or_else(|_| "LODGE".to_string()),
             is_active: r.try_get("is_active").unwrap_or(true),
         })
         .collect();
@@ -91,12 +107,16 @@ pub async fn get_market_segments(
 pub async fn get_all_market_segments(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    segment_type: Option<String>,
 ) -> Result<Vec<MarketSegmentSimple>, String> {
     let pool = acquire_pool(&state.pool, &app).await?;
+    let seg_type = norm_segment_type(segment_type);
 
     let rows = sqlx::query(
-        "SELECT id, code, name FROM market_segment WHERE is_active = TRUE ORDER BY name ASC",
+        "SELECT id, code, name FROM market_segment \
+         WHERE is_active = TRUE AND segment_type = $1 ORDER BY name ASC",
     )
+    .bind(&seg_type)
     .fetch_all(&pool)
     .await
     .map_err(|e| format!("Query failed: {e}"))?;
@@ -117,11 +137,13 @@ pub async fn create_market_segment(
     state: tauri::State<'_, AppState>,
     code: Option<i64>,
     name: String,
+    segment_type: Option<String>,
 ) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Segment name is required".to_string());
     }
+    let seg_type = norm_segment_type(segment_type);
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
@@ -135,15 +157,17 @@ pub async fn create_market_segment(
     };
 
     if let Some(code_val) = code {
-        sqlx::query("INSERT INTO market_segment (code, name) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO market_segment (code, name, segment_type) VALUES ($1, $2, $3)")
             .bind(code_val)
             .bind(&name)
+            .bind(&seg_type)
             .execute(&pool)
             .await
             .map_err(map_err)?;
     } else {
-        sqlx::query("INSERT INTO market_segment (name) VALUES ($1)")
+        sqlx::query("INSERT INTO market_segment (name, segment_type) VALUES ($1, $2)")
             .bind(&name)
+            .bind(&seg_type)
             .execute(&pool)
             .await
             .map_err(map_err)?;

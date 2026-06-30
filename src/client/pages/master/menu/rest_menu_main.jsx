@@ -119,7 +119,24 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q));
+    // Rank matches so the best one is highlighted first (selected on Enter):
+    // exact code → exact name → code prefix → name prefix → any substring.
+    const rank = (o) => {
+      const code = o.code != null ? String(o.code).toLowerCase() : "";
+      const label = o.label.toLowerCase();
+      if (code === q) return 0;
+      if (label === q) return 1;
+      if (code.startsWith(q)) return 2;
+      if (label.startsWith(q)) return 3;
+      if (code.includes(q)) return 4;
+      if (label.includes(q)) return 5;
+      return 99;
+    };
+    return options
+      .map((o) => ({ o, r: rank(o) }))
+      .filter((x) => x.r < 99)
+      .sort((a, b) => a.r - b.r || a.o.label.localeCompare(b.o.label))
+      .map((x) => x.o);
   }, [query, options]);
 
   useEffect(() => { setActive(0); }, [filtered.length]);
@@ -194,11 +211,16 @@ function SearchableSelect({ options, value, onSelect, placeholder = "Select…",
                 onMouseDown={(e) => { e.preventDefault(); pick(opt); }}
                 onMouseEnter={() => setActive(i)}
                 className={[
-                  "cursor-pointer px-3 py-2 text-sm",
+                  "flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm",
                   i === active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
                 ].join(" ")}
               >
-                {opt.label}
+                <span className="truncate">{opt.label}</span>
+                {opt.code != null && (
+                  <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                    {opt.code}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -652,7 +674,7 @@ function ChangeSectionDialog({ open, onOpenChange, kitchenSections }) {
               Item <span className="text-destructive">*</span>
             </FieldLabel>
             <SearchableSelect
-              options={allItems.map((i) => ({ value: String(i.id), label: i.name }))}
+              options={allItems.map((i) => ({ value: String(i.id), label: i.name, code: i.code }))}
               value={itemId}
               onSelect={pickItem}
               placeholder={itemsQuery.isLoading ? "Loading items…" : "Type to search item…"}

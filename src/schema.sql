@@ -498,6 +498,11 @@ CREATE TABLE market_segment (
     id INTEGER PRIMARY KEY,
     code BIGSERIAL UNIQUE,
     name VARCHAR(50) NOT NULL UNIQUE,
+    -- Separates lodge market segments from restaurant dineout-app segments
+    -- (shared table). Existing rows default to LODGE. The application sets this
+    -- explicitly; the restaurant master creates RESTAURANT rows.
+    segment_type VARCHAR(20) NOT NULL DEFAULT 'LODGE'
+        CHECK (segment_type IN ('LODGE', 'RESTAURANT')),
 
     -- Standard Audit & Status Columns
     is_active BOOLEAN DEFAULT TRUE,
@@ -1156,6 +1161,38 @@ CREATE TABLE settlement_master (
     settled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
    -- Standard Audit & Status Columns
+    is_active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by INTEGER REFERENCES users(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by INTEGER REFERENCES users(id)
+);
+
+-- DINEOUT DISCOUNT SALE
+-- One row per bill settled with a dineout-app discount (Swiggy, Zomato,
+-- District, Magicpin, …). Stores a full denormalised snapshot so the dineout
+-- discount report can be built without joins.
+
+CREATE TABLE dineout_discount_sale (
+    id SERIAL PRIMARY KEY,
+    code BIGSERIAL UNIQUE,
+    bill_id INTEGER REFERENCES bill_master(id),        -- Settled bill
+    order_session_id INTEGER REFERENCES order_session(id),
+    table_id INTEGER REFERENCES restaurant_table(id),
+    market_segment_id INTEGER REFERENCES market_segment(id), -- The dineout app
+    app_name VARCHAR(50) NOT NULL,                     -- Snapshot of app name
+
+    customer_name VARCHAR(100),
+    customer_mobile VARCHAR(15),
+    customer_address VARCHAR(250),
+
+    original_amount NUMERIC(12,2) NOT NULL DEFAULT 0,  -- Net before dineout discount
+    discount_mode VARCHAR(10) NOT NULL DEFAULT 'PCT',  -- PCT / AMT
+    discount_value NUMERIC(12,2) NOT NULL DEFAULT 0,   -- The % or flat figure entered
+    discount_amount NUMERIC(12,2) NOT NULL DEFAULT 0,  -- Computed rupee discount
+    final_amount NUMERIC(12,2) NOT NULL DEFAULT 0,     -- original - discount
+
+    -- Standard Audit & Status Columns
     is_active INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by INTEGER REFERENCES users(id),

@@ -240,6 +240,7 @@ use bill::{
     generate_bill,
     save_modified_bill,
     settle_bill,
+    get_dineout_discount_report,
     get_payment_methods,
     // Reservations
     get_reservations,
@@ -853,14 +854,15 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             updated_by INTEGER
         )"#,
         r#"CREATE TABLE IF NOT EXISTS market_segment (
-            id         SERIAL PRIMARY KEY,
-            code       BIGSERIAL UNIQUE,
-            name       VARCHAR(50)  NOT NULL UNIQUE,
-            is_active  BOOLEAN      NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            created_by INTEGER,
-            updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_by INTEGER
+            id           SERIAL PRIMARY KEY,
+            code         BIGSERIAL UNIQUE,
+            name         VARCHAR(50)  NOT NULL UNIQUE,
+            segment_type VARCHAR(20)  NOT NULL DEFAULT 'LODGE',
+            is_active    BOOLEAN      NOT NULL DEFAULT TRUE,
+            created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by   INTEGER,
+            updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_by   INTEGER
         )"#,
         r#"CREATE TABLE IF NOT EXISTS plan_master (
             id           SERIAL PRIMARY KEY,
@@ -1806,6 +1808,52 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .await
     .map_err(|e| format!("Migration error (backfill customer_type): {e}"))?;
 
+    // Flag to separate lodge market segments from restaurant dineout-app segments
+    // (shared table). Existing rows backfill to LODGE so the lodge master is
+    // unchanged; the restaurant master creates RESTAURANT rows.
+    sqlx::query(
+        "ALTER TABLE market_segment ADD COLUMN IF NOT EXISTS segment_type VARCHAR(20) NOT NULL DEFAULT 'LODGE'",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (market_segment.segment_type): {e}"))?;
+    sqlx::query(
+        "UPDATE market_segment SET segment_type = 'LODGE' WHERE segment_type IS NULL",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (backfill segment_type): {e}"))?;
+
+    // Per-bill dineout-app discount snapshot (Swiggy / Zomato / District / …).
+    // Denormalised so the dineout discount report needs no joins.
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS dineout_discount_sale (
+            id                SERIAL PRIMARY KEY,
+            code              BIGSERIAL UNIQUE,
+            bill_id           INTEGER REFERENCES bill_master(id),
+            order_session_id  INTEGER REFERENCES order_session(id),
+            table_id          INTEGER REFERENCES restaurant_table(id),
+            market_segment_id INTEGER REFERENCES market_segment(id),
+            app_name          VARCHAR(50)   NOT NULL,
+            customer_name     VARCHAR(100),
+            customer_mobile   VARCHAR(15),
+            customer_address  VARCHAR(250),
+            original_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount_mode     VARCHAR(10)   NOT NULL DEFAULT 'PCT',
+            discount_value    NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,
+            final_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+            is_active         INTEGER       DEFAULT 1,
+            created_at        TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+            created_by        INTEGER,
+            updated_at        TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+            updated_by        INTEGER
+        )"#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (create dineout_discount_sale): {e}"))?;
+
     seed_applications(pool).await?;
     seed_module_permissions(pool).await?;
     sync_sequences(pool).await?;
@@ -1970,6 +2018,10 @@ async fn seed_module_permissions(pool: &PgPool) -> Result<(), String> {
         ("lodge-market-segment:add",     "add",    "Add new market segment"),
         ("lodge-market-segment:update",  "update", "Edit existing market segment"),
         ("lodge-market-segment:delete",  "delete", "Delete market segment"),
+        ("rest-market-segment:view",     "view",   "View restaurant dineout market segments"),
+        ("rest-market-segment:add",      "add",    "Add new restaurant dineout market segment"),
+        ("rest-market-segment:update",   "update", "Edit restaurant dineout market segment"),
+        ("rest-market-segment:delete",   "delete", "Delete restaurant dineout market segment"),
         ("lodge-plan:view",              "view",   "View list of all lodge plans"),
         ("lodge-plan:add",               "add",    "Add new lodge plan"),
         ("lodge-plan:update",            "update", "Edit existing lodge plan"),
@@ -2054,6 +2106,7 @@ async fn seed_module_permissions(pool: &PgPool) -> Result<(), String> {
         ("report-tax-summary:view", "view", "View the Tax Summary report"),
         ("report-sales-summary:view", "view", "View the Sales Summary report"),
         ("report-bill-settlements:view", "view", "View the Bill Settlements report"),
+        ("report-dineout-discount:view", "view", "View the Dineout Discount report"),
         ("report-billwise-cancel:view", "view", "View the Billwise Cancel report"),
         ("report-cancellation:view", "view", "View the Cancellation report"),
         ("report-modified-bill-report:view", "view", "View the Modified Bill Report report"),
@@ -2525,6 +2578,7 @@ pub fn run() {
             generate_bill,
             save_modified_bill,
             settle_bill,
+            get_dineout_discount_report,
             get_payment_methods,
             // Billing — reservations
             get_reservations,

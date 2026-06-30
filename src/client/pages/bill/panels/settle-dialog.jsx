@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { toast } from "sonner";
 import {
@@ -26,6 +28,7 @@ import {
   GiftIcon,
   Coins01Icon,
   UserGroupIcon,
+  DeliveryTruck01Icon,
 } from "@hugeicons/core-free-icons";
 
 import {
@@ -39,6 +42,7 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button }    from "@/components/ui/button";
 import { Input }     from "@/components/ui/input";
+import { Switch }    from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 
 import { usePaymentMethods } from "../hooks/use-billing-queries";
@@ -209,6 +213,20 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const [duePaidNow,      setDuePaidNow]      = useState("");  // partial due: paid now
   const [priorDue,        setPriorDue]        = useState(null); // customer's existing dues
 
+  // ── Dineout-app discount (Swiggy / Zomato / District / …) ──
+  const [dineoutOn,    setDineoutOn]    = useState(false);
+  const [dineoutAppId, setDineoutAppId] = useState("");   // market_segment id (string)
+  const [dineoutMode,  setDineoutMode]  = useState("PCT"); // "PCT" | "AMT"
+  const [dineoutValue, setDineoutValue] = useState("");    // raw % or ₹ entered
+
+  // Restaurant dineout apps come from the market_segment master (RESTAURANT flag).
+  const dineoutAppsQuery = useQuery({
+    queryKey: ["rest-market-segments-all"],
+    queryFn: () => invoke("get_all_market_segments", { segmentType: "RESTAURANT" }),
+    enabled: open,
+  });
+  const dineoutApps = dineoutAppsQuery.data ?? [];
+
   // Inline waiter picker — opened when the user chooses to attribute a tip to a
   // waiter. Optional: a tip can be recorded without one.
   const [waiterPickerOpen, setWaiterPickerOpen] = useState(false);
@@ -263,12 +281,16 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const splitMethodRef = useRef(null);
   const duePaidRef     = useRef(null);
   const ncRemarkRef    = useRef(null);
+  const dineoutValueRef = useRef(null);
 
   const isSplit = method === SPLIT_VALUE;
   const isDue   = method === DUE_VALUE;
   const isNc    = method === NC_VALUE;
-  // Name + mobile required for delivery/takeaway and for Due; address too for Due.
-  const mustCapture = requiresCustomer || isDue;
+  // Dineout discount is only offered on plain single payment.
+  const dineoutActive = !isSplit && !isDue && !isNc && dineoutOn;
+  // Name + mobile required for delivery/takeaway, for Due, and for a dineout
+  // discount (the app needs the customer on record); address too for Due.
+  const mustCapture = requiresCustomer || isDue || dineoutActive;
   const mustAddress = needsAddress || isDue;
 
   // Default the method once the list loads
@@ -293,6 +315,10 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
     setPriorDue(null);
     setSplitEntries([]);
     setSplitAmount("");
+    setDineoutOn(false);
+    setDineoutAppId("");
+    setDineoutMode("PCT");
+    setDineoutValue("");
     const first = methods[0]?.name ?? "";
     setMethod(first);
     setSplitMethod(first);
@@ -338,9 +364,22 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const splitBalance = Math.round((netAmount - splitTotal) * 100) / 100;
   const splitBalanced = Math.abs(splitBalance) <= 0.01;
 
-  // Tip rides on top of the net total → amount payable = net + tip.
+  // ── Dineout discount maths ─────────────────────────────────
+  // The dineout app funds part of the bill: the customer pays the reduced
+  // amount and the discounted portion is written off at settlement. The %/₹
+  // value is applied to the bill's net total.
+  const dineoutValNum = dineoutValue.trim() === "" ? 0 : Math.max(0, Number(dineoutValue) || 0);
+  const dineoutDiscAmt = !dineoutOn ? 0
+    : dineoutMode === "PCT"
+      ? Math.round((netAmount * Math.min(dineoutValNum, 100) / 100) * 100) / 100
+      : Math.round(Math.min(dineoutValNum, netAmount) * 100) / 100;
+  // Net the customer actually pays after the dineout discount.
+  const effectiveNet = Math.round((netAmount - dineoutDiscAmt) * 100) / 100;
+  const dineoutApp   = dineoutApps.find((a) => String(a.id) === dineoutAppId) ?? null;
+
+  // Tip rides on top of the (post-dineout) net total → amount payable = net + tip.
   const tipNum         = tip.trim() === "" ? 0 : Math.max(0, Number(tip) || 0);
-  const amountPayable  = Math.round((netAmount + tipNum) * 100) / 100;
+  const amountPayable  = Math.round((effectiveNet + tipNum) * 100) / 100;
 
   // Single-payment shortfall / change preview (measured against amount payable)
   const enteredAmt   = amount.trim() === "" ? amountPayable : (Number(amount) || 0);
@@ -524,6 +563,12 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
       return;
     }
 
+    // Dineout discount validation (only available on plain single payment).
+    if (dineoutActive) {
+      if (!dineoutAppId)      { toast.error("Select the dineout app"); return; }
+      if (dineoutDiscAmt <= 0) { toast.error("Enter a dineout discount value"); return; }
+    }
+
     let entries;
     let writeOff = 0;
     if (isSplit) {
@@ -539,16 +584,17 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
       writeOff = netAmount;
     } else {
       if (!method) { toast.error("Select a payment method"); return; }
-      // Blank amount → settle the full amount payable (net + tip).
+      // Blank amount → settle the full amount payable (post-dineout net + tip).
       // The field holds what the customer hands over (incl. tip), so peel the
       // tip back off to get the portion applied against the bill.
       const paid = amount.trim() === "" ? amountPayable : Number(amount);
       if (Number.isNaN(paid) || paid < 0) { toast.error("Enter a valid amount"); return; }
       const amt = Math.round((paid - tipNum) * 100) / 100; // bill portion only
       // A fully-discounted (₹0) bill settles with a zero-amount payment; otherwise require a positive amount.
-      if (amt < 0 || (netAmount > 0 && amt <= 0)) { toast.error("Enter a valid amount"); return; }
+      if (amt < 0 || (effectiveNet > 0 && amt <= 0)) { toast.error("Enter a valid amount"); return; }
       entries = [{ payment_mode: method, amount: amt, reference_no: null }];
-      // Short amount → the remainder is written off (unless paying via Due → keep it as a due)
+      // The dineout discount + any short amount are written off so the bill
+      // (which still carries the full netAmount) settles in full.
       if (amt < netAmount && !/due/i.test(method)) {
         writeOff = Math.round((netAmount - amt) * 100) / 100;
       }
@@ -560,7 +606,17 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
       address: customerAddress.trim() || null,
     };
 
-    onSettle(entries, customer, writeOff, tipNum);
+    const dineout = dineoutActive ? {
+      marketSegmentId: dineoutApp ? Number(dineoutApp.id) : null,
+      appName:         dineoutApp?.name ?? "",
+      originalAmount:  netAmount,
+      discountMode:    dineoutMode,
+      discountValue:   dineoutValNum,
+      discountAmount:  dineoutDiscAmt,
+      finalAmount:     effectiveNet,
+    } : null;
+
+    onSettle(entries, customer, writeOff, tipNum, dineout);
     onOpenChange(false);
   }
 
@@ -577,7 +633,7 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
             <div>
@@ -880,6 +936,21 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   <span>Net Total</span>
                   <span className="tabular-nums">₹{fmtAmount(netAmount)}</span>
                 </div>
+                {dineoutDiscAmt > 0 && (
+                  <>
+                    <div className="flex justify-between text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <HugeiconsIcon icon={DeliveryTruck01Icon} size={10} strokeWidth={2} />
+                        Dineout Disc{dineoutApp ? ` (${dineoutApp.name})` : ""}
+                      </span>
+                      <span className="tabular-nums text-emerald-600 dark:text-emerald-400">−₹{fmtAmount(dineoutDiscAmt)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-bold border-t pt-1.5 mt-0.5">
+                      <span>Payable After Discount</span>
+                      <span className="tabular-nums">₹{fmtAmount(effectiveNet)}</span>
+                    </div>
+                  </>
+                )}
                 {tipNum > 0 && (
                   <>
                     <div className="flex justify-between text-[11px] text-muted-foreground">
@@ -899,8 +970,179 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
             );
           })()}
 
-          {/* ── Tip for the waiter (on top of net total) ── */}
-          {!isNc && (
+          {/* ── Dineout-app discount (plain single payment only) ── */}
+          {!isSplit && !isDue && !isNc && (
+            <div className="rounded-lg border bg-muted/10 px-3 py-2.5 space-y-2.5">
+              <div className="flex w-full items-center justify-between text-xs font-medium">
+                <span className="flex items-center gap-1.5">
+                  <HugeiconsIcon icon={DeliveryTruck01Icon} size={14} strokeWidth={2} className="text-orange-500" />
+                  Dineout Discount
+                  <span className="text-muted-foreground font-normal">(Swiggy, Zomato, District…)</span>
+                </span>
+                <Switch
+                  size="sm"
+                  checked={dineoutOn}
+                  onCheckedChange={(v) => setDineoutOn(v)}
+                />
+              </div>
+
+              {dineoutOn && (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-[1fr_auto_7rem] gap-2 items-end">
+                    {/* App picker */}
+                    <Field>
+                      <FieldLabel className="text-[11px]">Dineout App <span className="text-destructive">*</span></FieldLabel>
+                      <SearchableSelect
+                        options={dineoutApps.map((a) => ({ value: String(a.id), label: a.name }))}
+                        value={dineoutAppId}
+                        onSelect={setDineoutAppId}
+                        onSelectDone={() => setTimeout(() => { dineoutValueRef.current?.focus(); dineoutValueRef.current?.select(); }, 0)}
+                        placeholder={dineoutAppsQuery.isLoading ? "Loading…" : (dineoutApps.length ? "Select app…" : "No apps — add in master")}
+                      />
+                    </Field>
+                    {/* %/₹ mode toggle */}
+                    <Field>
+                      <FieldLabel className="text-[11px]">Type</FieldLabel>
+                      <div className="flex rounded-md border overflow-hidden h-9">
+                        <button
+                          type="button"
+                          onClick={() => setDineoutMode("PCT")}
+                          className={`px-3 text-sm font-medium transition-colors ${dineoutMode === "PCT" ? "bg-orange-500 text-white" : "bg-background hover:bg-muted"}`}
+                        >%</button>
+                        <button
+                          type="button"
+                          onClick={() => setDineoutMode("AMT")}
+                          className={`px-3 text-sm font-medium border-l transition-colors ${dineoutMode === "AMT" ? "bg-orange-500 text-white" : "bg-background hover:bg-muted"}`}
+                        >₹</button>
+                      </div>
+                    </Field>
+                    {/* Value */}
+                    <Field>
+                      <FieldLabel className="text-[11px]">{dineoutMode === "PCT" ? "Discount %" : "Discount ₹"}</FieldLabel>
+                      <Input
+                        ref={dineoutValueRef}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={dineoutValue}
+                        onChange={(e) => setDineoutValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); tipRef.current?.focus(); } }}
+                        placeholder={dineoutMode === "PCT" ? "10" : "0.00"}
+                        className="font-mono"
+                      />
+                    </Field>
+                  </div>
+                  {dineoutDiscAmt > 0 && (
+                    <div className="flex items-center justify-between rounded-md bg-orange-50/60 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900 px-3 py-1.5 text-xs">
+                      <span className="text-muted-foreground">
+                        Discount {dineoutMode === "PCT" ? `(${dineoutValNum}%)` : ""} → customer pays
+                      </span>
+                      <span className="font-semibold tabular-nums">
+                        −₹{fmtAmount(dineoutDiscAmt)} · ₹{fmtAmount(effectiveNet)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tip + Amount in one row (plain single payment) ── */}
+          {!isSplit && !isDue && !isNc && (
+            <div className="grid grid-cols-2 gap-3 items-end">
+              {/* Tip */}
+              <Field>
+                <FieldLabel className="flex items-center justify-between min-h-5">
+                  <span className="flex items-center gap-1.5">
+                    <HugeiconsIcon icon={Coins01Icon} size={13} strokeWidth={2} />
+                    Tip for Waiter{" "}
+                    <span className="text-muted-foreground font-normal text-xs">(optional)</span>
+                  </span>
+                  {hasWaiter ? (
+                    <span className="flex items-center gap-1 text-[11px] font-normal text-emerald-600 dark:text-emerald-400">
+                      <HugeiconsIcon icon={UserGroupIcon} size={11} strokeWidth={2} />
+                      {waiterName}
+                    </span>
+                  ) : (
+                    <WaiterPicker
+                      waiterName={null}
+                      autoOpen={waiterPickerOpen}
+                      disabled={isAssigningWaiter}
+                      onSelect={handleAssignWaiter}
+                    />
+                  )}
+                </FieldLabel>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
+                  <Input
+                    ref={tipRef}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={tip}
+                    onChange={(e) => handleTipChange(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); amountRef.current?.focus(); } }}
+                    placeholder="0.00"
+                    className="pl-6 font-mono"
+                  />
+                </div>
+              </Field>
+              {/* Amount */}
+              <Field>
+                <FieldLabel className="flex items-center min-h-5">
+                  Enter Amount{" "}
+                  <span className="text-muted-foreground font-normal text-xs ml-1">
+                    (blank = {tipNum > 0 ? "bill + tip" : "full bill"})
+                  </span>
+                </FieldLabel>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
+                  <Input
+                    ref={amountRef}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        document.getElementById("settle-dialog-settle-btn")?.focus();
+                      }
+                    }}
+                    placeholder={fmtAmount(amountPayable)}
+                    className="pl-6 font-mono"
+                  />
+                </div>
+              </Field>
+            </div>
+          )}
+
+          {/* Shortfall / change hint + tip-attribution note (plain payment) */}
+          {!isSplit && !isDue && !isNc && (
+            <>
+              {diff > 0.01 && (
+                <p className={`text-[11px] font-medium ${isDueMethod ? "text-amber-600 dark:text-amber-400" : "text-orange-600 dark:text-orange-400"}`}>
+                  {isDueMethod
+                    ? `₹${fmtAmount(diff)} will be recorded as due`
+                    : `₹${fmtAmount(diff)} will be written off`}
+                </p>
+              )}
+              {diff < -0.01 && (
+                <p className="text-[11px] font-medium text-muted-foreground">
+                  Change to return: ₹{fmtAmount(Math.abs(diff))}
+                </p>
+              )}
+              {!hasWaiter && tipNum > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  Optionally assign a waiter to attribute this tip.
+                </p>
+              )}
+            </>
+          )}
+
+          {/* ── Tip for the waiter (Due / Split paths keep a standalone field) ── */}
+          {(isDue || isSplit) && (
             <Field>
               <FieldLabel className="flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
@@ -934,11 +1176,8 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
-                      // Advance to the amount field (or the relevant next field
-                      // when the method isn't a plain single payment).
-                      if (isDue)       duePaidRef.current?.focus();
+                      if (isDue)        duePaidRef.current?.focus();
                       else if (isSplit) document.getElementById("split-method-input")?.focus();
-                      else             amountRef.current?.focus();
                     }
                   }}
                   placeholder="0.00"
@@ -1011,51 +1250,6 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                 />
               </div>
             </div>
-          )}
-
-          {/* ── Single payment amount ── */}
-          {!isSplit && !isDue && !isNc && (
-            <Field>
-              <FieldLabel>
-                Enter Amount{" "}
-                <span className="text-muted-foreground font-normal text-xs">
-                  (blank = {tipNum > 0 ? "bill + tip" : "full bill"})
-                </span>
-              </FieldLabel>
-              <div className="relative">
-                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium select-none">₹</span>
-                <Input
-                  ref={amountRef}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      // Move focus to the Settle button; a final Enter there settles.
-                      document.getElementById("settle-dialog-settle-btn")?.focus();
-                    }
-                  }}
-                  placeholder={fmtAmount(amountPayable)}
-                  className="pl-6 font-mono"
-                />
-              </div>
-              {/* Shortfall / change hint */}
-              {diff > 0.01 && (
-                <p className={`text-[11px] font-medium ${isDueMethod ? "text-amber-600 dark:text-amber-400" : "text-orange-600 dark:text-orange-400"}`}>
-                  {isDueMethod
-                    ? `₹${fmtAmount(diff)} will be recorded as due`
-                    : `₹${fmtAmount(diff)} will be written off`}
-                </p>
-              )}
-              {diff < -0.01 && (
-                <p className="text-[11px] font-medium text-muted-foreground">
-                  Change to return: ₹{fmtAmount(Math.abs(diff))}
-                </p>
-              )}
-            </Field>
           )}
 
           {/* ── Split builder ── */}
