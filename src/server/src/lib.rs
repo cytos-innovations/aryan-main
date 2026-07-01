@@ -858,6 +858,7 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
             code         BIGSERIAL UNIQUE,
             name         VARCHAR(50)  NOT NULL UNIQUE,
             segment_type VARCHAR(20)  NOT NULL DEFAULT 'LODGE',
+            discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
             is_active    BOOLEAN      NOT NULL DEFAULT TRUE,
             created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_by   INTEGER,
@@ -1823,6 +1824,15 @@ async fn init_schema(pool: &PgPool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|e| format!("Migration error (backfill segment_type): {e}"))?;
+
+    // Default discount % for restaurant dineout apps (Swiggy/Zomato/…). Auto-filled
+    // into the dineout discount field at settlement, but the cashier can override it.
+    sqlx::query(
+        "ALTER TABLE market_segment ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Migration error (market_segment.discount_percent): {e}"))?;
 
     // Per-bill dineout-app discount snapshot (Swiggy / Zomato / District / …).
     // Denormalised so the dineout discount report needs no joins.

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
@@ -154,25 +154,37 @@ function NumField({ label, fieldKey, form, setF }) {
 export default function CompanyDetails() {
   const [activeTab, setActiveTab] = useState("details");
   const [form, setForm] = useState(EMPTY);
+  const queryClient = useQueryClient();
 
   function setF(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
-  const { isLoading } = useQuery({
+  const { isLoading, data: serverData } = useQuery({
     queryKey: ["company-details"],
     queryFn: () => invoke("get_company_details"),
-    onSuccess: (data) => {
-      setForm({
-        ...EMPTY,
-        ...Object.fromEntries(
-          Object.entries(data).map(([k, v]) => [k, v === null || v === undefined ? (EMPTY[k] ?? "") : v])
-        ),
-      });
-    },
   });
+
+  useEffect(() => {
+    if (!serverData) return;
+    // Only sync fields the UI manages (present in EMPTY). This avoids pulling
+    // backend-only fields like company_logo (Vec<u8>) into the form, which would
+    // otherwise be coerced to "" and rejected on save.
+    setForm({
+      ...EMPTY,
+      ...Object.fromEntries(
+        Object.keys(EMPTY).map((k) => {
+          const v = serverData[k];
+          return [k, v === null || v === undefined ? EMPTY[k] : v];
+        })
+      ),
+    });
+  }, [serverData]);
 
   const saveMut = useMutation({
     mutationFn: () => invoke("save_company_details", { data: form }),
-    onSuccess: () => toast.success("Company details saved"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["company-details"] });
+      toast.success("Company details saved");
+    },
     onError: (e) => toast.error(String(e)),
   });
 

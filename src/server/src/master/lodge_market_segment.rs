@@ -13,6 +13,7 @@ pub struct MarketSegmentRow {
     pub code: i64,
     pub name: String,
     pub segment_type: String,
+    pub discount_percent: f64,
     pub is_active: bool,
 }
 
@@ -21,6 +22,7 @@ pub struct MarketSegmentSimple {
     pub id: i32,
     pub code: i64,
     pub name: String,
+    pub discount_percent: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +76,8 @@ pub async fn get_market_segments(
     let total: i64 = total_row.try_get("count").unwrap_or(0);
 
     let sql = format!(
-        "SELECT id, code, name, segment_type, is_active \
+        "SELECT id, code, name, segment_type, \
+                CAST(discount_percent AS FLOAT8) AS discount_percent, is_active \
          FROM market_segment WHERE name ILIKE $1 AND segment_type = $2 \
          ORDER BY {} {} LIMIT $3 OFFSET $4",
         order_col, dir
@@ -96,6 +99,7 @@ pub async fn get_market_segments(
             code: r.try_get("code").unwrap_or(0),
             name: r.try_get("name").unwrap_or_default(),
             segment_type: r.try_get("segment_type").unwrap_or_else(|_| "LODGE".to_string()),
+            discount_percent: r.try_get::<f64, _>("discount_percent").unwrap_or(0.0),
             is_active: r.try_get("is_active").unwrap_or(true),
         })
         .collect();
@@ -113,7 +117,9 @@ pub async fn get_all_market_segments(
     let seg_type = norm_segment_type(segment_type);
 
     let rows = sqlx::query(
-        "SELECT id, code, name FROM market_segment \
+        "SELECT id, code, name, \
+                CAST(discount_percent AS FLOAT8) AS discount_percent \
+         FROM market_segment \
          WHERE is_active = TRUE AND segment_type = $1 ORDER BY name ASC",
     )
     .bind(&seg_type)
@@ -127,6 +133,7 @@ pub async fn get_all_market_segments(
             id: r.try_get("id").unwrap_or(0),
             code: r.try_get("code").unwrap_or(0),
             name: r.try_get("name").unwrap_or_default(),
+            discount_percent: r.try_get::<f64, _>("discount_percent").unwrap_or(0.0),
         })
         .collect())
 }
@@ -138,12 +145,17 @@ pub async fn create_market_segment(
     code: Option<i64>,
     name: String,
     segment_type: Option<String>,
+    discount_percent: Option<f64>,
 ) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Segment name is required".to_string());
     }
     let seg_type = norm_segment_type(segment_type);
+    let disc = discount_percent.unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&disc) {
+        return Err("Discount % must be between 0 and 100".to_string());
+    }
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
@@ -157,17 +169,19 @@ pub async fn create_market_segment(
     };
 
     if let Some(code_val) = code {
-        sqlx::query("INSERT INTO market_segment (code, name, segment_type) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO market_segment (code, name, segment_type, discount_percent) VALUES ($1, $2, $3, $4)")
             .bind(code_val)
             .bind(&name)
             .bind(&seg_type)
+            .bind(disc)
             .execute(&pool)
             .await
             .map_err(map_err)?;
     } else {
-        sqlx::query("INSERT INTO market_segment (name, segment_type) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO market_segment (name, segment_type, discount_percent) VALUES ($1, $2, $3)")
             .bind(&name)
             .bind(&seg_type)
+            .bind(disc)
             .execute(&pool)
             .await
             .map_err(map_err)?;
@@ -182,18 +196,24 @@ pub async fn update_market_segment(
     state: tauri::State<'_, AppState>,
     id: i32,
     name: String,
+    discount_percent: Option<f64>,
 ) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Segment name is required".to_string());
     }
+    let disc = discount_percent.unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&disc) {
+        return Err("Discount % must be between 0 and 100".to_string());
+    }
 
     let pool = acquire_pool(&state.pool, &app).await?;
 
     sqlx::query(
-        "UPDATE market_segment SET name = $1, updated_at = NOW() WHERE id = $2",
+        "UPDATE market_segment SET name = $1, discount_percent = $2, updated_at = NOW() WHERE id = $3",
     )
     .bind(&name)
+    .bind(disc)
     .bind(id)
     .execute(&pool)
     .await

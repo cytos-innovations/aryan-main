@@ -288,9 +288,9 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
   const isNc    = method === NC_VALUE;
   // Dineout discount is only offered on plain single payment.
   const dineoutActive = !isSplit && !isDue && !isNc && dineoutOn;
-  // Name + mobile required for delivery/takeaway, for Due, and for a dineout
-  // discount (the app needs the customer on record); address too for Due.
-  const mustCapture = requiresCustomer || isDue || dineoutActive;
+  // Name + mobile required for delivery/takeaway and for Due; address too for Due.
+  // Dineout discount does NOT require customer details — they stay optional.
+  const mustCapture = requiresCustomer || isDue;
   const mustAddress = needsAddress || isDue;
 
   // Default the method once the list loads
@@ -995,7 +995,17 @@ export default function SettleDialog({ open, onOpenChange, session, netAmount, b
                       <SearchableSelect
                         options={dineoutApps.map((a) => ({ value: String(a.id), label: a.name }))}
                         value={dineoutAppId}
-                        onSelect={setDineoutAppId}
+                        onSelect={(id) => {
+                          setDineoutAppId(id);
+                          // Auto-fill the app's default discount % (editable). Apps
+                          // store a percentage, so switch to PCT mode on select.
+                          const app = dineoutApps.find((a) => String(a.id) === String(id));
+                          const pct = Number(app?.discount_percent ?? 0);
+                          if (pct > 0) {
+                            setDineoutMode("PCT");
+                            setDineoutValue(String(pct));
+                          }
+                        }}
                         onSelectDone={() => setTimeout(() => { dineoutValueRef.current?.focus(); dineoutValueRef.current?.select(); }, 0)}
                         placeholder={dineoutAppsQuery.isLoading ? "Loading…" : (dineoutApps.length ? "Select app…" : "No apps — add in master")}
                       />

@@ -27,7 +27,7 @@ import {
 // Shares the market_segment table with lodge, separated by segment_type flag.
 const SEGMENT_TYPE = "RESTAURANT";
 const QK = ["rest-market-segments"];
-const EMPTY = { code: "", name: "" };
+const EMPTY = { code: "", name: "", discount_percent: "" };
 
 export default function RestMarketSegment() {
   const enterNav = useEnterNav();
@@ -50,13 +50,18 @@ export default function RestMarketSegment() {
       code: d.code ? parseInt(d.code) : null,
       name: d.name,
       segmentType: SEGMENT_TYPE,
+      discountPercent: d.discount_percent === "" ? 0 : Number(d.discount_percent),
     }),
     onSuccess: () => { toast.success("Dineout app created"); inv(); closeDialog(); },
     onError: (e) => toast.error(String(e)),
   });
 
   const updateMut = useMutation({
-    mutationFn: (d) => invoke("update_market_segment", { id: d.id, name: d.name }),
+    mutationFn: (d) => invoke("update_market_segment", {
+      id: d.id,
+      name: d.name,
+      discountPercent: d.discount_percent === "" ? 0 : Number(d.discount_percent),
+    }),
     onSuccess: () => { toast.success("Dineout app updated"); inv(); closeDialog(); },
     onError: (e) => toast.error(String(e)),
   });
@@ -83,7 +88,11 @@ export default function RestMarketSegment() {
     } catch { /* leave code blank — backend will auto-assign */ }
   }
   function openEdit(row) {
-    setForm({ code: String(row.code ?? ""), name: row.name });
+    setForm({
+      code: String(row.code ?? ""),
+      name: row.name,
+      discount_percent: row.discount_percent != null ? String(row.discount_percent) : "",
+    });
     setDialog({ open: true, mode: "edit", data: row });
   }
   function closeDialog() { setDialog((d) => ({ ...d, open: false })); }
@@ -106,6 +115,16 @@ export default function RestMarketSegment() {
       accessorKey: "name",
       header: ({ column }) => <DataTableColumnHeader column={column} title="Dineout App" />,
       meta: { label: "Dineout App" },
+    },
+    {
+      accessorKey: "discount_percent",
+      header: "Discount %",
+      size: 110,
+      cell: ({ row }) => {
+        const d = Number(row.original.discount_percent ?? 0);
+        return <span className="tabular-nums">{d ? `${d}%` : "—"}</span>;
+      },
+      meta: { label: "Discount %" },
     },
     {
       accessorKey: "is_active",
@@ -225,6 +244,21 @@ export default function RestMarketSegment() {
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   onBlur={(e) => setForm((f) => ({ ...f, name: toTitleCase(e.target.value) }))}
                   required
+                />
+              </Field>
+              <Field>
+                <FieldLabel>
+                  Default Discount %{" "}
+                  <span className="text-muted-foreground font-normal">(auto-filled at settlement, editable)</span>
+                </FieldLabel>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={form.discount_percent}
+                  onChange={(e) => setForm((f) => ({ ...f, discount_percent: e.target.value }))}
+                  placeholder="0"
                 />
               </Field>
             </FieldGroup>

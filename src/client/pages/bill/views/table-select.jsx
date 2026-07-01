@@ -1045,13 +1045,13 @@ export default function TableSelectView({ onOpenReprint }) {
                     ? "No tables match your filters."
                     : "No tables configured."}
               </p>
-              {!search && groupFilter === "__all__" && (
+              {!modifyMode && !search && groupFilter === "__all__" && (
                 <p className="text-xs mt-1 text-muted-foreground/70">
                   Add tables in Master Data → Table Management.
                 </p>
               )}
             </div>
-            {!search && groupFilter === "__all__" && (
+            {!modifyMode && !search && groupFilter === "__all__" && (
               <Button
                 variant="outline"
                 size="sm"

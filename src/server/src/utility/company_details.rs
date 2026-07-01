@@ -1,6 +1,27 @@
 use crate::{acquire_pool, AppState};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Row;
+
+// Accept null, "", or a real byte array for company_logo. The frontend may send
+// an empty string when the field is untouched; treat that as no logo (None)
+// instead of failing deserialization with "expected a sequence".
+fn de_logo<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum LogoInput {
+        Bytes(Vec<u8>),
+        Str(String),
+        Null,
+    }
+
+    Ok(match Option::<LogoInput>::deserialize(deserializer)? {
+        Some(LogoInput::Bytes(b)) if !b.is_empty() => Some(b),
+        _ => None,
+    })
+}
 
 // ─────────────────────────────────────────────────────────────
 // Struct — every column in company_details table
@@ -10,6 +31,7 @@ use sqlx::Row;
 pub struct CompanyDetails {
     // Original columns
     pub company_name: Option<String>,
+    #[serde(default, deserialize_with = "de_logo")]
     pub company_logo: Option<Vec<u8>>,
     pub logo_file_name: Option<String>,
     pub logo_name: Option<String>,
@@ -458,15 +480,24 @@ pub async fn save_company_details(
             online_direct_bill, time_on_kot_yn, multiple_order_yn
         ) VALUES (
             1,
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+            NULLIF($19,'')::TIMESTAMP,
             $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
             $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,
             $54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
-            $71,$72,$73,$74,$75,$76,$77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,
+            $71,$72,
+            NULLIF($73,'')::TIMESTAMP,
+            $74,$75,
+            NULLIF($76,'')::TIMESTAMP,
+            $77,$78,$79,$80,$81,$82,$83,$84,$85,$86,$87,
             $88,$89,$90,$91,$92,$93,$94,$95,$96,$97,$98,$99,$100,$101,$102,$103,
-            $104,$105,$106,$107,$108,$109,$110,$111,$112,$113,$114,$115,$116,$117,
+            $104,$105,$106,$107,$108,
+            NULLIF($109,'')::DATE,
+            NULLIF($110,'')::DATE,
+            $111,$112,$113,$114,$115,$116,$117,
             $118,$119,$120,$121,$122,$123,$124,$125,$126,$127,$128,$129,$130,$131,
-            $132,$133,$134,$135,$136,$137,$138,$139,$140,$141,$142,$143,$144,$145
+            $132,$133,$134,$135,$136,$137,$138,$139,$140,$141,$142,$143,$144,$145,
+            $146,$147,$148,$149,$150,$151,$152,$153,$154,$155,$156,$157
         )
         ON CONFLICT (id) DO UPDATE SET
             company_name=$1, logo_file_name=$2, logo_name=$3,
@@ -474,7 +505,7 @@ pub async fn save_company_details(
             phone_no1=$7, phone_no2=$8, fax_no=$9, email_id=$10,
             sms_active=$11, xp_version_yn=$12, sms_user_name=$13, sms_password=$14, sms_sender=$15,
             receiver_email1=$16, receiver_email2=$17,
-            licenses_no=$18, licenses_date=$19, registration_key=$20, gst_serial_no=$21,
+            licenses_no=$18, licenses_date=NULLIF($19,'')::TIMESTAMP, registration_key=$20, gst_serial_no=$21,
             multi_user=$22, vat_tin_no=$23, service_tax_no=$24, cst_no=$25, luxury_tax_no=$26, pan_no=$27,
             database_name=$28, dsn_name=$29, database_path=$30, parent=$31, it_pan_no=$32, print_option=$33,
             gst_no=$34, sac_no=$35, bank_detail=$36, bill_heading=$37, special_message=$38,
@@ -488,7 +519,7 @@ pub async fn save_company_details(
             sale_ref_no_yn=$63, print_room_tariff_bill_yn=$64, per_head_tariff_bill_yn=$65,
             multi_room_tariff_total_pax=$66, tax_after_discount_yn=$67,
             mobile_no1=$68, mobile_no2=$69, mobile_no3=$70, total_discount_gl_code=$71, extra_person=$72,
-            check_out_time=$73, checkout_yn=$74, room_service=$75, check_in_time=$76,
+            check_out_time=NULLIF($73,'')::TIMESTAMP, checkout_yn=$74, room_service=$75, check_in_time=NULLIF($76,'')::TIMESTAMP,
             restaurant_sale=$77, tally_voucher_type=$78,
             luxury_tax_master_code=$79, bill_settlement_yn=$80, service_tax_master_code=$81,
             print_sale_crystal_report_yn=$82, call_record_filepath=$83, auto_ref_no_yn=$84,
@@ -499,7 +530,7 @@ pub async fn save_company_details(
             port_no_for_wifi=$98, user_name_for_wifi=$99, password_for_wifi=$100, extra_bed_group_id=$101,
             print_gst_serial_no_yn=$102, backup_path_name=$103, separate_rest_direct_yn=$104,
             service_place=$105, print_company_logo_yn=$106,
-            company_name2=$107, name2=$108, start_date=$109, end_date=$110,
+            company_name2=$107, name2=$108, start_date=NULLIF($109,'')::DATE, end_date=NULLIF($110,'')::DATE,
             fssai_no=$111, print_name_address=$112, receiver_email3=$113,
             cash_drawer_yn=$114, otp_rate_change_yn=$115, direct_bill_yn=$116, time_format=$117,
             cancellation_message_yn=$118, print_token_yn=$119, print_bill_footer_yn=$120,

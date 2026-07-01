@@ -309,8 +309,9 @@ export default function AddonDialog({
     setCreating(true);
     try {
       const created = await onCreateCustom({ name, rate });
-      setSelectedMap((prev) => new Map(prev).set(created.menuId, {
-        menuId: created.menuId, name: created.name, rate: created.rate,
+      const createdMenuId = created.menuId ?? created.menu_id;
+      setSelectedMap((prev) => new Map(prev).set(createdMenuId, {
+        menuId: createdMenuId, name: created.name, rate: created.rate,
       }));
       setCustomName(""); setCustomRate("");
     } catch {

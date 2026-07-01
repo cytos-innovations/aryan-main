@@ -504,6 +504,10 @@ CREATE TABLE market_segment (
     segment_type VARCHAR(20) NOT NULL DEFAULT 'LODGE'
         CHECK (segment_type IN ('LODGE', 'RESTAURANT')),
 
+    -- Default discount % for restaurant dineout apps (Swiggy/Zomato/…), auto-filled
+    -- at settlement but overridable by the cashier.
+    discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+
     -- Standard Audit & Status Columns
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
